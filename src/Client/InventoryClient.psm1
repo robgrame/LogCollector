@@ -260,6 +260,13 @@ function Invoke-InventoryHttpPost {
     # Sign inside the attempt: the timestamp and nonce must be fresh for every
     # single transmission, otherwise a retry is indistinguishable from a replay.
     $signed = New-SignedInventoryRequest -Uri $Uri -Body $Body -Certificate $Certificate -Method 'POST'
+    # Let the TLS endpoint finish certificate negotiation before sending a large body.
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $signed.Headers['Expect'] = '100-continue'
+    }
+    else {
+        [Net.ServicePointManager]::FindServicePoint($Uri).Expect100Continue = $true
+    }
 
     try {
         $response = Invoke-WebRequest `

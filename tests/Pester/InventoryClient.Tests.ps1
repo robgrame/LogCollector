@@ -183,6 +183,24 @@ Context 'Send-InventoryEnvelope' {
             [DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddYears(1))
     }
 
+    It 'enables Expect 100-continue without changing signed body bytes' {
+        Mock -ModuleName InventoryClient Invoke-WebRequest {
+            param($Uri, $Headers, $Body)
+            if ($PSVersionTable.PSVersion.Major -ge 6) {
+                $Headers['Expect'] | Should -BeExactly '100-continue'
+            }
+            else {
+                [Net.ServicePointManager]::FindServicePoint($Uri).Expect100Continue | Should -BeTrue
+            }
+            [Text.Encoding]::UTF8.GetString($Body) | Should -BeExactly '{"probe":true}'
+            [pscustomobject]@{ StatusCode = 202 }
+        }
+        $result = Send-InventoryEnvelope -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Body '{"probe":true}' -Certificate $script:Certificate -NoSleep
+        $result.Disposition | Should -BeExactly 'Delivered'
+        Should -Invoke -ModuleName InventoryClient Invoke-WebRequest -Times 1 -Exactly
+    }
+
     It 'reports Delivered and stops after a single successful attempt' {
         Mock -ModuleName InventoryClient Invoke-InventoryHttpPost {
             [pscustomobject]@{ StatusCode = 202; RetryAfterSeconds = $null; Disposition = 'Delivered'; Message = 'ok' }

@@ -20,8 +20,9 @@ namespace LogCollector.Shared.Security;
 /// </list>
 /// The Intune tier is only consulted when the enterprise tier rejects the chain,
 /// is explicitly enabled, has anchors configured, <b>and</b> the issuer is
-/// allow-listed. Nothing is weakened by the fallback: the identity binding still
-/// comes from a CA-asserted value in a chain this service independently verified.
+/// allow-listed. Identity binding comes from a CA-asserted value in a verified chain.
+/// An explicit Intune-only CRL/OCSP exception does not affect enterprise PKI;
+/// the caller must still enforce tenant device authorization for the Intune tier.
 /// </summary>
 public sealed class ClientCertValidator
 {
@@ -69,6 +70,7 @@ public sealed class ClientCertValidator
     private readonly Dictionary<string, string> _thumbprintToDeviceMap;
     private readonly HashSet<string> _intuneEnrollmentIssuerSubjects;
     private readonly bool _checkRevocation;
+    private readonly bool _skipIntuneRevocationCheck;
     private readonly X509RevocationMode _revocationMode;
     private readonly X509RevocationFlag _revocationFlag;
     private readonly bool _requireClientAuthEku;
@@ -102,6 +104,10 @@ public sealed class ClientCertValidator
         LoadCerts(cfg["ClientCert:TrustedIntuneIntermediateCertificates"], _intuneIntermediateStore, "Intune intermediate");
 
         _checkRevocation = bool.TryParse(cfg["ClientCert:CheckRevocation"], out var cr) && cr;
+        _skipIntuneRevocationCheck =
+            bool.TryParse(cfg["ClientCert:SkipIntuneRevocationCheck"], out var skipIntune) && skipIntune;
+        if (_skipIntuneRevocationCheck)
+            _log.LogWarning("Intune certificate CRL/OCSP checks are disabled explicitly; tenant device authorization through Graph remains required.");
         _revocationMode = Enum.TryParse<X509RevocationMode>(cfg["ClientCert:RevocationMode"], true, out var rm)
             ? rm
             : (_checkRevocation ? X509RevocationMode.Online : X509RevocationMode.NoCheck);
@@ -322,6 +328,9 @@ public sealed class ClientCertValidator
     private (bool Ok, string? Reason) ValidateIntuneTrust(X509Certificate2 cert, DateTime now)
     {
         using var chain = CreateChain(now);
+        // Some Intune CA chains publish no CRL/OCSP endpoints. Never apply this exception to enterprise PKI.
+        if (_skipIntuneRevocationCheck)
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
         chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
         chain.ChainPolicy.CustomTrustStore.AddRange(_intuneRootStore.ToArray());
         chain.ChainPolicy.ExtraStore.AddRange(_intuneRootStore.ToArray());

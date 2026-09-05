@@ -107,7 +107,8 @@ if ($PSBoundParameters.ContainsKey('CollectCsv')) {
 #   1.0.1 - added Disk/Volume and BitLocker; guarded sections with CollectionStatus
 #           records; TPM and Secure Boot now distinguish Absent from Unavailable.
 #   1.0.2 - explicit CSV transport for native powershell.exe -File arguments.
-$script:CollectorVersion = '1.0.2'
+#   1.0.3 - Expect 100-continue transport for large certificate-authenticated uploads.
+$script:CollectorVersion = '1.0.3'
 
 $moduleRoot = Join-Path $PSScriptRoot '..\src\Client'
 Import-Module (Join-Path $moduleRoot 'DeviceIdentity.psm1') -Force -DisableNameChecking

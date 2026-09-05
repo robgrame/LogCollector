@@ -23,22 +23,33 @@ Optionally the Intune MDM Device CA certificates to enable the second trust tier
 Certificates are public data. Private keys, PFX files and passwords never belong in parameters,
 source control, or app settings.
 
+The public chain under `infra\certificates` comes from the `intune-wipe-api` reference
+implementation. Confirm it matches the pilot device's chain before rollout:
+
+| Certificate | SHA-1 thumbprint (identifier) | Expires |
+|---|---|---|
+| Microsoft Intune Root Certification Authority | `A197D6717352023B615F6ED444A6981ABC80F6C9` | 2030-09-15 |
+| Microsoft Intune Device Management Device CA | `197E7F27389159E7D88FCB9062A92A7BFFF951F5` | 2028-09-15 |
+
 ## 1. Deploy infrastructure
 
 ```powershell
-az group create --name rg-logcollector --location westeurope
+$subscription = 'b45c5b53-d8f3-4a4c-9fe5-5537818a9886'
+az group create --subscription $subscription --name LOGCOLLECTOR-RG --location italynorth
 
-# Edit infra/main.bicepparam first: replace the <placeholder> certificate values.
+# Deployed settings: public Intune CAs; enterprise PKI anchors are not configured.
+# infra\main.bicepparam remains a separate sample for other environments.
 az deployment group create `
-  --resource-group rg-logcollector `
-  --template-file infra/main.bicep `
-  --parameters infra/main.bicepparam
+  --subscription $subscription --resource-group LOGCOLLECTOR-RG --name LogCollector `
+  --template-file infra\main.bicep `
+  --parameters infra\logcollector.bicepparam
 ```
 
 Capture the outputs:
 
 ```powershell
-az deployment group show -g rg-logcollector -n main --query properties.outputs -o json
+az deployment group show --subscription $subscription -g LOGCOLLECTOR-RG -n LogCollector `
+  --query properties.outputs -o json
 ```
 
 | Output | Used for |
@@ -78,60 +89,75 @@ administrator must grant **Microsoft Graph Device.Read.All (application)** to it
 managed identity. This is a Graph app-role assignment, not an Azure RBAC role; Bicep does not
 silently grant tenant-wide directory permissions. Enterprise-PKI-only deployments do not need it.
 
-The following is an administrator-operated example after infrastructure deployment:
+The following idempotent helper resolves both the identity and Graph token in the specified
+subscription's tenant. It does not change the caller's default Azure CLI subscription:
 
 ```powershell
-$principalId = az identity show -g rg-logcollector -n logcollector-prod-frontend-id --query principalId -o tsv
-if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve frontend identity.' }
-$graph = az ad sp show --id 00000003-0000-0000-c000-000000000000 | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve Microsoft Graph service principal.' }
-$role = $graph.appRoles | Where-Object {
-    $_.value -eq 'Device.Read.All' -and $_.allowedMemberTypes -contains 'Application'
-}
-if (-not $role) { throw 'Device.Read.All application role was not found.' }
-$assignmentFile = New-TemporaryFile
-try {
-    @{
-        principalId = $principalId
-        resourceId = $graph.id
-        appRoleId = $role.id
-    } | ConvertTo-Json | Set-Content -LiteralPath $assignmentFile.FullName -Encoding utf8
-    az rest --method POST `
-      --url "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments" `
-      --body "@$($assignmentFile.FullName)"
-    if ($LASTEXITCODE -ne 0) { throw 'Graph role assignment failed; inspect permissions or existing assignments.' }
-} finally {
-    Remove-Item -LiteralPath $assignmentFile.FullName
-}
+.\scripts\Grant-IntuneGraphPermission.ps1 -SubscriptionId $subscription `
+  -ResourceGroup LOGCOLLECTOR-RG -IdentityName LogCollector-intake-identity
 ```
 
 Missing consent or unavailable Graph produces a failed submission, never an authorization bypass.
 For the pilot, confirm the enrollment certificate's `.5.25` GUID equals the device's `dsregcmd`
 Entra device ID. Shared Microsoft Intune roots belong only in the Intune trust settings.
 
+The supplied Intune intermediate has no CRL/OCSP distribution endpoints: online chain validation
+returns `RevocationStatusUnknown`. The deployed parameters explicitly set
+`skipIntuneRevocationCheck = true`, while `checkRevocation = true` continues to protect enterprise
+PKI. Signature, expiry, EKU, configured roots/issuer, binding and Graph checks are unchanged.
+To block an Intune device, disable/delete its Entra device record. Retiring an MDM enrollment
+alone is not guaranteed to disable that record, and this design does not check current MDM
+management status or individual certificate revocation. Re-evaluate this exception when replacing
+the Intune CA chain.
+
 ### Publish a selected component
 
 ```powershell
 .\scripts\Publish-Function.ps1 -Component Frontend -Deploy `
-  -ResourceGroup rg-logcollector -AppName '<frontendAppName>'
+  -SubscriptionId $subscription -ResourceGroup LOGCOLLECTOR-RG -AppName LogCollector-intake
 .\scripts\Publish-Function.ps1 -Component Worker -Deploy `
-  -ResourceGroup rg-logcollector -AppName '<workerAppName>'
+  -SubscriptionId $subscription -ResourceGroup LOGCOLLECTOR-RG -AppName LogCollector-worker
 ```
 
 The helper includes hidden `.azurefunctions` dependencies and validates package contents.
 Without `-Deploy` it only creates a local package. Deploy only the component changed.
 Frontend B1 deployments have no slot swap and can briefly restart the listener; clients retain
 their spool and retry. Do not temporarily change SKUs merely to obtain deployment slots.
+After changing app settings, let the configuration-triggered restart finish before ZIP deployment.
+Overlapping these operations can make Kudu stop finalization with `SCM container restart` even
+when the new package is already running. In that case confirm restart completion, retry the same
+package without another settings change, and require a completed, successful deployment status.
 
-Verify the frontend is up (this route is excluded from mTLS by design):
+Verify the frontend using a TLS client certificate:
 
 ```powershell
-Invoke-RestMethod https://<frontendAppName>.azurewebsites.net/api/health
+$certificate = Get-Item 'Cert:\LocalMachine\My\<client-certificate-thumbprint>'
+Invoke-RestMethod https://logcollector-intake.azurewebsites.net/api/health -Certificate $certificate
 # { status = ok; component = logcollector-frontend; configuredIngestionTargets = 1 }
 ```
 
 `configuredIngestionTargets` of `0` means `Ingestion__StreamMap` is missing or malformed — every
 submission would be rejected with "not an accepted ingestion target".
+
+Do **not** exclude `/api/health` from mTLS. App Service enables TLS renegotiation whenever
+`clientCertExclusionPaths` is nonempty, imposing a fixed **100 KB** upload limit and incompatible
+TLS 1.3/HTTP/2 behavior. The deployed app uses `Required`, no exclusions and no built-in
+unauthenticated health-check path; use an external certificate-bearing probe instead.
+Health reports liveness/configuration, not full client authorization or ingestion success.
+See [Microsoft's mTLS guidance](https://learn.microsoft.com/en-us/azure/app-service/app-service-web-configure-tls-mutual-auth).
+
+The real client enables `Expect: 100-continue` (a header in PowerShell 7; the endpoint's
+`ServicePoint.Expect100Continue` in Windows PowerShell 5.1). This avoids sending a large body
+before the endpoint is ready. Exercise both runtimes on Windows:
+
+```powershell
+pwsh -NoProfile -File .\tests\Deployment\Test-IntakeEndpoint.ps1
+powershell.exe -NoProfile -File .\tests\Deployment\Test-IntakeEndpoint.ps1
+```
+
+The probe creates and removes one untrusted, short-lived certificate in `CurrentUser\My`.
+It expects 403 without a certificate, application 401 for signed bodies up to 1 MB, and a healthy
+certificate-bearing liveness response. It does **not** establish positive end-to-end ingestion.
 
 ## 3. Onboard devices
 
@@ -270,8 +296,8 @@ Alert-worthy signals:
 Inspect the dead-letter queue:
 
 ```powershell
-az servicebus queue show -g rg-logcollector `
-  --namespace-name <sbNamespace> --name inventory-ingestion `
+az servicebus queue show --subscription $subscription -g LOGCOLLECTOR-RG `
+  --namespace-name LogCollector-servicebus --name inventory-ingestion `
   --query countDetails
 ```
 
@@ -283,6 +309,7 @@ description.
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Client: `403` from App Service before reaching the function | No client certificate presented | Confirm the certificate has a private key and Client Authentication EKU; SYSTEM context can read `LocalMachine\My` |
+| Large upload resets, while small requests work | mTLS exclusions/renegotiation, or body sent too early | Remove **all** certificate exclusion paths; deploy the client with `Expect: 100-continue` |
 | `401 client cert: certificate chain build failed` | Wrong or missing trust anchors | Check `ClientCert__TrustedRootCertificates`; roots must be self-signed, intermediates go in the intermediate setting |
 | `401 client cert: trust anchor not configured` | No anchors at all | Fail-closed by design; supply at least one tier |
 | `401 request signature verification failed` | Body altered in transit, or a proxy re-encoded it | Ensure nothing rewrites the body; the client signs raw bytes |
@@ -326,9 +353,10 @@ Adding a new issuing CA: append its base64 DER to `ClientCert__TrustedIntermedia
 `__TrustedRootCertificates` for a new root) **before** issuance begins. Both old and new can be
 trusted simultaneously, so rollout does not need a cutover.
 
-Emergency containment of one certificate: add its thumbprint-inverted allow-list via
-`ClientCert__AllowedLeafThumbprints` (restricting to known-good leaves), which takes effect
-immediately, rather than waiting for CRL/OCSP caches to expire.
+Emergency containment: configure `ClientCert__AllowedLeafThumbprints` as an explicit list of
+known-good leaves, excluding the compromised certificate. This is an **allow-list**, not a
+deny-list; an empty value removes the restriction. Apply the app setting and allow the app to
+restart. For an Intune device, disable/delete its Entra device record to deny subsequent requests.
 
 ## 7. Validation before a release
 
@@ -350,8 +378,8 @@ az bicep build-params --file infra/main.bicepparam --stdout
 A what-if against a live resource group before applying infrastructure changes:
 
 ```powershell
-az deployment group what-if -g rg-logcollector `
-  --template-file infra/main.bicep --parameters infra/main.bicepparam
+az deployment group what-if --subscription $subscription -g LOGCOLLECTOR-RG `
+  --template-file infra\main.bicep --parameters infra\logcollector.bicepparam
 ```
 
 ## 8. Capacity notes

@@ -65,7 +65,7 @@ Changing any line is a breaking protocol change and requires a new version token
   "correlationId": "…",
   "source": "WindowsScheduledTask",
   "collectedAtUtc": "2026-04-01T06:00:00.0000000+00:00",
-  "properties": { "CollectorVersion": "1.0.2", "CollectedAreas": "Hardware,Software" },
+  "properties": { "CollectorVersion": "1.0.3", "CollectedAreas": "Hardware,Software" },
   "records": [ { "RecordType": "Hardware", "Model": "X1" } ]
 }
 ```

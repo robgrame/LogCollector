@@ -26,9 +26,9 @@ param location string = resourceGroup().location
 @description('Short application name used as the resource-name prefix.')
 @minLength(3)
 @maxLength(12)
-param appName string = 'logcollector'
+param appName string = 'LogCollector'
 
-@description('Environment discriminator appended to resource names.')
+@description('Environment label for resource tags; resource names remain deterministic.')
 @allowed(['dev', 'test', 'prod'])
 param environment string = 'prod'
 
@@ -96,6 +96,9 @@ param clientCertThumbprintToDeviceMap string = ''
 @description('Perform online CRL/OCSP revocation checking on the client certificate chain.')
 param checkRevocation bool = true
 
+@description('Explicitly skip CRL/OCSP only for Intune chains without revocation endpoints. Graph device authorization remains mandatory.')
+param skipIntuneRevocationCheck bool = false
+
 @description('Maximum accepted clock skew, in seconds, for X-Request-Timestamp.')
 @minValue(30)
 @maxValue(3600)
@@ -123,23 +126,22 @@ param tags object = {
 // Names
 // ---------------------------------------------------------------------------
 
-var suffix = uniqueString(resourceGroup().id, appName, environment)
-var namePrefix = '${appName}-${environment}'
+var namePrefix = appName
 
-var storageAccountName = take(toLower(replace('${appName}${environment}st${suffix}', '-', '')), 24)
-var serviceBusNamespaceName = '${namePrefix}-sb-${take(suffix, 6)}'
+var storageAccountName = '${toLower(appName)}data'
+var serviceBusNamespaceName = '${namePrefix}-servicebus'
 var workspaceName = '${namePrefix}-law'
 var appInsightsName = '${namePrefix}-appi'
 var dceName = '${namePrefix}-dce'
 var dcrName = '${namePrefix}-dcr'
-var frontendPlanName = '${namePrefix}-frontend-plan'
+var frontendPlanName = '${namePrefix}-intake-plan'
 var workerPlanName = '${namePrefix}-worker-plan'
-var frontendAppName = '${namePrefix}-frontend-${take(suffix, 6)}'
-var workerAppName = '${namePrefix}-worker-${take(suffix, 6)}'
-var frontendIdentityName = '${namePrefix}-frontend-id'
-var workerIdentityName = '${namePrefix}-worker-id'
+var frontendAppName = '${namePrefix}-intake'
+var workerAppName = '${namePrefix}-worker'
+var frontendIdentityName = '${namePrefix}-intake-identity'
+var workerIdentityName = '${namePrefix}-worker-identity'
 
-var frontendDeployContainer = 'frontend-deploy'
+var frontendDeployContainer = 'intake-deploy'
 var workerDeployContainer = 'worker-deploy'
 
 var inventoryStreamName = 'Custom-${inventoryTableName}'
@@ -356,9 +358,6 @@ resource dcrDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
 // ---------------------------------------------------------------------------
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
-  // appName is >= 3 characters and environment is >= 3, so the truncated name is
-  // always well above the 3-character minimum; the analyzer cannot prove it.
-  #disable-next-line BCP334
   name: storageAccountName
   location: location
   tags: tags
@@ -679,9 +678,9 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
     // re-validates the chain itself rather than trusting the edge alone.
     clientCertEnabled: true
     clientCertMode: 'Required'
-    // Only the unauthenticated liveness probe is exempt. Anything added here
-    // bypasses mTLS by path prefix, so the list must stay minimal.
-    clientCertExclusionPaths: '/api/health'
+    // Exclusions trigger TLS renegotiation and App Service's fixed 100 KB
+    // upload limit. Negotiate certificates at the initial TLS handshake.
+    clientCertExclusionPaths: ''
     keyVaultReferenceIdentity: frontendIdentity.id
     siteConfig: {
       linuxFxVersion: 'DOTNET-ISOLATED|10.0'
@@ -689,7 +688,8 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
       http20Enabled: true
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      healthCheckPath: '/api/health'
+      // Use an external certificate-bearing health probe instead.
+      healthCheckPath: ''
       appSettings: [
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'dotnet-isolated' }
@@ -731,6 +731,7 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ClientCert__IntuneEnrollmentIssuerSubjects', value: intuneEnrollmentIssuerSubjects }
         { name: 'ClientCert__ThumbprintToDeviceMap', value: clientCertThumbprintToDeviceMap }
         { name: 'ClientCert__CheckRevocation', value: string(checkRevocation) }
+        { name: 'ClientCert__SkipIntuneRevocationCheck', value: string(skipIntuneRevocationCheck) }
         { name: 'ClientCert__RevocationMode', value: 'Online' }
         { name: 'ClientCert__RevocationFlag', value: 'ExcludeRoot' }
 

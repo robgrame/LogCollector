@@ -197,8 +197,10 @@ queue, the worker does not rely on that:
   string that does not work is a credential that cannot leak.
 - Service Bus has `disableLocalAuth: true`; SAS keys cannot authenticate data-plane requests.
 - `httpsOnly`, TLS 1.2 minimum, FTPS disabled on both apps.
-- Only `/api/health` is on `clientCertExclusionPaths`, and it returns nothing an unauthenticated
-  caller should not see. Every added prefix bypasses mTLS, so the list must stay minimal.
+- `clientCertMode: Required` with **no** `clientCertExclusionPaths`, including health. Any
+  exclusion enables TLS renegotiation and App Service's fixed 100 KB upload limit.
+  Use an external certificate-bearing health probe; liveness does not validate certificate trust
+  at the application layer and is not proof of authorization.
 
 ## Client-side posture
 
@@ -222,9 +224,16 @@ queue, the worker does not rely on that:
   and Storage Service Encryption at rest. Add client-side encryption if inventory content is
   classified beyond that.
 - **It does not authenticate the *user*.** The identity asserted is the device.
-- **Revocation is only as fresh as CRL/OCSP.** `CheckRevocation` is on by default; a leaf revoked
-  moments ago may still validate until caches expire. Use `AllowedLeafThumbprints` for immediate
-  containment of a specific certificate.
+- **PKI revocation is only as fresh as CRL/OCSP.** The deployment enables `CheckRevocation`;
+  a leaf revoked moments ago may still validate until caches expire. `AllowedLeafThumbprints`
+  can restrict acceptance to an explicit list of known-good certificates.
+- **Intune CRL/OCSP can be unavailable.** `SkipIntuneRevocationCheck` defaults to false and only
+  affects the Intune trust tier. The deployed public intermediate has no revocation endpoints,
+  so this exception is explicitly enabled there; it never disables enterprise PKI revocation.
+  Chain signatures, expiry, EKU, issuer/roots, proof of possession and device binding remain
+  enforced. Graph must still find an enabled device in the identity's tenant on every submission.
+  Disable/delete that Entra device to block access. This is not certificate-level revocation
+  or proof of current MDM management: a retired enrollment may leave an enabled Entra record.
 
 ## Reviewing a change to the trust path
 

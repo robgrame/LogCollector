@@ -72,10 +72,14 @@ LogCollector/
 │   └── operations.md            Deploy, verify, monitor, troubleshoot
 ├── infra/
 │   ├── main.bicep               Complete deployment
-│   └── main.bicepparam          Sample parameters (public CA certs only)
+│   ├── main.bicepparam          Sample parameters (public CA certs only)
+│   ├── logcollector.bicepparam  Deployed Italy North configuration
+│   └── certificates/           Public Intune CA chain
 ├── scripts/
 │   ├── Invoke-CustomInventory.ps1        Collection + submission entry point
-│   └── Register-InventoryScheduledTask.ps1
+│   ├── Register-InventoryScheduledTask.ps1
+│   ├── Publish-Function.ps1              Targeted application deployment
+│   └── Grant-IntuneGraphPermission.ps1   Idempotent Graph permission grant
 ├── src/
 │   ├── Client/                  Windows PowerShell 5.1 modules
 │   │   ├── DeviceIdentity.psm1  Entra device id + dual-tier certificate selection
@@ -91,7 +95,8 @@ LogCollector/
 │       └── Worker/              Ingestion Function App
 └── tests/
     ├── LogCollector.Shared.Tests/   xUnit regression tests
-    └── Pester/                      Pester 5 + PS 5.1 smoke test
+    ├── Pester/                      Pester 5 + PS 5.1 smoke test
+    └── Deployment/                  Live intake transport probe
 ```
 
 ---
@@ -129,9 +134,12 @@ Devices are covered by one of two independent certificate tiers.
    `1.2.840.113556.5.25`.
 
 The Intune tier is consulted only when the enterprise tier rejects the chain, **and** the fallback is
-enabled, **and** Intune anchors are configured, **and** the issuer DN is on the allow-list. Nothing is
-weakened: the binding still comes from a CA-asserted value inside a chain this service verified
-itself.
+enabled, **and** Intune anchors are configured, **and** the issuer DN is on the allow-list.
+The binding comes from a CA-asserted value inside a verified chain. Revocation differs when an
+Intune chain has no CRL/OCSP endpoints: the explicit `SkipIntuneRevocationCheck` option skips
+only that tier's revocation check, never enterprise PKI's. Graph tenant authorization remains
+mandatory; disabling or deleting the Entra device blocks subsequent Intune submissions.
+This is not proof of current MDM enrollment or individual certificate revocation.
 
 On the client side the same asymmetry appears deliberately: `-CertificateIssuerLike` narrows the
 *PKI* tier only. That pin is normally set to the corporate CA, so applying it to the fallback would
@@ -190,7 +198,7 @@ POST
   "correlationId": "…",
   "source": "WindowsScheduledTask",
   "collectedAtUtc": "2026-04-01T06:00:00.0000000+00:00",
-  "properties": { "CollectorVersion": "1.0.2" },
+  "properties": { "CollectorVersion": "1.0.3" },
   "records": [ { "RecordType": "Hardware", "Model": "X1" } ]
 }
 ```
@@ -210,6 +218,11 @@ POST
 ---
 
 ## Client reliability
+
+**Large mTLS uploads.** The client enables `Expect: 100-continue` using the runtime-appropriate
+transport API. App Service must use `clientCertMode: Required` with **no certificate exclusion
+paths**: even excluding health enables TLS renegotiation and imposes a fixed 100 KB upload limit.
+Health therefore requires a TLS client certificate too; see the runbook.
 
 **Exponential backoff with full jitter.** The delay is uniform over `[0, min(base·2ⁿ, ceiling)]`, not
 "backoff plus a little noise". Full jitter is what actually de-correlates thousands of devices that
@@ -307,15 +320,16 @@ dead-lettered payloads before the configured lifecycle expiration.
 ### 1. Infrastructure
 
 ```powershell
-az group create --name rg-logcollector --location westeurope
+$subscription = 'b45c5b53-d8f3-4a4c-9fe5-5537818a9886'
+az group create --subscription $subscription --name LOGCOLLECTOR-RG --location italynorth
 
 # Export a CA certificate to base64 DER:
 #   [Convert]::ToBase64String((Get-Item Cert:\LocalMachine\Root\<thumbprint>).RawData)
 
 az deployment group create `
-  --resource-group rg-logcollector `
-  --template-file infra/main.bicep `
-  --parameters infra/main.bicepparam
+  --subscription $subscription --resource-group LOGCOLLECTOR-RG --name LogCollector `
+  --template-file infra\main.bicep `
+  --parameters infra\logcollector.bicepparam
 ```
 
 Record the outputs: `frontendIngestUrl`, `dataCollectionEndpoint`, `dataCollectionRuleImmutableId`.
@@ -326,9 +340,9 @@ For Intune fallback, complete the administrator-operated Graph `Device.Read.All`
 
 ```powershell
 .\scripts\Publish-Function.ps1 -Component Frontend -Deploy `
-  -ResourceGroup rg-logcollector -AppName '<frontendAppName>'
+  -SubscriptionId $subscription -ResourceGroup LOGCOLLECTOR-RG -AppName LogCollector-intake
 .\scripts\Publish-Function.ps1 -Component Worker -Deploy `
-  -ResourceGroup rg-logcollector -AppName '<workerAppName>'
+  -SubscriptionId $subscription -ResourceGroup LOGCOLLECTOR-RG -AppName LogCollector-worker
 ```
 
 Omit `-Deploy` to build packages locally without touching Azure. Packaging includes the hidden
@@ -339,7 +353,7 @@ B1 has no deployment slots: allow for a restart during frontend deployment.
 
 ```powershell
 .\scripts\Register-InventoryScheduledTask.ps1 `
-    -FrontendUrl 'https://<frontend>.azurewebsites.net/api/inventory' `
+    -FrontendUrl 'https://logcollector-intake.azurewebsites.net/api/inventory' `
     -TableName 'InventoryWindows_CL' `
     -CertificateIssuerLike '*CONTOSO-ISSUING-CA*'
 ```
@@ -370,6 +384,7 @@ Full runbook, verification queries and troubleshooting: **[docs/operations.md](d
 | `ClientCert__DeviceIdBindingClaim` | `Auto` | `SubjectCN`/`SanDns`/`SanUri`/`Thumbprint`/`IntuneEnrollmentOid` |
 | `ClientCert__ThumbprintToDeviceMap` | — | `THUMB=guid|…` for templates without an embedded id |
 | `ClientCert__CheckRevocation` | `true` | CRL/OCSP |
+| `ClientCert__SkipIntuneRevocationCheck` | `false` | Explicit Intune-only exception for chains without CRL/OCSP; enabled in the deployed parameters |
 | `Ingestion__StreamMap` | — | `Table_CL=Custom-Table_CL;…` allow-list |
 | `Intake__MaxRecordsPerEnvelope` | `50000` | Record ceiling |
 
@@ -420,7 +435,8 @@ Coverage focuses on the security and reliability surface rather than plumbing:
 ## Operational rules
 
 - Never log raw inventory payloads, certificates, signatures, or tokens.
-- Never commit certificates, PFX files, workspace keys, or `local.settings.json`.
+- Never commit private keys, PFX files, workspace keys, or `local.settings.json`. Public CA
+  certificates under `infra\certificates` are intentional trust configuration, not secrets.
 - Payload blobs are business data: they stay in Azure with a lifecycle policy, never in source control.
 - The client refuses a non-HTTPS `FrontendUrl` outright rather than sending signed inventory in clear text.
 - The collection script exits non-zero when the submission is not delivered, so the task's Last Run
@@ -428,9 +444,23 @@ Coverage focuses on the security and reliability surface rather than plumbing:
 
 ## Rollout boundary
 
-This repository delivers application code and infrastructure templates, not an already deployed
-Azure environment. Supply the customer's CA certificates and deployment parameters, verify
-regional .NET 10/Flex availability, then run a pilot with representative hardware/software payloads.
+The environment is deployed in **LOGCOLLECTOR-RG**, **Italy North**, subscription
+`b45c5b53-d8f3-4a4c-9fe5-5537818a9886`: **LogCollector-intake (B1)**,
+**LogCollector-worker (Flex Consumption)**, **LogCollector-servicebus**, **LogCollector-law**,
+**LogCollector-dce**, **LogCollector-dcr**, **LogCollector-appi**, and **logcollectordata**.
+Resource names have no random suffixes; Azure-generated service DNS names can have managed suffixes.
+The storage name uses only lowercase letters because Azure requires it; `logcollectorstorage`
+was unavailable globally.
+
+The intake endpoint is **https://logcollector-intake.azurewebsites.net/api/inventory**.
+Azure RBAC and Graph **Device.Read.All** are assigned to the appropriate managed identities.
+`infra\logcollector.bicepparam` contains the deployed settings and public Intune CA chain;
+enterprise PKI anchors are still empty until the customer's public CA certificates are supplied.
+These settings authorize the tenant hosting the identities, not any arbitrary customer's tenant.
+
+Client onboarding is still a pilot prerequisite. No positive end-to-end ingestion with a real
+enrollment certificate has been demonstrated. Confirm the certificate's `.5.25` GUID matches
+the Entra device and exercise representative hardware/software payloads through to Log Analytics.
 Measure B1 latency and memory under the two-hour upload window before fleet-wide rollout.
 
 Rotate the legacy workspace shared key in a coordinated migration: first remove it from scripts

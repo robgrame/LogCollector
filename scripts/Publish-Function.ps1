@@ -3,7 +3,7 @@
 .SYNOPSIS
 Builds and packages one Function app, optionally deploying it with Azure CLI.
 .NOTES
-Version 1.0.0. No Azure resources are changed unless -Deploy is supplied.
+Version 1.0.1. No Azure resources are changed unless -Deploy is supplied.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -12,7 +12,8 @@ param(
     [string] $Component,
     [switch] $Deploy,
     [string] $ResourceGroup,
-    [string] $AppName
+    [string] $AppName,
+    [string] $SubscriptionId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,7 +47,9 @@ try {
 finally { $archive.Dispose() }
 
 if ($Deploy -and $PSCmdlet.ShouldProcess($AppName, "Deploy $Component to $ResourceGroup")) {
-    & az functionapp deployment source config-zip --resource-group $ResourceGroup --name $AppName --src $zipPath --only-show-errors
+    $subscriptionArgs = @()
+    if ($SubscriptionId) { $subscriptionArgs = @('--subscription', $SubscriptionId) }
+    & az functionapp deployment source config-zip --resource-group $ResourceGroup --name $AppName --src $zipPath --only-show-errors @subscriptionArgs
     if ($LASTEXITCODE -ne 0) { throw "Azure deployment failed with exit code $LASTEXITCODE." }
 }
 Write-Output $zipPath

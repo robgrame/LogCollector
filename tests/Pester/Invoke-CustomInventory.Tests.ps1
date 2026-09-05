@@ -436,10 +436,10 @@ Describe 'Invoke-CustomInventory' {
 
     Context 'envelope' {
 
-        It 'stamps collector version 1.0.2' {
+        It 'stamps collector version 1.0.3' {
             $envelope = & $script:CollectorPath -FrontendUrl $script:FrontendUrl -Collect Disk -WhatIfSubmission | ConvertFrom-Json
 
-            $envelope.properties.CollectorVersion | Should -BeExactly '1.0.2'
+            $envelope.properties.CollectorVersion | Should -BeExactly '1.0.3'
         }
 
         It 'accepts a validated CSV list from the native scheduled-task command line' {

@@ -268,6 +268,39 @@ public sealed class ClientCertValidatorTests
 
     // --- Intune enrollment tier ---------------------------------------------
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void Validate_IntuneRevocationExceptionRequiresExplicitOptIn(bool skip, bool accepted)
+    {
+        using var ca = TestCertificates.CreateRootCa("Intune Test Device CA");
+        using var leaf = TestCertificates.CreateClientCertificate(ca, "enrollment-guid", intuneDeviceId: DeviceId);
+        var validator = Create(
+            ("ClientCert:TrustedIntuneRootCertificates", TestCertificates.ToBase64(ca)),
+            ("ClientCert:IntuneEnrollmentIssuerSubjects", IntuneIssuerSubject),
+            ("ClientCert:CheckRevocation", "true"),
+            ("ClientCert:SkipIntuneRevocationCheck", skip.ToString()));
+
+        var result = validator.Validate(TestCertificates.PublicOnly(leaf), null);
+
+        Assert.Equal(accepted, result.Ok);
+        if (accepted)
+            Assert.Equal(ClientCertValidator.TrustTier.IntuneEnrollment, result.Tier);
+    }
+
+    [Fact]
+    public void Validate_IntuneRevocationExceptionDoesNotDisableEnterpriseRevocation()
+    {
+        using var ca = TestCertificates.CreateRootCa("Enterprise Root Without CRL");
+        using var leaf = TestCertificates.CreateClientCertificate(ca, DeviceId, sanUriDeviceId: DeviceId);
+        var validator = Create(
+            ("ClientCert:TrustedRootCertificates", TestCertificates.ToBase64(ca)),
+            ("ClientCert:CheckRevocation", "true"),
+            ("ClientCert:SkipIntuneRevocationCheck", "true"));
+
+        Assert.False(validator.Validate(TestCertificates.PublicOnly(leaf), null).Ok);
+    }
+
     [Fact]
     public void Validate_AcceptsAnIntuneEnrollmentCertificateWhenItsAnchorAndIssuerAreConfigured()
     {
