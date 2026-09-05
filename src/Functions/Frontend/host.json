@@ -1,0 +1,22 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Request;Exception"
+      }
+    },
+    "logLevel": {
+      "default": "Information",
+      "LogCollector": "Information"
+    }
+  },
+  "extensions": {
+    "http": {
+      "routePrefix": "api",
+      "maxOutstandingRequests": 400,
+      "maxConcurrentRequests": 100
+    }
+  }
+}

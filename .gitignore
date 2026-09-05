@@ -1,0 +1,45 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.sln.docstates
+*.cache
+*.nupkg
+packages/
+coverage/
+TestResults/
+testResults.xml
+
+## Azure Functions local runtime
+local.settings.json
+.vscode/
+.azure/
+
+## Build output / publish artifacts
+out/
+artifacts/
+publish/
+*.zip
+
+## Compiled Bicep (build artifact, not source)
+infra/*.json
+
+## Secrets and key material — never commit these
+*.pfx
+*.p12
+*.key
+*.pem
+.env
+.env.*
+
+## Collected inventory is business data, not source
+spool/
+*.inventory.json
+
+## Common
+.DS_Store
+Thumbs.db
+*.log
+*.bak
+*.tmp

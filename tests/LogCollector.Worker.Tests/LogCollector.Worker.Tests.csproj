@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>LogCollector.Worker.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!--
+      Pinned to 10.0.9, not 10.0.0. The Worker project reference drags in
+      Azure.Identity -> Azure.Core -> Microsoft.Extensions.Hosting.Abstractions
+      10.0.9, which floors Logging.Abstractions, Configuration.Abstractions and
+      Primitives at 10.0.9. A direct 10.0.0 reference here is a package downgrade
+      (NU1605) the moment anything floors the package itself, so the direct
+      versions are kept level with the transitive floor and Logging.Abstractions
+      is declared explicitly rather than left implicit.
+    -->
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Functions\Worker\LogCollector.Worker.csproj" />
+  </ItemGroup>
+
+</Project>

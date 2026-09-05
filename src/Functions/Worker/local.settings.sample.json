@@ -1,0 +1,24 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+
+    "ServiceBus__fullyQualifiedNamespace": "<namespace>.servicebus.windows.net",
+    "ServiceBus__InventoryQueue": "inventory-ingestion",
+
+    "Storage__AccountName": "<storage-account-name>",
+    "Storage__PayloadContainer": "inventory-payloads",
+
+    "Ingestion__DataCollectionEndpoint": "https://<dce-name>.<region>.ingest.monitor.azure.com",
+    "Ingestion__DataCollectionRuleId": "<dcr-immutable-id>",
+    "Ingestion__StreamMap": "InventoryWindows_CL=Custom-InventoryWindows_CL",
+    "Ingestion__MaxChunkBytes": "870400",
+    "Ingestion__MaxAttempts": "5",
+    "Ingestion__BaseRetryDelayMs": "1000",
+    "Ingestion__MaxRetryDelaySeconds": "60",
+    "Ingestion__DeleteBlobAfterIngestion": "false",
+
+    "Intake__MaxRecordsPerEnvelope": "50000"
+  }
+}

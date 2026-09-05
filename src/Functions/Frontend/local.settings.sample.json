@@ -1,0 +1,36 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+
+    "ServiceBus__fullyQualifiedNamespace": "<namespace>.servicebus.windows.net",
+    "ServiceBus__InventoryQueue": "inventory-ingestion",
+
+    "Storage__AccountName": "<storage-account-name>",
+    "Storage__PayloadContainer": "inventory-payloads",
+
+    "Replay__StorageAccount": "<storage-account-name>",
+    "Replay__TableName": "RequestNonces",
+    "Replay__MaxTimestampSkewSeconds": "300",
+    "Replay__NonceRetentionSeconds": "7200",
+
+    "RequestSignature__Required": "true",
+    "RequestSignature__MaxBodyBytes": "4194304",
+
+    "ClientCert__RequireClientCert": "true",
+    "ClientCert__RequireClientAuthEku": "true",
+    "ClientCert__RequireDeviceBinding": "true",
+    "ClientCert__TrustForwardedHeader": "true",
+    "ClientCert__DeviceIdBindingClaim": "Auto",
+    "ClientCert__TrustedRootCertificates": "<base64-der-of-enterprise-root-ca>",
+    "ClientCert__TrustedIntermediateCertificates": "",
+    "ClientCert__TrustedIntuneRootCertificates": "",
+    "ClientCert__AllowIntuneEnrollmentCertificateFallback": "true",
+    "ClientCert__IntuneEnrollmentIssuerSubjects": "CN=Microsoft Intune MDM Device CA|CN=Microsoft Intune Device Management Device CA",
+    "ClientCert__CheckRevocation": "false",
+
+    "Ingestion__StreamMap": "InventoryWindows_CL=Custom-InventoryWindows_CL",
+    "Intake__MaxRecordsPerEnvelope": "50000"
+  }
+}
