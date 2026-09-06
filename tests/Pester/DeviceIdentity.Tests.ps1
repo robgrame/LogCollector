@@ -19,7 +19,9 @@ BeforeAll {
             [string] $Subject = 'CN=pester-device',
             [string] $SanUriDeviceId,
             [string] $IntuneDeviceId,
-            [switch] $WithoutClientAuth
+            [switch] $WithoutClientAuth,
+            [switch] $CertificateAuthority,
+            [int] $ValidYears = 1
         )
 
         $rsa = [System.Security.Cryptography.RSA]::Create(2048)
@@ -34,6 +36,11 @@ BeforeAll {
             $null = $oids.Add((New-Object Security.Cryptography.Oid('1.3.6.1.5.5.7.3.2')))
             $request.CertificateExtensions.Add(
                 (New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension($oids, $false)))
+        }
+        if ($CertificateAuthority) {
+            $request.CertificateExtensions.Add(
+                (New-Object System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension(
+                    $true, $false, 0, $true)))
         }
         if ($SanUriDeviceId) {
             $san = New-Object System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder
@@ -53,7 +60,17 @@ BeforeAll {
         }
 
         return $request.CreateSelfSigned(
-            [DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddYears(1))
+            [DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddYears($ValidYears))
+    }
+
+    function Invoke-PkiCaRoleTest {
+        param([hashtable] $Parameters)
+
+        $module = Get-Module DeviceIdentity
+        return & $module {
+            param($Arguments)
+            Test-PkiCaChainRoleConstraints @Arguments
+        } $Parameters
     }
 }
 
@@ -160,6 +177,115 @@ Describe 'Get-IntuneEnrollmentDeviceId' {
     }
 }
 
+Describe 'PKI CA role policy' {
+    BeforeAll {
+        $script:PolicyLeaf = New-TestCertificate -Subject 'CN=leaf'
+        $script:PolicyIntermediateOne = New-TestCertificate -Subject 'CN=Issuing CA One, O=Contoso' -CertificateAuthority
+        $script:PolicyIntermediateTwo = New-TestCertificate -Subject 'CN=Issuing CA Two, O=Contoso' -CertificateAuthority
+        $script:PolicyRoot = New-TestCertificate -Subject 'CN=Root CA, O=Contoso' -CertificateAuthority
+        $script:PolicyChain = @(
+            $script:PolicyLeaf,
+            $script:PolicyIntermediateOne,
+            $script:PolicyIntermediateTwo,
+            $script:PolicyRoot
+        )
+    }
+
+    It 'matches root and intermediate constraints in their correct chain roles' {
+        $result = Invoke-PkiCaRoleTest @{
+            ChainCertificates = $script:PolicyChain
+            RootThumbprints = @($script:PolicyRoot.Thumbprint)
+            RootSubjects = @($script:PolicyRoot.Subject.ToLowerInvariant())
+            IntermediateThumbprints = @($script:PolicyIntermediateOne.Thumbprint)
+            IntermediateSubjects = @($script:PolicyIntermediateOne.Subject.ToUpperInvariant())
+        }
+
+        $result.IsMatch | Should -BeTrue
+    }
+
+    It 'rejects a wrong root or intermediate CA' -TestCases @(
+        @{ Root = @('0000000000000000000000000000000000000000'); Intermediate = @() }
+        @{ Root = @(); Intermediate = @('0000000000000000000000000000000000000000') }
+    ) {
+        param($Root, $Intermediate)
+
+        $result = Invoke-PkiCaRoleTest @{
+            ChainCertificates = $script:PolicyChain
+            RootThumbprints = $Root
+            IntermediateThumbprints = $Intermediate
+        }
+
+        $result.IsMatch | Should -BeFalse
+    }
+
+    It 'does not treat a sole self-signed CA credential as its own root role' {
+        $selfSignedCaLeaf = New-TestCertificate -Subject 'CN=Self-Signed Credential' -CertificateAuthority
+        $result = Invoke-PkiCaRoleTest @{
+            ChainCertificates = @($selfSignedCaLeaf)
+            RootThumbprints = @($selfSignedCaLeaf.Thumbprint)
+            RootSubjects = @($selfSignedCaLeaf.Subject)
+        }
+
+        $result.IsMatch | Should -BeFalse
+    }
+
+    It 'requires thumbprint and subject constraints for a role to match the same CA' {
+        $result = Invoke-PkiCaRoleTest @{
+            ChainCertificates = $script:PolicyChain
+            IntermediateThumbprints = @($script:PolicyIntermediateOne.Thumbprint)
+            IntermediateSubjects = @($script:PolicyIntermediateTwo.Subject)
+        }
+
+        $result.IsMatch | Should -BeFalse
+    }
+
+    It 'does not satisfy a root constraint with the leaf or a subordinate CA' -TestCases @(
+        @{ Thumbprint = $script:PolicyLeaf.Thumbprint }
+        @{ Thumbprint = $script:PolicyIntermediateOne.Thumbprint }
+    ) {
+        param($Thumbprint)
+
+        $result = Invoke-PkiCaRoleTest @{
+            ChainCertificates = $script:PolicyChain
+            RootThumbprints = @($Thumbprint)
+        }
+
+        $result.IsMatch | Should -BeFalse
+    }
+
+    It 'rejects a direct-root chain when an intermediate CA is required' {
+        $result = Invoke-PkiCaRoleTest @{
+            ChainCertificates = @($script:PolicyLeaf, $script:PolicyRoot)
+            IntermediateThumbprints = @($script:PolicyIntermediateOne.Thumbprint)
+        }
+
+        $result.IsMatch | Should -BeFalse
+    }
+
+    It 'requires BasicConstraints CA=true for a matching chain role' {
+        $notACa = New-TestCertificate -Subject $script:PolicyRoot.Subject
+        $result = Invoke-PkiCaRoleTest @{
+            ChainCertificates = @($script:PolicyLeaf, $notACa)
+            RootSubjects = @($notACa.Subject)
+        }
+
+        $result.IsMatch | Should -BeFalse
+    }
+
+    It 'uses Windows trust without unknown-authority overrides and bounds AIA retrieval' {
+        $module = Get-Module DeviceIdentity
+        $chain = & $module { New-ClientCertificateChain }
+        try {
+            $chain.ChainPolicy.RevocationMode | Should -Be ([Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck)
+            $chain.ChainPolicy.VerificationFlags | Should -Be ([Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag)
+            $chain.ChainPolicy.UrlRetrievalTimeout.TotalSeconds | Should -Be 5
+        }
+        finally {
+            $chain.Dispose()
+        }
+    }
+}
+
 Describe 'Get-ClientCertificate' {
 
     It 'returns a stable error identifier for expected certificate absence' {
@@ -218,6 +344,18 @@ Describe 'Get-ClientCertificate' {
         $selected.Thumbprint | Should -BeExactly $intune.Thumbprint
     }
 
+    It 'keeps the Intune fallback independent when PKI CA constraints reject the enterprise candidate' {
+        $pki = New-TestCertificate -Subject 'CN=pki-device' -SanUriDeviceId $script:DeviceId
+        $intune = New-TestCertificate -Subject 'CN=enrollment' -IntuneDeviceId $script:DeviceId
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($pki, $intune) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { $false }
+
+        $selected = Get-ClientCertificate -EntraDeviceId $script:DeviceId `
+            -PkiRootCaSubjects @('CN=Required Root')
+
+        $selected.Thumbprint | Should -BeExactly $intune.Thumbprint
+    }
+
     It 'honours an explicit thumbprint pin regardless of the issuer filter' {
         $pinned = New-TestCertificate -Subject 'CN=pinned'
         $other = New-TestCertificate -Subject 'CN=other' -SanUriDeviceId $script:DeviceId
@@ -228,6 +366,41 @@ Describe 'Get-ClientCertificate' {
         $selected.Thumbprint | Should -BeExactly $pinned.Thumbprint
     }
 
+    It 'does not let an explicit leaf thumbprint bypass the PKI CA policy' {
+        $pinned = New-TestCertificate -Subject 'CN=pinned'
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($pinned) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { $false }
+
+        { Get-ClientCertificate -Thumbprint $pinned.Thumbprint -PkiRootCaSubjects @('CN=Required Root') } |
+            Should -Throw '*No usable client certificate found*'
+    }
+
+    It 'keeps an explicitly selected Intune candidate independent of PKI CA policy' -TestCases @(
+        @{ Selector = 'Thumbprint' }
+        @{ Selector = 'SubjectLike' }
+    ) {
+        param($Selector)
+        $intune = New-TestCertificate -Subject 'CN=enrollment' -IntuneDeviceId $script:DeviceId
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($intune) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { throw 'Intune trust is authorized by Intake, not enterprise CA filters' }
+        $arguments = @{ EntraDeviceId = $script:DeviceId; PkiRootCaSubjects = @('CN=Enterprise Root') }
+        $arguments[$Selector] = if ($Selector -eq 'Thumbprint') { $intune.Thumbprint } else { '*enrollment*' }
+
+        $selected = Get-ClientCertificate @arguments
+
+        $selected.Thumbprint | Should -BeExactly $intune.Thumbprint
+        Should -Invoke -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy -Times 0 -Exactly
+    }
+
+    It 'does not exempt an explicit candidate whose Intune OID names another device' {
+        $intune = New-TestCertificate -Subject 'CN=enrollment' -IntuneDeviceId '00000000-0000-0000-0000-000000000001'
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($intune) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { $false }
+
+        { Get-ClientCertificate -Thumbprint $intune.Thumbprint -EntraDeviceId $script:DeviceId `
+            -PkiRootCaSubjects @('CN=Enterprise Root') } | Should -Throw '*No usable client certificate found*'
+    }
+
     It 'selects by subject pattern when one is supplied' {
         $wanted = New-TestCertificate -Subject 'CN=wanted-device'
         $other = New-TestCertificate -Subject 'CN=other-device'
@@ -236,6 +409,90 @@ Describe 'Get-ClientCertificate' {
 
         $selected = Get-ClientCertificate -SubjectLike '*wanted*'
         $selected.Thumbprint | Should -BeExactly $wanted.Thumbprint
+    }
+
+    It 'does not let an explicit leaf subject selector bypass the PKI CA policy' {
+        $wanted = New-TestCertificate -Subject 'CN=wanted-device'
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($wanted) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { $false }
+
+        { Get-ClientCertificate -SubjectLike '*wanted*' -PkiRootCaSubjects @('CN=Required Root') } |
+            Should -Throw '*No usable client certificate found*'
+    }
+
+    It 'rejects an ineligible subject candidate and keeps searching eligible candidates' {
+        $newer = New-TestCertificate -Subject 'CN=wanted-device' -ValidYears 2
+        $older = New-TestCertificate -Subject 'CN=wanted-device' -ValidYears 1
+        $script:EligibleThumbprint = $older.Thumbprint
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($newer, $older) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy {
+            param($Certificate)
+            $Certificate.Thumbprint -eq $script:EligibleThumbprint
+        }
+
+        $selected = Get-ClientCertificate -SubjectLike '*wanted*' -PkiRootCaSubjects @('CN=Required Root')
+
+        $selected.Thumbprint | Should -BeExactly $older.Thumbprint
+    }
+
+    It 'preserves selection behavior without a PKI CA policy' {
+        $pki = New-TestCertificate -Subject 'CN=pki-device' -SanUriDeviceId $script:DeviceId
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($pki) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { throw 'Policy should not run' }
+
+        $selected = Get-ClientCertificate -EntraDeviceId $script:DeviceId `
+            -PkiRootCaThumbprints @() -PkiRootCaSubjects @() `
+            -PkiIntermediateCaThumbprints @() -PkiIntermediateCaSubjects @()
+
+        $selected.Thumbprint | Should -BeExactly $pki.Thumbprint
+        Should -Invoke -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy -Times 0 -Exactly
+    }
+
+    It 'normalizes spaces and colons in CA thumbprints before policy evaluation' {
+        $pki = New-TestCertificate -Subject 'CN=pki-device' -SanUriDeviceId $script:DeviceId
+        $script:NormalizedRootPin = $null
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($pki) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy {
+            param($RootThumbprints)
+            $script:NormalizedRootPin = $RootThumbprints[0]
+            $true
+        }
+        $formatted = ($script:PolicyRoot.Thumbprint -replace '(..)', '$1: ').TrimEnd(':', ' ')
+
+        $null = Get-ClientCertificate -EntraDeviceId $script:DeviceId -PkiRootCaThumbprints @($formatted)
+
+        $script:NormalizedRootPin | Should -BeExactly $script:PolicyRoot.Thumbprint
+    }
+
+    It 'trims CA subject names before exact case-insensitive policy matching' {
+        $pki = New-TestCertificate -Subject 'CN=pki-device' -SanUriDeviceId $script:DeviceId
+        $script:NormalizedRootSubject = $null
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($pki) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy {
+            param($RootSubjects)
+            $script:NormalizedRootSubject = $RootSubjects[0]
+            $true
+        }
+
+        $null = Get-ClientCertificate -EntraDeviceId $script:DeviceId `
+            -PkiRootCaSubjects @('  cn=Root CA, O=Contoso  ')
+
+        $script:NormalizedRootSubject | Should -BeExactly 'cn=Root CA, O=Contoso'
+    }
+
+    It 'fails closed on malformed CA policy entries before store discovery' -TestCases @(
+        @{ Parameter = 'PkiRootCaThumbprints'; Value = @('ABC') }
+        @{ Parameter = 'PkiIntermediateCaThumbprints'; Value = @('GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG') }
+        @{ Parameter = 'PkiRootCaSubjects'; Value = @(' ') }
+        @{ Parameter = 'PkiIntermediateCaSubjects'; Value = @('') }
+    ) {
+        param($Parameter, $Value)
+        Mock -ModuleName DeviceIdentity Get-ChildItem { throw 'Certificate discovery must not run' }
+        $arguments = @{ EntraDeviceId = $script:DeviceId }
+        $arguments[$Parameter] = $Value
+
+        { Get-ClientCertificate @arguments } | Should -Throw
+        Should -Invoke -ModuleName DeviceIdentity Get-ChildItem -Times 0 -Exactly
     }
 
     It 'throws when no certificate carries the expected device id' {

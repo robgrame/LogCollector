@@ -1,4 +1,11 @@
 BeforeAll {
+    $script:FixtureModuleNames = @('Inventory.Runtime', 'Inventory.Collection', 'LogCollector.Client',
+        'InventoryClient', 'InventorySpool', 'DeviceIdentity', 'RequestSigning')
+    # A packaged copy and a repository copy have the same module name. Isolate this
+    # fixture so Pester can unambiguously mock private module functions in a combined run.
+    foreach ($name in $script:FixtureModuleNames) {
+        Get-Module -All -Name $name | Remove-Module -Force -ErrorAction Stop
+    }
     $script:Repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:Source = Join-Path $script:Repo 'src\InventoryPackage'
     $script:DefaultConfigText = (Get-Content (Join-Path $script:Source 'Config.psd1') -Raw).
@@ -146,6 +153,36 @@ Describe 'Universal inventory package runtime' {
         { Invoke-InventoryRun -ConfigPath $script:ConfigPath -Preview } | Should -Throw '*custom table name*'
         Should -Invoke -ModuleName Inventory.Runtime Get-Inventory -Times 0 -Exactly
     }
+
+    It 'forwards the same root and intermediate policy to submission and spool drain' {
+        $text = $script:DefaultConfigText.Replace('SubmissionEnabled = $false', 'SubmissionEnabled = $true').
+            Replace('PkiRootCaThumbprints = @()', "PkiRootCaThumbprints = @('$('A' * 40)')").
+            Replace('PkiRootCaSubjects = @()', "PkiRootCaSubjects = @('CN=Root, O=Example')").
+            Replace('PkiIntermediateCaThumbprints = @()', "PkiIntermediateCaThumbprints = @('$('B' * 40)')").
+            Replace('PkiIntermediateCaSubjects = @()', "PkiIntermediateCaSubjects = @('CN=Issuing, O=Example')")
+        $text | Set-Content $script:ConfigPath
+        $null = Invoke-InventoryRun -ConfigPath $script:ConfigPath
+        $null = Invoke-InventoryDrain -ConfigPath $script:ConfigPath
+        Should -Invoke -ModuleName Inventory.Runtime Send-LogCollectorData -Times 2 -Exactly -ParameterFilter {
+            $PkiRootCaThumbprints[0] -eq ('A' * 40) -and $PkiRootCaSubjects[0] -eq 'CN=Root, O=Example' -and
+            $PkiIntermediateCaThumbprints[0] -eq ('B' * 40) -and $PkiIntermediateCaSubjects[0] -eq 'CN=Issuing, O=Example'
+        }
+        Should -Invoke -ModuleName Inventory.Runtime Sync-LogCollectorSpool -Times 1 -Exactly -ParameterFilter {
+            $PkiRootCaThumbprints[0] -eq ('A' * 40) -and $PkiIntermediateCaSubjects[0] -eq 'CN=Issuing, O=Example'
+        }
+    }
+
+    It 'rejects malformed policy data before identity or collection' -TestCases @(
+        @{ Value = "'not-a-thumbprint'" }
+        @{ Value = "'   '" }
+        @{ Value = '$null' }
+    ) {
+        param($Value)
+        $script:DefaultConfigText.Replace('PkiRootCaThumbprints = @()', "PkiRootCaThumbprints = @($Value)") |
+            Set-Content $script:ConfigPath
+        { Invoke-InventoryRun -ConfigPath $script:ConfigPath -Preview } | Should -Throw '*PkiRootCaThumbprints*'
+        Should -Invoke -ModuleName Inventory.Runtime Get-DeviceIdentitySnapshot -Times 0 -Exactly
+    }
 }
 
 Describe 'inventory package installer' {
@@ -180,12 +217,23 @@ Describe 'inventory package installer' {
 
     AfterAll {
         Remove-Variable -Name InventoryPackageTestTasks -Scope Global -ErrorAction SilentlyContinue
+        foreach ($name in $script:FixtureModuleNames) {
+            Get-Module -All -Name $name | Remove-Module -Force -ErrorAction Stop
+        }
     }
 
     It 'supports WhatIf without mutating tasks or installed files' {
         & (Join-Path $script:Fixture 'Install.ps1') -WhatIf
         Should -Invoke Register-ScheduledTask -Times 0 -Exactly
         Should -Invoke Copy-Item -Times 0 -Exactly
+    }
+
+    It 'rejects an old configuration version before installation' {
+        $script:DefaultConfigText.Replace("PackageVersion = '1.1.1'", "PackageVersion = '1.0.0'") |
+            Set-Content $script:ConfigPath
+        { & (Join-Path $script:Fixture 'Install.ps1') } | Should -Throw '*must match package version*'
+        Should -Invoke Copy-Item -Times 0 -Exactly
+        Should -Invoke Register-ScheduledTask -Times 0 -Exactly
     }
 
     It 'enables both tasks only when explicitly configured' {
@@ -230,6 +278,7 @@ Describe 'inventory distribution builder' {
         $output = Join-Path $TestDrive 'Distribution'
         $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
         $result.FileCount | Should -Be 15
+        $result.PackageVersion | Should -BeExactly '1.1.1'
         $result.SubmissionEnabled | Should -BeFalse
         Test-Path (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1') | Should -BeTrue
         { & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory' } | Should -Throw '*already exists*'
@@ -237,6 +286,9 @@ Describe 'inventory distribution builder' {
         $copied.DeviceTableName | Should -BeExactly 'DeviceInventory_CL'
         $copied.AppTableName | Should -BeExactly 'AppInventory_CL'
         $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
+        @($copied.PkiRootCaThumbprints).Count | Should -Be 0
+        (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
+            Should -BeExactly '1.1.1'
     }
 
     It 'escapes deployment configuration as data and supports alternative tables' {
@@ -249,5 +301,24 @@ Describe 'inventory distribution builder' {
         $copied.Environment | Should -BeExactly $label
         $copied.DeviceTableName | Should -BeExactly 'HardwareLab_CL'
         $copied.AppTableName | Should -BeExactly 'SoftwareLab_CL'
+    }
+
+    It 'preserves CA arrays and quotes as literal data in the generated configuration' {
+        $builder = Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1'
+        $subject = "CN=Root, O=Example's PKI"
+        $result = & $builder -OutputRoot (Join-Path $TestDrive 'PkiDeployment') `
+            -FrontendUrl 'https://example.invalid/api/inventory' -PkiRootCaThumbprints ('a' * 40) `
+            -PkiRootCaSubjects $subject -PkiIntermediateCaSubjects @('CN=Issuing A', 'CN=Issuing B')
+        $copied = Import-PowerShellDataFile (Join-Path $result.PackagePath 'Config.psd1')
+        $copied.PkiRootCaThumbprints | Should -Be @('a' * 40)
+        $copied.PkiRootCaSubjects | Should -Be @($subject)
+        $copied.PkiIntermediateCaSubjects | Should -Be @('CN=Issuing A', 'CN=Issuing B')
+    }
+
+    It 'rejects malformed CA pins before creating package output' {
+        $output = Join-Path $TestDrive 'InvalidPki'
+        { & (Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1') -OutputRoot $output `
+            -FrontendUrl 'https://example.invalid/api/inventory' -PkiRootCaThumbprints 'bad-pin' } | Should -Throw '*40 hexadecimal*'
+        Test-Path $output | Should -BeFalse
     }
 }

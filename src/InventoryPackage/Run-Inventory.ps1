@@ -3,7 +3,7 @@
 .SYNOPSIS
 Runs custom inventory using the destinations supplied in Config.psd1.
 .NOTES
-Version 1.0.0. Run in 64-bit Windows PowerShell as SYSTEM or elevated administrator.
+Version 1.1.1. Run in 64-bit Windows PowerShell as SYSTEM or elevated administrator.
 #>
 [CmdletBinding()]
 param([switch] $Preview, [switch] $QueueOnly)

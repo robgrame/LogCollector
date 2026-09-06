@@ -9,6 +9,11 @@ param frontendPlanSku = 'B1'
 // Enterprise PKI trust remains empty until the customer's public CAs are supplied.
 param trustedRootCertificatesBase64 = ''
 param trustedIntermediateCertificatesBase64 = ''
+// Optional PKI chain-role constraints; Intune enrollment trust is independent.
+param pkiRootCaThumbprints = ''
+param pkiRootCaSubjects = ''
+param pkiIntermediateCaThumbprints = ''
+param pkiIntermediateCaSubjects = ''
 param trustedIntuneRootCertificatesBase64 = loadTextContent('certificates/intune-root.base64')
 param trustedIntuneIntermediateCertificatesBase64 = loadTextContent('certificates/intune-intermediate.base64')
 param allowIntuneEnrollmentCertificateFallback = true

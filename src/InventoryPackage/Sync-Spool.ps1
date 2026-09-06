@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.0.0. Customer-neutral delivery: never re-runs inventory or device operations.
+# Version 1.1.1. Customer-neutral delivery: never re-runs inventory or device operations.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'

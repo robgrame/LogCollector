@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
-# Version 1.0.0. Removes only the custom inventory tasks; retained data is never deleted.
+# Version 1.1.1. Removes only the custom inventory tasks; retained data is never deleted.
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'

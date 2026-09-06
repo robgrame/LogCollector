@@ -2,7 +2,7 @@
 .SYNOPSIS
 Shared telemetry facade for independent Windows PowerShell scripts.
 .NOTES
-Version 1.0.0. Import the manifest; no authentication, I/O or network calls occur on import.
+Version 1.1.1. Import the manifest; no authentication, I/O or network calls occur on import.
 #>
 Set-StrictMode -Version Latest
 
@@ -44,11 +44,23 @@ function Get-LogCollectorSpoolPath {
 }
 
 function Resolve-LogCollectorCertificate {
-    param([string] $DeviceId, [string] $Thumbprint, [string] $SubjectLike, [string] $IssuerLike)
+    param(
+        [string] $DeviceId,
+        [string] $Thumbprint,
+        [string] $SubjectLike,
+        [string] $IssuerLike,
+        [string[]] $PkiRootCaThumbprints = @(),
+        [string[]] $PkiRootCaSubjects = @(),
+        [string[]] $PkiIntermediateCaThumbprints = @(),
+        [string[]] $PkiIntermediateCaSubjects = @()
+    )
 
     try {
         return Get-ClientCertificate -EntraDeviceId $DeviceId -Thumbprint $Thumbprint `
-            -SubjectLike $SubjectLike -IssuerLike $IssuerLike -ErrorAction Stop
+            -SubjectLike $SubjectLike -IssuerLike $IssuerLike `
+            -PkiRootCaThumbprints $PkiRootCaThumbprints -PkiRootCaSubjects $PkiRootCaSubjects `
+            -PkiIntermediateCaThumbprints $PkiIntermediateCaThumbprints `
+            -PkiIntermediateCaSubjects $PkiIntermediateCaSubjects -ErrorAction Stop
     }
     catch {
         if ($_.FullyQualifiedErrorId -notlike 'LogCollector.ClientCertificateNotFound*') { throw }
@@ -81,6 +93,10 @@ function Send-LogCollectorData {
         [string] $CertificateThumbprint,
         [string] $CertificateSubjectLike,
         [string] $CertificateIssuerLike,
+        [string[]] $PkiRootCaThumbprints = @(),
+        [string[]] $PkiRootCaSubjects = @(),
+        [string[]] $PkiIntermediateCaThumbprints = @(),
+        [string[]] $PkiIntermediateCaSubjects = @(),
         [string] $SpoolRoot = 'C:\ProgramData\LogCollector\SharedSpool',
         [ValidateRange(1, 10)] [int] $MaxAttempts = 3,
         [ValidateRange(1, 300)] [int] $TimeoutSeconds = 30,
@@ -103,7 +119,10 @@ function Send-LogCollectorData {
     try {
         if (-not $QueueOnly) {
             $certificate = Resolve-LogCollectorCertificate -DeviceId $identity.EntraDeviceId `
-                -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike
+                -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike `
+                -PkiRootCaThumbprints $PkiRootCaThumbprints -PkiRootCaSubjects $PkiRootCaSubjects `
+                -PkiIntermediateCaThumbprints $PkiIntermediateCaThumbprints `
+                -PkiIntermediateCaSubjects $PkiIntermediateCaSubjects
         }
         $result = Invoke-InventorySubmission -Uri $FrontendUrl -Envelope $envelope -Certificate $certificate `
             -SpoolDirectory $spool -MaxAttempts $MaxAttempts -TimeoutSeconds $TimeoutSeconds `
@@ -129,6 +148,10 @@ function Sync-LogCollectorSpool {
         [string] $CertificateThumbprint,
         [string] $CertificateSubjectLike,
         [string] $CertificateIssuerLike,
+        [string[]] $PkiRootCaThumbprints = @(),
+        [string[]] $PkiRootCaSubjects = @(),
+        [string[]] $PkiIntermediateCaThumbprints = @(),
+        [string[]] $PkiIntermediateCaSubjects = @(),
         [string] $SpoolRoot = 'C:\ProgramData\LogCollector\SharedSpool',
         [ValidateRange(1, 500)] [int] $MaxEntriesPerRun = 10,
         [ValidateRange(1, 10)] [int] $MaxAttemptsPerEntry = 2,
@@ -142,7 +165,10 @@ function Sync-LogCollectorSpool {
     $null = Initialize-SpoolDirectory -SpoolDirectory $spool
     $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
     $certificate = Resolve-LogCollectorCertificate -DeviceId $identity.EntraDeviceId `
-        -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike
+        -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike `
+        -PkiRootCaThumbprints $PkiRootCaThumbprints -PkiRootCaSubjects $PkiRootCaSubjects `
+        -PkiIntermediateCaThumbprints $PkiIntermediateCaThumbprints `
+        -PkiIntermediateCaSubjects $PkiIntermediateCaSubjects
     try {
         $result = Invoke-InventorySpoolDrain -Uri $FrontendUrl -Certificate $certificate -SpoolDirectory $spool `
             -MaxEntriesPerRun $MaxEntriesPerRun -MaxAttemptsPerEntry $MaxAttemptsPerEntry `

@@ -62,6 +62,10 @@ public sealed class ClientCertValidator
 
     private readonly HashSet<string> _trustedCaThumbprints;
     private readonly HashSet<string> _trustedCaSubjects;
+    private readonly HashSet<string> _pkiRootCaThumbprints;
+    private readonly HashSet<string> _pkiRootCaSubjects;
+    private readonly HashSet<string> _pkiIntermediateCaThumbprints;
+    private readonly HashSet<string> _pkiIntermediateCaSubjects;
     private readonly HashSet<string> _allowedLeafThumbprints;
     private readonly List<X509Certificate2> _rootStore = [];
     private readonly List<X509Certificate2> _intermediateStore = [];
@@ -92,6 +96,19 @@ public sealed class ClientCertValidator
 
         _trustedCaSubjects = ParseList(cfg["ClientCert:TrustedCaSubjects"], '|')
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _pkiRootCaThumbprints = ParseStrictThumbprintList(
+            cfg["ClientCert:PkiRootCaThumbprints"],
+            "ClientCert:PkiRootCaThumbprints");
+        _pkiRootCaSubjects = ParseStrictSubjectList(
+            cfg["ClientCert:PkiRootCaSubjects"],
+            "ClientCert:PkiRootCaSubjects");
+        _pkiIntermediateCaThumbprints = ParseStrictThumbprintList(
+            cfg["ClientCert:PkiIntermediateCaThumbprints"],
+            "ClientCert:PkiIntermediateCaThumbprints");
+        _pkiIntermediateCaSubjects = ParseStrictSubjectList(
+            cfg["ClientCert:PkiIntermediateCaSubjects"],
+            "ClientCert:PkiIntermediateCaSubjects");
 
         _allowedLeafThumbprints = ParseList(cfg["ClientCert:AllowedLeafThumbprints"])
             .Select(NormalizeThumbprint)
@@ -300,6 +317,10 @@ public sealed class ClientCertValidator
         if (!chain.Build(cert))
             return (false, FormatChainFailure(chain));
 
+        var rolePolicy = ValidateEnterpriseCaRolePolicy(chain);
+        if (!rolePolicy.Ok)
+            return rolePolicy;
+
         if (_trustedCaThumbprints.Count > 0)
         {
             var chainThumbs = chain.ChainElements
@@ -323,6 +344,62 @@ public sealed class ClientCertValidator
         }
 
         return (true, null);
+    }
+
+    private (bool Ok, string? Reason) ValidateEnterpriseCaRolePolicy(X509Chain chain)
+    {
+        var elements = chain.ChainElements;
+        if (elements.Count == 0)
+            return (false, "certificate chain contains no elements");
+
+        if (_pkiRootCaThumbprints.Count > 0 || _pkiRootCaSubjects.Count > 0)
+        {
+            if (elements.Count < 2
+                || !MatchesCaRole(
+                    elements[^1].Certificate,
+                    _pkiRootCaThumbprints,
+                    _pkiRootCaSubjects))
+            {
+                return (false, "certificate chain root CA does not satisfy configured PKI root policy");
+            }
+        }
+
+        if (_pkiIntermediateCaThumbprints.Count > 0 || _pkiIntermediateCaSubjects.Count > 0)
+        {
+            var permittedIntermediateFound = elements
+                .Cast<X509ChainElement>()
+                .Skip(1)
+                .Take(Math.Max(0, elements.Count - 2))
+                .Any(element => MatchesCaRole(
+                    element.Certificate,
+                    _pkiIntermediateCaThumbprints,
+                    _pkiIntermediateCaSubjects));
+
+            if (!permittedIntermediateFound)
+            {
+                return (false,
+                    "certificate chain intermediate CA does not satisfy configured PKI intermediate policy");
+            }
+        }
+
+        return (true, null);
+    }
+
+    private static bool MatchesCaRole(
+        X509Certificate2 certificate,
+        HashSet<string> permittedThumbprints,
+        HashSet<string> permittedSubjects)
+    {
+        var isCa = certificate.Extensions
+            .OfType<X509BasicConstraintsExtension>()
+            .Any(extension => extension.CertificateAuthority);
+        if (!isCa)
+            return false;
+
+        return (permittedThumbprints.Count == 0
+                || permittedThumbprints.Contains(NormalizeThumbprint(certificate.Thumbprint ?? string.Empty)))
+            && (permittedSubjects.Count == 0
+                || permittedSubjects.Contains(certificate.Subject ?? string.Empty));
     }
 
     private (bool Ok, string? Reason) ValidateIntuneTrust(X509Certificate2 cert, DateTime now)
@@ -488,6 +565,56 @@ public sealed class ClientCertValidator
             .Split(separator, StringSplitOptions.RemoveEmptyEntries)
             .Select(s => s.Trim())
             .Where(s => s.Length > 0);
+
+    private HashSet<string> ParseStrictThumbprintList(string? value, string settingName)
+    {
+        if (string.IsNullOrEmpty(value))
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in value.Split([',', ';', '|'], StringSplitOptions.None))
+        {
+            if (string.IsNullOrWhiteSpace(entry))
+                throw InvalidPolicy(settingName, "contains an empty entry");
+
+            var thumbprint = NormalizeThumbprint(entry);
+            if (thumbprint.Length != 40 || !thumbprint.All(Uri.IsHexDigit))
+            {
+                throw InvalidPolicy(
+                    settingName,
+                    "entries must be exact 40-hex SHA1 thumbprints after removing whitespace and colons");
+            }
+
+            result.Add(thumbprint);
+        }
+
+        return result;
+    }
+
+    private HashSet<string> ParseStrictSubjectList(string? value, string settingName)
+    {
+        if (string.IsNullOrEmpty(value))
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in value.Split('|', StringSplitOptions.None))
+        {
+            var subject = entry.Trim();
+            if (subject.Length == 0)
+                throw InvalidPolicy(settingName, "contains an empty entry");
+
+            result.Add(subject);
+        }
+
+        return result;
+    }
+
+    private InvalidOperationException InvalidPolicy(string settingName, string detail)
+    {
+        var message = $"Invalid client certificate policy setting '{settingName}': {detail}.";
+        _log.LogError("{Message} Failing closed.", message);
+        return new InvalidOperationException(message);
+    }
 
     private static string NormalizeThumbprint(string t)
         => new string([.. t.Where(c => !char.IsWhiteSpace(c) && c != ':')]).ToUpperInvariant();

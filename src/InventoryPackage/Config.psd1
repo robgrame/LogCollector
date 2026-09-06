@@ -1,5 +1,5 @@
 @{
-    PackageVersion = '1.0.0'
+    PackageVersion = '1.1.1'
     Environment = ''
     FrontendUrl = ''
     DeviceTableName = 'DeviceInventory_CL'
@@ -10,6 +10,10 @@
     CollectAppInventory = $true
     CertificateThumbprint = ''
     CertificateIssuerLike = ''
+    PkiRootCaThumbprints = @()
+    PkiRootCaSubjects = @()
+    PkiIntermediateCaThumbprints = @()
+    PkiIntermediateCaSubjects = @()
     MaxAttempts = 3
     TimeoutSeconds = 30
 }

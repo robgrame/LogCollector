@@ -16,7 +16,32 @@ internal static class TestCertificates
             .Build();
 
     /// <summary>Creates a self-signed CA suitable for use as a custom trust anchor.</summary>
-    public static X509Certificate2 CreateRootCa(string commonName)
+    public static X509Certificate2 CreateRootCa(string commonName, bool includeClientAuthEku = false)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            new X500DistinguishedName($"CN={commonName}"),
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        request.CertificateExtensions.Add(
+            new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+        if (includeClientAuthEku)
+        {
+            request.CertificateExtensions.Add(
+                new X509EnhancedKeyUsageExtension([new Oid(ClientAuthEku)], false));
+        }
+
+        return request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddDays(-30),
+            DateTimeOffset.UtcNow.AddYears(5));
+    }
+
+    /// <summary>Creates a CA certificate issued by another CA.</summary>
+    public static X509Certificate2 CreateIntermediateCa(X509Certificate2 issuer, string commonName)
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(
@@ -30,9 +55,16 @@ internal static class TestCertificates
             new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
 
-        return request.CreateSelfSigned(
-            DateTimeOffset.UtcNow.AddDays(-30),
-            DateTimeOffset.UtcNow.AddYears(5));
+        var serial = new byte[8];
+        RandomNumberGenerator.Fill(serial);
+
+        using var issued = request.Create(
+            issuer,
+            DateTimeOffset.UtcNow.AddDays(-1),
+            DateTimeOffset.UtcNow.AddYears(3),
+            serial);
+
+        return issued.CopyWithPrivateKey(rsa);
     }
 
     /// <summary>

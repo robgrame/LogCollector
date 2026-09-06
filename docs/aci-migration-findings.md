@@ -15,6 +15,12 @@ L'invio e disabilitato per default finche queste dipendenze Azure non sono predi
 Gli originali ACI non sono stati modificati e il pilot live resta pendente.
 Dettagli: [guida del pacchetto](../src/InventoryPackage/README.md).
 
+**Aggiornamento PKI 1.1.1:** pacchetto e modulo comune espongono ora liste distinte
+di nomi/thumbprint Root CA e SubCA, con configurazione corrispondente nell'Intake.
+I valori iniziali sono vuoti: occorrono le CA effettive dell'ambiente, non valori
+inventati. Questo non abilita le tabelle mancanti e non modifica gli originali ACI.
+Contratto: [pki-ca-policy.md](pki-ca-policy.md).
+
 ## 1. Perimetro, provenienza e uso alla ripresa
 
 La cartella sorgente analizzata era:

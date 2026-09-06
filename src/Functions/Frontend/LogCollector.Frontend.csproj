@@ -8,6 +8,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>LogCollector.Frontend</RootNamespace>
     <AssemblyName>LogCollector.Frontend</AssemblyName>
+    <Version>1.1.1</Version>
   </PropertyGroup>
 
   <ItemGroup>

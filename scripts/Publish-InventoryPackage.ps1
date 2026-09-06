@@ -3,7 +3,7 @@
 .SYNOPSIS
 Creates a customer-neutral inventory folder with the shared client and deployment configuration.
 .NOTES
-Version 1.0.0. No customer source, device inventory, certificates or Azure credentials are read.
+Version 1.1.1. No customer source, device inventory, certificates or Azure credentials are read.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -11,6 +11,10 @@ param(
     [string] $Environment = '',
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $DeviceTableName = 'DeviceInventory_CL',
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $AppTableName = 'AppInventory_CL',
+    [string[]] $PkiRootCaThumbprints = @(),
+    [string[]] $PkiRootCaSubjects = @(),
+    [string[]] $PkiIntermediateCaThumbprints = @(),
+    [string[]] $PkiIntermediateCaSubjects = @(),
     [string] $OutputRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) 'out\Inventory')
 )
 $ErrorActionPreference = 'Stop'
@@ -22,6 +26,19 @@ $config.FrontendUrl = $FrontendUrl.AbsoluteUri
 $config.Environment = $Environment
 $config.DeviceTableName = $DeviceTableName
 $config.AppTableName = $AppTableName
+$config.PkiRootCaThumbprints = $PkiRootCaThumbprints
+$config.PkiRootCaSubjects = $PkiRootCaSubjects
+$config.PkiIntermediateCaThumbprints = $PkiIntermediateCaThumbprints
+$config.PkiIntermediateCaSubjects = $PkiIntermediateCaSubjects
+foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
+    if ($null -eq $config[$key]) { throw "$key must be an array; use @() for no constraint." }
+    foreach ($entry in $config[$key]) {
+        if ([string]::IsNullOrWhiteSpace($entry)) { throw "$key contains an empty entry." }
+        if ($key -like '*Thumbprints' -and ($entry -replace '[\s:]', '') -notmatch '^[0-9a-fA-F]{40}$') {
+            throw "$key entries must be SHA1 certificate thumbprints (40 hexadecimal digits)."
+        }
+    }
+}
 $target = Join-Path $OutputRoot $config.PackageVersion
 $files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1',
     'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
@@ -46,6 +63,13 @@ if ($PSCmdlet.ShouldProcess($target, 'Create ready-to-package universal inventor
         if ($value -is [bool]) { $literal = '$' + $value.ToString().ToLowerInvariant() }
         elseif ($value -is [int]) { $literal = $value.ToString([Globalization.CultureInfo]::InvariantCulture) }
         elseif ($value -is [string]) { $literal = "'" + $value.Replace("'", "''") + "'" }
+        elseif ($value -is [array]) {
+            $items = @($value | ForEach-Object {
+                if ($_ -isnot [string]) { throw "Only strings are supported in configuration array $key." }
+                "'" + $_.Replace("'", "''") + "'"
+            })
+            $literal = '@(' + ($items -join ', ') + ')'
+        }
         else { throw "Unsupported configuration value type for $key." }
         $configLines += "    $key = $literal"
     }

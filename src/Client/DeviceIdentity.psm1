@@ -16,19 +16,19 @@
          carrying the Entra device id in the MDM enrollment OID
          1.2.840.113556.5.25.
 
-    The Intune tier is deliberately NOT narrowed by -IssuerLike. IssuerLike is
-    normally pinned to the enterprise CA, so applying it to the fallback would
-    filter out the very certificate the fallback exists to find, and a device
-    with no PKI certificate could never authenticate. Nothing is weakened:
-    the identity binding comes from the OID payload, and the frontend
-    independently validates the presented chain against its own explicitly
-    configured Intune trust anchors before honouring that binding.
+    The Intune tier is deliberately NOT narrowed by -IssuerLike or the PKI CA
+    role constraints. Those settings describe the independent enterprise PKI
+    profile, so applying them to the fallback would filter out the certificate
+    the fallback exists to find. Nothing is weakened: the identity binding
+    comes from the OID payload, and the frontend independently validates the
+    presented chain against its own explicitly configured Intune trust anchors
+    before honouring that binding.
 
     All store, registry and dsregcmd access goes through cmdlets that Pester can
     mock, so selection logic is unit-testable off-box.
 
 .NOTES
-    Version 1.0.1 - stable certificate-absence error and explicit Client Authentication EKU.
+    Version 1.1.3 - PKI CA-role constraints with independent explicit Intune selection.
     Windows PowerShell 5.1 compatible. No external dependencies.
 #>
 
@@ -141,6 +141,211 @@ function Test-IssuerMatch {
     return $false
 }
 
+function ConvertTo-PkiThumbprintList {
+    <#
+    .SYNOPSIS
+        Validates and normalizes configured Windows SHA-1 certificate thumbprints.
+    #>
+    param(
+        [AllowNull()] [string[]] $Values,
+        [Parameter(Mandatory)] [string] $ParameterName
+    )
+
+    if ($null -eq $Values -or $Values.Count -eq 0) { return @() }
+
+    $normalized = @()
+    foreach ($value in $Values) {
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            throw "$ParameterName cannot contain null, empty, or whitespace-only entries."
+        }
+
+        $thumbprint = ($value -replace '[:\s]', '').ToUpperInvariant()
+        if ($thumbprint -notmatch '^[0-9A-F]{40}$') {
+            throw "$ParameterName entries must be SHA-1 Windows thumbprints containing exactly 40 hexadecimal characters."
+        }
+        $normalized += $thumbprint
+    }
+    return $normalized
+}
+
+function ConvertTo-PkiSubjectList {
+    <#
+    .SYNOPSIS
+        Validates configured exact CA subject distinguished names.
+    #>
+    param(
+        [AllowNull()] [string[]] $Values,
+        [Parameter(Mandatory)] [string] $ParameterName
+    )
+
+    if ($null -eq $Values -or $Values.Count -eq 0) { return @() }
+
+    $normalized = @()
+    foreach ($value in $Values) {
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            throw "$ParameterName cannot contain null, empty, or whitespace-only entries."
+        }
+        $normalized += $value.Trim()
+    }
+    return $normalized
+}
+
+function Test-CertificateIsCa {
+    param($Certificate)
+
+    $extension = $Certificate.Extensions |
+        Where-Object { $_.Oid.Value -eq '2.5.29.19' } |
+        Select-Object -First 1
+    if (-not $extension) { return $false }
+
+    $basicConstraints = New-Object Security.Cryptography.X509Certificates.X509BasicConstraintsExtension
+    $basicConstraints.CopyFrom($extension)
+    return $basicConstraints.CertificateAuthority
+}
+
+function Test-PkiCaRoleMatch {
+    param(
+        $Certificate,
+        [string[]] $Thumbprints,
+        [string[]] $Subjects
+    )
+
+    if (-not (Test-CertificateIsCa -Certificate $Certificate)) { return $false }
+
+    $thumbprintMatch = $true
+    if ($Thumbprints.Count -gt 0) {
+        $thumbprintMatch = $Thumbprints -contains (($Certificate.Thumbprint -replace '[:\s]', '').ToUpperInvariant())
+    }
+
+    $subjectMatch = $true
+    if ($Subjects.Count -gt 0) {
+        $subjectMatch = @($Subjects | Where-Object {
+            [string]::Equals($_, $Certificate.Subject, [StringComparison]::OrdinalIgnoreCase)
+        }).Count -gt 0
+    }
+
+    # When both lists are supplied, both predicates are evaluated on this same CA.
+    return ($thumbprintMatch -and $subjectMatch)
+}
+
+function Test-PkiCaChainRoleConstraints {
+    <#
+    .SYNOPSIS
+        Evaluates CA constraints against an already validated leaf-to-root chain.
+    #>
+    param(
+        [Parameter(Mandatory)] [object[]] $ChainCertificates,
+        [string[]] $RootThumbprints = @(),
+        [string[]] $RootSubjects = @(),
+        [string[]] $IntermediateThumbprints = @(),
+        [string[]] $IntermediateSubjects = @()
+    )
+
+    $requiresRoot = ($RootThumbprints.Count -gt 0 -or $RootSubjects.Count -gt 0)
+    $requiresIntermediate = ($IntermediateThumbprints.Count -gt 0 -or $IntermediateSubjects.Count -gt 0)
+
+    if ($requiresRoot) {
+        if ($ChainCertificates.Count -lt 2) {
+            return [pscustomobject]@{ IsMatch = $false; Reason = 'the validated chain has no distinct root CA' }
+        }
+        $root = $ChainCertificates[$ChainCertificates.Count - 1]
+        if (-not (Test-PkiCaRoleMatch -Certificate $root -Thumbprints $RootThumbprints -Subjects $RootSubjects)) {
+            return [pscustomobject]@{ IsMatch = $false; Reason = 'the terminal root CA does not satisfy the configured root constraints' }
+        }
+    }
+
+    if ($requiresIntermediate) {
+        $intermediates = @()
+        if ($ChainCertificates.Count -gt 2) {
+            $intermediates = @($ChainCertificates[1..($ChainCertificates.Count - 2)])
+        }
+        $matchingIntermediate = @($intermediates | Where-Object {
+            Test-PkiCaRoleMatch -Certificate $_ -Thumbprints $IntermediateThumbprints -Subjects $IntermediateSubjects
+        }).Count -gt 0
+        if (-not $matchingIntermediate) {
+            return [pscustomobject]@{ IsMatch = $false; Reason = 'no non-leaf, non-root CA satisfies the configured intermediate constraints' }
+        }
+    }
+
+    return [pscustomobject]@{ IsMatch = $true; Reason = $null }
+}
+
+function New-ClientCertificateChain {
+    <#
+    .SYNOPSIS
+        Creates the bounded Windows-trust chain policy used for local selection.
+    .DESCRIPTION
+        Revocation is not checked during local certificate selection. This avoids
+        making collection availability depend on revocation endpoints; Intake
+        remains authoritative for configured revocation, trust, and authorization.
+        Windows trust is still required and AIA retrieval is time-bounded.
+    #>
+    $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+    $chain.ChainPolicy.RevocationMode =
+        [Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+    $chain.ChainPolicy.VerificationFlags =
+        [Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+    $chain.ChainPolicy.UrlRetrievalTimeout = [TimeSpan]::FromSeconds(5)
+    return $chain
+}
+
+function Test-CertificatePkiCaPolicy {
+    param(
+        $Certificate,
+        [string[]] $RootThumbprints,
+        [string[]] $RootSubjects,
+        [string[]] $IntermediateThumbprints,
+        [string[]] $IntermediateSubjects
+    )
+
+    $chain = New-ClientCertificateChain
+    try {
+        if (-not $chain.Build($Certificate)) {
+            $statuses = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() }) -join ', '
+            if ([string]::IsNullOrWhiteSpace($statuses)) { $statuses = 'unknown chain validation error' }
+            Write-Verbose "Get-ClientCertificate: enterprise PKI candidate excluded because Windows chain validation failed ($statuses)."
+            return $false
+        }
+
+        $chainCertificates = @($chain.ChainElements | ForEach-Object { $_.Certificate })
+        $result = Test-PkiCaChainRoleConstraints -ChainCertificates $chainCertificates `
+            -RootThumbprints $RootThumbprints -RootSubjects $RootSubjects `
+            -IntermediateThumbprints $IntermediateThumbprints -IntermediateSubjects $IntermediateSubjects
+        if (-not $result.IsMatch) {
+            Write-Verbose "Get-ClientCertificate: enterprise PKI candidate excluded because $($result.Reason)."
+        }
+        return $result.IsMatch
+    }
+    finally {
+        $chain.Dispose()
+    }
+}
+
+function Get-PkiPolicyEligibleCertificates {
+    param(
+        [object[]] $Certificates,
+        [string[]] $RootThumbprints,
+        [string[]] $RootSubjects,
+        [string[]] $IntermediateThumbprints,
+        [string[]] $IntermediateSubjects,
+        [string] $ExpectedIntuneDeviceId
+    )
+
+    $expectedIntuneId = if ($ExpectedIntuneDeviceId) { ([guid]$ExpectedIntuneDeviceId).ToString() } else { $null }
+    foreach ($certificate in @($Certificates)) {
+        # An OID is only a selection hint; Intake still validates Intune trust and binding.
+        if ($expectedIntuneId -and (Get-IntuneEnrollmentDeviceId -Certificate $certificate) -eq $expectedIntuneId) {
+            Write-Verbose 'Get-ClientCertificate: explicit Intune candidate matches the device OID; Intake must authorize its independent trust profile.'
+            Write-Output $certificate
+        }
+        elseif (Test-CertificatePkiCaPolicy -Certificate $certificate `
+                -RootThumbprints $RootThumbprints -RootSubjects $RootSubjects `
+                -IntermediateThumbprints $IntermediateThumbprints -IntermediateSubjects $IntermediateSubjects) {
+            Write-Output $certificate
+        }
+    }
+}
+
 function Get-CertificatePkiDeviceId {
     <#
     .SYNOPSIS
@@ -204,6 +409,21 @@ function Get-ClientCertificate {
     .PARAMETER EntraDeviceId
         Expected local Entra device id. Enables deterministic identity-aware
         selection and the Intune enrollment certificate fallback.
+    .PARAMETER PkiRootCaThumbprints
+        Exact SHA-1 thumbprints for permitted terminal root CAs.
+    .PARAMETER PkiRootCaSubjects
+        Exact, case-insensitive Subject DNs for permitted terminal root CAs.
+    .PARAMETER PkiIntermediateCaThumbprints
+        Exact SHA-1 thumbprints for permitted non-leaf, non-root CAs.
+    .PARAMETER PkiIntermediateCaSubjects
+        Exact, case-insensitive Subject DNs for permitted non-leaf, non-root CAs.
+    .NOTES
+        Values within each list are alternatives. When both thumbprint and
+        subject lists are configured for a role, one CA must satisfy both lists.
+        Root and intermediate role constraints are cumulative. Explicit thumbprint
+        selectors bypass IssuerLike; subject selectors still honor it. PKI candidates
+        cannot bypass validated-chain constraints. Explicit Intune candidates bound
+        by OID to the expected device retain independent Intake authorization.
     .OUTPUTS
         [System.Security.Cryptography.X509Certificates.X509Certificate2]
     #>
@@ -212,8 +432,27 @@ function Get-ClientCertificate {
         [string]$Thumbprint,
         [string]$SubjectLike,
         [string]$IssuerLike,
-        [string]$EntraDeviceId
+        [string]$EntraDeviceId,
+        [string[]]$PkiRootCaThumbprints = @(),
+        [string[]]$PkiRootCaSubjects = @(),
+        [string[]]$PkiIntermediateCaThumbprints = @(),
+        [string[]]$PkiIntermediateCaSubjects = @()
     )
+
+    # Validate policy before touching certificate stores so configuration errors
+    # cannot be mistaken for certificate absence or trigger Intune fallback.
+    $normalizedRootThumbprints = @(ConvertTo-PkiThumbprintList `
+        -Values $PkiRootCaThumbprints -ParameterName 'PkiRootCaThumbprints')
+    $normalizedRootSubjects = @(ConvertTo-PkiSubjectList `
+        -Values $PkiRootCaSubjects -ParameterName 'PkiRootCaSubjects')
+    $normalizedIntermediateThumbprints = @(ConvertTo-PkiThumbprintList `
+        -Values $PkiIntermediateCaThumbprints -ParameterName 'PkiIntermediateCaThumbprints')
+    $normalizedIntermediateSubjects = @(ConvertTo-PkiSubjectList `
+        -Values $PkiIntermediateCaSubjects -ParameterName 'PkiIntermediateCaSubjects')
+    $hasPkiCaPolicy = ($normalizedRootThumbprints.Count -gt 0 -or
+        $normalizedRootSubjects.Count -gt 0 -or
+        $normalizedIntermediateThumbprints.Count -gt 0 -or
+        $normalizedIntermediateSubjects.Count -gt 0)
 
     # @(...) at the call site: a function returning an empty array unrolls it to
     # $null, which then explodes on .Count under StrictMode.
@@ -241,18 +480,37 @@ function Get-ClientCertificate {
         $selected = $null
 
         if ($Thumbprint) {
-            $selected = $all | Where-Object { $_.Thumbprint -eq $Thumbprint.ToUpper() } | Select-Object -First 1
+            $candidates = @($all | Where-Object { $_.Thumbprint -eq $Thumbprint.ToUpper() })
+            if ($hasPkiCaPolicy) {
+                $candidates = @(Get-PkiPolicyEligibleCertificates -Certificates $candidates `
+                    -RootThumbprints $normalizedRootThumbprints -RootSubjects $normalizedRootSubjects `
+                    -IntermediateThumbprints $normalizedIntermediateThumbprints `
+                    -IntermediateSubjects $normalizedIntermediateSubjects -ExpectedIntuneDeviceId $EntraDeviceId)
+            }
+            $selected = $candidates | Select-Object -First 1
         }
         elseif ($SubjectLike) {
-            $selected = $pkiCerts | Where-Object { $_.Subject -like $SubjectLike } |
-                        Sort-Object NotAfter -Descending | Select-Object -First 1
+            $candidates = @($pkiCerts | Where-Object { $_.Subject -like $SubjectLike })
+            if ($hasPkiCaPolicy) {
+                $candidates = @(Get-PkiPolicyEligibleCertificates -Certificates $candidates `
+                    -RootThumbprints $normalizedRootThumbprints -RootSubjects $normalizedRootSubjects `
+                    -IntermediateThumbprints $normalizedIntermediateThumbprints `
+                    -IntermediateSubjects $normalizedIntermediateSubjects -ExpectedIntuneDeviceId $EntraDeviceId)
+            }
+            $selected = $candidates | Sort-Object NotAfter -Descending | Select-Object -First 1
         }
         elseif ($EntraDeviceId) {
             $expected = ([guid]$EntraDeviceId).ToString()
 
-            $selected = $pkiCerts |
-                        Where-Object { (Get-CertificatePkiDeviceId -Certificate $_) -eq $expected } |
-                        Sort-Object NotAfter -Descending | Select-Object -First 1
+            $candidates = @($pkiCerts |
+                Where-Object { (Get-CertificatePkiDeviceId -Certificate $_) -eq $expected })
+            if ($hasPkiCaPolicy) {
+                $candidates = @(Get-PkiPolicyEligibleCertificates -Certificates $candidates `
+                    -RootThumbprints $normalizedRootThumbprints -RootSubjects $normalizedRootSubjects `
+                    -IntermediateThumbprints $normalizedIntermediateThumbprints `
+                    -IntermediateSubjects $normalizedIntermediateSubjects)
+            }
+            $selected = $candidates | Sort-Object NotAfter -Descending | Select-Object -First 1
 
             if ($selected) {
                 Write-Verbose ("Get-ClientCertificate: enterprise PKI certificate carries device id {0} (thumb={1})" -f $expected, $selected.Thumbprint)
@@ -270,7 +528,14 @@ function Get-ClientCertificate {
         else {
             # No identity selector at all: IssuerLike is the only trust signal we
             # have, so it stays authoritative - no unfiltered fallback here.
-            $selected = $pkiCerts | Sort-Object NotAfter -Descending | Select-Object -First 1
+            $candidates = @($pkiCerts)
+            if ($hasPkiCaPolicy) {
+                $candidates = @(Get-PkiPolicyEligibleCertificates -Certificates $candidates `
+                    -RootThumbprints $normalizedRootThumbprints -RootSubjects $normalizedRootSubjects `
+                    -IntermediateThumbprints $normalizedIntermediateThumbprints `
+                    -IntermediateSubjects $normalizedIntermediateSubjects)
+            }
+            $selected = $candidates | Sort-Object NotAfter -Descending | Select-Object -First 1
         }
 
         if ($selected) { return $selected }

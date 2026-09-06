@@ -241,7 +241,7 @@ Those scripts and their Azure schemas have not been migrated by adding this modu
     -Environment 'MSLabs'
 ```
 
-This creates `out\Inventory\1.0.0`, ready for Intune Win32 packaging with `Install.ps1`
+This creates `out\Inventory\1.1.1`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
 environment and table names are supplied as configuration; `-DeviceTableName` and
 `-AppTableName` default to **DeviceInventory_CL** and **AppInventory_CL** to retain existing
@@ -251,6 +251,13 @@ and an independent spool task. See the [package guide](src/InventoryPackage/READ
 No original customer scripts are modified. Live submission and installed tasks default to
 disabled until the selected table schemas, DCR transforms and both app mappings are ready;
 `Run-Inventory.ps1 -Preview` and `-QueueOnly` support local preparation.
+
+Version **1.1.1** adds symmetric PKI Root CA/intermediate Subject and thumbprint
+constraints to the shared client, inventory package and Intake. The new lists default
+to empty, preserve the independent Intune profile and do not install trust anchors.
+See [PKI CA policy](docs/pki-ca-policy.md) for the matching rules and client/Intake/Bicep settings.
+Versions use **Major.Minor.Build**: increment Build with each modification/commit,
+Minor for new functionality and Major for substantial changes.
 
 **Large mTLS uploads.** The client enables `Expect: 100-continue` using the runtime-appropriate
 transport API. App Service must use `clientCertMode: Required` with **no certificate exclusion
@@ -411,6 +418,8 @@ Full runbook, verification queries and troubleshooting: **[docs/operations.md](d
 | `RequestSignature__MaxBodyBytes` | `4194304` | Request size ceiling |
 | `ClientCert__RequireClientCert` / `__RequireDeviceBinding` / `__RequireClientAuthEku` | `true` | Fail-closed switches |
 | `ClientCert__TrustedRootCertificates` / `__TrustedIntermediateCertificates` | — | Enterprise PKI tier |
+| `ClientCert__PkiRootCaThumbprints` / `__PkiRootCaSubjects` | empty | Constraints on the terminal PKI Root CA; both lists must match the same CA |
+| `ClientCert__PkiIntermediateCaThumbprints` / `__PkiIntermediateCaSubjects` | empty | Constraints on at least one non-root CA; additive to the Root requirement |
 | `ClientCert__TrustedIntuneRootCertificates` / `__TrustedIntuneIntermediateCertificates` | — | Intune tier |
 | `ClientCert__AllowIntuneEnrollmentCertificateFallback` | `true` | Enable tier 2 |
 | `ClientCert__IntuneEnrollmentIssuerSubjects` | Microsoft Intune Device CAs | Issuer allow-list |

@@ -99,12 +99,40 @@ Describe 'Shared client facade' {
     }
 
     It 'passes certificate selectors and the local Entra identity to discovery' {
+        $rootPins = @('1111111111111111111111111111111111111111')
+        $rootNames = @('CN=Root CA, O=Contoso')
+        $intermediatePins = @('2222222222222222222222222222222222222222')
+        $intermediateNames = @('CN=Issuing CA, O=Contoso')
         $null = Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'T_CL' -Records @(@{ A = 1 }) `
             -Source 'Pester' -SpoolRoot $script:Root -SkipDrain `
-            -CertificateThumbprint 'ABC' -CertificateSubjectLike '*device*' -CertificateIssuerLike '*PKI*'
+            -CertificateThumbprint 'ABC' -CertificateSubjectLike '*device*' -CertificateIssuerLike '*PKI*' `
+            -PkiRootCaThumbprints $rootPins -PkiRootCaSubjects $rootNames `
+            -PkiIntermediateCaThumbprints $intermediatePins -PkiIntermediateCaSubjects $intermediateNames
         Should -Invoke -ModuleName LogCollector.Client Get-ClientCertificate -Times 1 -Exactly -ParameterFilter {
             $EntraDeviceId -eq '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -and
-            $Thumbprint -eq 'ABC' -and $SubjectLike -eq '*device*' -and $IssuerLike -eq '*PKI*'
+            $Thumbprint -eq 'ABC' -and $SubjectLike -eq '*device*' -and $IssuerLike -eq '*PKI*' -and
+            ($PkiRootCaThumbprints -join ',') -eq ($rootPins -join ',') -and
+            ($PkiRootCaSubjects -join ',') -eq ($rootNames -join ',') -and
+            ($PkiIntermediateCaThumbprints -join ',') -eq ($intermediatePins -join ',') -and
+            ($PkiIntermediateCaSubjects -join ',') -eq ($intermediateNames -join ',')
+        }
+    }
+
+    It 'passes PKI CA constraints through spool synchronization' {
+        $rootPins = @('1111111111111111111111111111111111111111')
+        $rootNames = @('CN=Root CA, O=Contoso')
+        $intermediatePins = @('2222222222222222222222222222222222222222')
+        $intermediateNames = @('CN=Issuing CA, O=Contoso')
+
+        $null = Sync-LogCollectorSpool -FrontendUrl $script:Endpoint -SpoolRoot $script:Root `
+            -PkiRootCaThumbprints $rootPins -PkiRootCaSubjects $rootNames `
+            -PkiIntermediateCaThumbprints $intermediatePins -PkiIntermediateCaSubjects $intermediateNames
+
+        Should -Invoke -ModuleName LogCollector.Client Get-ClientCertificate -Times 1 -Exactly -ParameterFilter {
+            ($PkiRootCaThumbprints -join ',') -eq ($rootPins -join ',') -and
+            ($PkiRootCaSubjects -join ',') -eq ($rootNames -join ',') -and
+            ($PkiIntermediateCaThumbprints -join ',') -eq ($intermediatePins -join ',') -and
+            ($PkiIntermediateCaSubjects -join ',') -eq ($intermediateNames -join ',')
         }
     }
 
@@ -206,8 +234,10 @@ Describe 'Shared client facade' {
 
 Describe 'Shared module packaging' {
     It 'packages exactly the manifest files under a versioned module directory' {
+        $sourceManifest = Test-ModuleManifest (Join-Path $script:RepoRoot 'src\Client\LogCollector.Client.psd1')
+        $expectedVersion = $sourceManifest.Version.ToString()
         $result = & (Join-Path $script:RepoRoot 'scripts\Publish-ClientModule.ps1') -OutputDirectory $TestDrive
-        $result.ModuleVersion | Should -BeExactly '1.0.0'
+        $result.ModuleVersion | Should -BeExactly $expectedVersion
         $result.PackageSha256 | Should -Match '^[A-F0-9]{64}$'
         $manifest = Test-ModuleManifest (Join-Path $result.ModulePath 'LogCollector.Client.psd1')
         $manifest.ExportedFunctions.Count | Should -Be 7
@@ -217,7 +247,7 @@ Describe 'Shared module packaging' {
             $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
             $names.Count | Should -Be 6
             foreach ($file in $manifest.FileList) {
-                $names | Should -Contain ('LogCollector.Client/1.0.0/' + (Split-Path $file -Leaf))
+                $names | Should -Contain ("LogCollector.Client/$expectedVersion/" + (Split-Path $file -Leaf))
             }
         }
         finally { $zip.Dispose() }

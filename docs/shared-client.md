@@ -1,7 +1,7 @@
 # Shared PowerShell client
 
 `src\Client\LogCollector.Client.psd1` is the public module entry point for independent
-inventory, diagnostic and remediation scripts. Version **1.0.0** supports Windows PowerShell
+inventory, diagnostic and remediation scripts. Version **1.1.1** supports Windows PowerShell
 5.1 and PowerShell 7 on Windows. Import does not discover certificates, access Azure, install
 tasks or run collection/remediation.
 
@@ -17,7 +17,7 @@ $package = .\scripts\Publish-ClientModule.ps1
 $package | Format-List ModuleVersion, PackagePath, PackageSha256
 ```
 
-The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.0.0`.
+The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.1.1`.
 It contains no customer scripts, private keys, CA files, credentials or device inventory.
 The SHA-256 identifies the generated artifact; it is not a digital signature or proof of its source.
 
@@ -25,7 +25,7 @@ Distribute it through the customer's trusted management channel to an administra
 directory, for example:
 
 ```text
-C:\Program Files\ACI\Modules\LogCollector.Client\1.0.0\
+C:\Program Files\LogCollector\Modules\LogCollector.Client\1.1.1\
     LogCollector.Client.psd1
     LogCollector.Client.psm1
     DeviceIdentity.psm1
@@ -40,7 +40,7 @@ Keep the import path valid for scheduled tasks, self-copies and post-upgrade hoo
 the current working directory to locate it.
 
 ```powershell
-Import-Module 'C:\Program Files\ACI\Modules\LogCollector.Client\1.0.0\LogCollector.Client.psd1' -ErrorAction Stop
+Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.1.1\LogCollector.Client.psd1' -ErrorAction Stop
 ```
 
 The high-level commands obtain their endpoint from an explicit parameter. No Function key,
@@ -75,7 +75,7 @@ $record = [pscustomobject]@{
 
 $result = Send-LogCollectorData -FrontendUrl $endpoint `
     -TableName 'InventoryWindows_CL' -Records @($record) `
-    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.0.0' }
+    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.1.1' }
 
 $result | Select-Object Disposition, StatusCode, Attempts, Spooled, SpoolDirectory
 ```
@@ -129,6 +129,26 @@ handles only this condition by retaining the envelope and reporting `AuthFailure
 provider failures still propagate. A warning identifies certificate-unavailable deferral.
 High-level commands dispose the certificate they obtain. If using `Get-ClientCertificate`
 directly, the caller owns and must dispose the returned certificate.
+
+### Optional PKI chain-role constraints
+
+`Get-ClientCertificate`, `Send-LogCollectorData` and `Sync-LogCollectorSpool` accept
+`PkiRootCaThumbprints`, `PkiRootCaSubjects`, `PkiIntermediateCaThumbprints` and
+`PkiIntermediateCaSubjects` as string arrays. Empty arrays preserve existing behavior.
+When enabled, selection validates the PKI chain against Windows trust before matching
+the terminal Root CA and a non-root intermediate CA in their proper roles.
+CA certificates must have Basic Constraints CA=true. Leaf thumbprint selection does
+not waive the applicable PKI constraints.
+
+Names are exact Subject DNs, not friendly names or wildcards. Pins are 40-hex SHA1
+certificate thumbprints (whitespace/colon formatting is normalized). Each configured
+role must match; when both name and thumbprint lists exist, the same CA must match both.
+Malformed policy entries throw rather than silently disabling the policy.
+
+Provision CA certificates through the normal Windows management channel, not this module.
+Local selection skips revocation only; the Intake remains authoritative for revocation,
+trust, device binding and authorization. Intune fallback remains independent of these PKI
+constraints. See [pki-ca-policy.md](pki-ca-policy.md) for the matching server configuration.
 
 Advanced signature-only usage:
 

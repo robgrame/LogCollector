@@ -68,6 +68,18 @@ param trustedRootCertificatesBase64 string = ''
 @description('Base64 DER of the enterprise PKI intermediate CA certificate(s). Path hints only.')
 param trustedIntermediateCertificatesBase64 string = ''
 
+@description('Optional PKI terminal Root CA SHA1 thumbprints, comma/semicolon/pipe-separated. Constraints, not trust anchors.')
+param pkiRootCaThumbprints string = ''
+
+@description('Optional PKI terminal Root CA exact Subject DNs, pipe-separated. Names and thumbprints must match the same Root CA.')
+param pkiRootCaSubjects string = ''
+
+@description('Optional PKI intermediate CA SHA1 thumbprints, comma/semicolon/pipe-separated. Requires a matching non-root CA.')
+param pkiIntermediateCaThumbprints string = ''
+
+@description('Optional PKI intermediate CA exact Subject DNs, pipe-separated. Names and thumbprints must match the same intermediate.')
+param pkiIntermediateCaSubjects string = ''
+
 @description('Base64 DER of the Intune MDM Device CA ROOT certificate(s). Enables the Intune enrollment tier.')
 param trustedIntuneRootCertificatesBase64 string = ''
 
@@ -723,6 +735,10 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ClientCert__DeviceIdBindingClaim', value: deviceIdBindingClaim }
         { name: 'ClientCert__TrustedRootCertificates', value: trustedRootCertificatesBase64 }
         { name: 'ClientCert__TrustedIntermediateCertificates', value: trustedIntermediateCertificatesBase64 }
+        { name: 'ClientCert__PkiRootCaThumbprints', value: pkiRootCaThumbprints }
+        { name: 'ClientCert__PkiRootCaSubjects', value: pkiRootCaSubjects }
+        { name: 'ClientCert__PkiIntermediateCaThumbprints', value: pkiIntermediateCaThumbprints }
+        { name: 'ClientCert__PkiIntermediateCaSubjects', value: pkiIntermediateCaSubjects }
         { name: 'ClientCert__TrustedIntuneRootCertificates', value: trustedIntuneRootCertificatesBase64 }
         { name: 'ClientCert__TrustedIntuneIntermediateCertificates', value: trustedIntuneIntermediateCertificatesBase64 }
         { name: 'ClientCert__TrustedCaSubjects', value: trustedCaSubjects }

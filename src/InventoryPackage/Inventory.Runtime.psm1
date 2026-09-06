@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.0.0. No collection or network activity on import.
+# Version 1.1.1. PKI CA-role constraints; no collection or network activity on import.
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Collection.psm1') -ErrorAction Stop
@@ -15,6 +15,19 @@ function Get-InventoryConfiguration {
     }
     foreach ($key in @('SubmissionEnabled', 'CollectDeviceInventory', 'CollectAppInventory')) {
         if ($config[$key] -isnot [bool]) { throw "$key must be a Boolean." }
+    }
+    foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
+        if (-not $config.ContainsKey($key)) { $config[$key] = @() }
+        if ($null -eq $config[$key] -or ($config[$key] -isnot [string] -and $config[$key] -isnot [array])) {
+            throw "$key must be an array of strings (use @() to disable the constraint)."
+        }
+        foreach ($entry in @($config[$key])) {
+            if ($entry -isnot [string] -or [string]::IsNullOrWhiteSpace($entry)) { throw "$key contains an invalid entry." }
+            if ($key -like '*Thumbprints' -and ($entry -replace '[\s:]', '') -notmatch '^[0-9a-fA-F]{40}$') {
+                throw "$key entries must be SHA1 certificate thumbprints (40 hexadecimal digits)."
+            }
+        }
+        $config[$key] = @($config[$key])
     }
     foreach ($key in @('DeviceTableName', 'AppTableName')) {
         if ($config[$key] -isnot [string] -or $config[$key] -notmatch '^[A-Za-z][A-Za-z0-9_]{0,96}_CL$') {
@@ -96,6 +109,8 @@ function Invoke-InventoryRun {
         $result = Send-LogCollectorData -FrontendUrl $config.FrontendUrl -TableName $batch.TableName `
             -Records $batch.Records -Source 'WindowsCustomInventory' -Properties $properties -CollectedAtUtc $collectedAt `
             -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
+            -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
+            -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
             -MaxAttempts $config.MaxAttempts -TimeoutSeconds $config.TimeoutSeconds -QueueOnly:$QueueOnly -SkipDrain
         [pscustomobject]@{
             TableName = $batch.TableName; Records = $batch.Records.Count
@@ -112,6 +127,8 @@ function Invoke-InventoryDrain {
     if (-not $config.SubmissionEnabled) { throw 'Spool submission is disabled until the original table mappings are ready.' }
     Sync-LogCollectorSpool -FrontendUrl $config.FrontendUrl `
         -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
+        -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
+        -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
         -TimeoutSeconds $config.TimeoutSeconds -MaxAttemptsPerEntry $config.MaxAttempts
 }
 
