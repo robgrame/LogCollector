@@ -4,6 +4,17 @@
 
 **Stato:** il deployment Azure principale esiste; la migrazione dei client ACI e le estensioni di schema, tabelle e DCR necessarie per questi flussi **non sono ancora implementate**. Il modulo comune **LogCollector.Client 1.0.0** e predisposto nel repository, con manifest, packaging e guida [shared-client.md](shared-client.md). Questa disponibilita non equivale alla migrazione dei sender o alla distribuzione sui dispositivi.
 
+**Aggiornamento pacchetto universale:** e predisposto un collector separato, privo di
+nomi o configurazioni cliente nel codice, in `src\InventoryPackage`, assemblabile con
+`scripts\Publish-InventoryPackage.ps1`. Endpoint, ambiente e tabelle sono configurabili.
+La cartella risultante contiene tutti gli script per Intune, senza dipendenze da OneDrive.
+I default restano **DeviceInventory_CL** e **AppInventory_CL**: le query esistenti dipendono da quei nomi.
+Mantiene anche i campi JSON legacy, ma la compatibilita delle colonne/query deve essere confermata
+sugli schemi reali e sulle trasformazioni DCR, senza inventare suffissi o tipi.
+L'invio e disabilitato per default finche queste dipendenze Azure non sono predisposte.
+Gli originali ACI non sono stati modificati e il pilot live resta pendente.
+Dettagli: [guida del pacchetto](../src/InventoryPackage/README.md).
+
 ## 1. Perimetro, provenienza e uso alla ripresa
 
 La cartella sorgente analizzata era:
@@ -288,6 +299,7 @@ Il **pilot live positivo con certificato reale e ancora pendente**. In particola
 | Completata con questo documento | Conservazione dei rilievi, rischi, contratto e sequenza di ripresa, senza codice sorgente o segreti |
 | Esistente secondo i rilievi | Deployment Azure principale con il solo mapping `InventoryWindows_CL` -> `Custom-InventoryWindows_CL` |
 | Predisposta nel repository | Facade LogCollector.Client 1.0.0, manifest, packaging e guida `shared-client.md`; non ancora distribuita/integrata sui client ACI |
+| Predisposto, riutilizzabile per altri ambienti | Pacchetto universale Custom Inventory; endpoint e tabelle configurabili, default DeviceInventory_CL/AppInventory_CL preservati, invio disabilitato fino alla configurazione Azure |
 | Da fare | Conferma delle varianti attive, tenant/workspace e task/copie realmente distribuiti |
 | Da fare | Schemi delle 13 tabelle, stream/mapping DCR e configurazioni su entrambe le applicazioni |
 | Da fare | Integrazione sender: SMB, Custom Inventory, Windows 11 Upgrade, Secure Boot |

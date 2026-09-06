@@ -233,6 +233,25 @@ endpoint-isolated spool and limits. **[aci-migration-findings.md](docs/aci-migra
 preserves the detailed analysis of the original ACI scripts and their 13 legacy destinations.
 Those scripts and their Azure schemas have not been migrated by adding this module.
 
+**Universal inventory package.** Build a self-contained folder for any deployment:
+
+```powershell
+.\scripts\Publish-InventoryPackage.ps1 `
+    -FrontendUrl 'https://logcollector-intake.azurewebsites.net/api/inventory' `
+    -Environment 'MSLabs'
+```
+
+This creates `out\Inventory\1.0.0`, ready for Intune Win32 packaging with `Install.ps1`
+as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
+environment and table names are supplied as configuration; `-DeviceTableName` and
+`-AppTableName` default to **DeviceInventory_CL** and **AppInventory_CL** to retain existing
+destinations and record contracts, not redirect queries to InventoryWindows_CL.
+The folder includes collection, shared modules, configuration, install/uninstall/detection
+and an independent spool task. See the [package guide](src/InventoryPackage/README.md).
+No original customer scripts are modified. Live submission and installed tasks default to
+disabled until the selected table schemas, DCR transforms and both app mappings are ready;
+`Run-Inventory.ps1 -Preview` and `-QueueOnly` support local preparation.
+
 **Large mTLS uploads.** The client enables `Expect: 100-continue` using the runtime-appropriate
 transport API. App Service must use `clientCertMode: Required` with **no certificate exclusion
 paths**: even excluding health enables TLS renegotiation and imposes a fixed 100 KB upload limit.
