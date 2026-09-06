@@ -19,7 +19,7 @@
     reintroduce a fleet-wide shared secret without adding any assurance.
 
 .NOTES
-    Version 1.0.1 - shared submission validation, deferred delivery and bounded drain transport.
+    Version 1.1.2 - optional metadata-only diagnostic callbacks for transport and spool operations.
     Windows PowerShell 5.1 compatible.
 #>
 
@@ -36,6 +36,11 @@ Import-Module (Join-Path $script:ModuleRoot 'RequestSigning.psm1') -DisableNameC
 Import-Module (Join-Path $script:ModuleRoot 'InventorySpool.psm1') -DisableNameChecking
 
 $script:EnvelopeVersion = 'LOGCOLLECTOR-INVENTORY-V1'
+
+function Write-InventoryTransportDiagnostic {
+    param([scriptblock] $DiagnosticSink, [string] $Event, [hashtable] $Data)
+    if ($DiagnosticSink) { $null = & $DiagnosticSink $Event $Data }
+}
 
 function Initialize-TlsDefaults {
     <#
@@ -369,6 +374,9 @@ function Invoke-InventoryHttpPost {
             RetryAfterSeconds = $detail.RetryAfterSeconds
             Disposition       = $disposition
             Message           = $detail.Message
+            ExceptionType     = $_.Exception.GetType().FullName
+            HResult           = $_.Exception.HResult
+            WebExceptionStatus = $(if ($_.Exception -is [Net.WebException]) { [string]$_.Exception.Status } else { '' })
         }
     }
 }
@@ -390,7 +398,8 @@ function Send-InventoryEnvelope {
         [int] $BaseDelaySeconds = 5,
         [int] $MaxDelaySeconds = 300,
         [int] $TimeoutSeconds = 100,
-        [switch] $NoSleep
+        [switch] $NoSleep,
+        [scriptblock] $DiagnosticSink
     )
 
     Initialize-TlsDefaults
@@ -398,7 +407,18 @@ function Send-InventoryEnvelope {
     $last = $null
     $attempt = 0
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Write-InventoryTransportDiagnostic $DiagnosticSink 'HttpAttempt' @{
+            Endpoint = $Uri.AbsoluteUri; Attempt = $attempt; MaxAttempts = $MaxAttempts
+            BodyBytes = [Text.Encoding]::UTF8.GetByteCount($Body)
+        }
         $last = Invoke-InventoryHttpPost -Uri $Uri -Body $Body -Certificate $Certificate -TimeoutSeconds $TimeoutSeconds
+        $diagnostic = @{ Attempt = $attempt; StatusCode = $last.StatusCode; Disposition = $last.Disposition }
+        foreach ($field in @('ExceptionType', 'HResult', 'WebExceptionStatus')) {
+            if ($last.PSObject.Properties.Name -contains $field -and $null -ne $last.$field -and [string]$last.$field -ne '') {
+                $diagnostic[$field] = $last.$field
+            }
+        }
+        Write-InventoryTransportDiagnostic $DiagnosticSink 'HttpResult' $diagnostic
 
         if ($last.Disposition -ne 'Transient') { break }
         if ($attempt -eq $MaxAttempts) { break }
@@ -410,6 +430,7 @@ function Send-InventoryEnvelope {
             -RetryAfterSeconds $last.RetryAfterSeconds
 
         Write-Verbose ("Send-InventoryEnvelope: attempt {0} returned {1}; sleeping {2}s" -f $attempt, $last.StatusCode, $delay)
+        Write-InventoryTransportDiagnostic $DiagnosticSink 'HttpRetry' @{ Attempt = $attempt; DelaySeconds = $delay; StatusCode = $last.StatusCode }
         if (-not $NoSleep) { Start-Sleep -Seconds $delay }
     }
 
@@ -448,7 +469,8 @@ function Invoke-InventorySpoolDrain {
         [int] $MaxDeliveryAttempts = 10,
         [ValidateRange(1, 300)] [int] $TimeoutSeconds = 100,
         [ValidateRange(1, 900)] [int] $MaxDelaySeconds = 300,
-        [switch] $NoSleep
+        [switch] $NoSleep,
+        [scriptblock] $DiagnosticSink
     )
 
     $summary = [pscustomobject]@{
@@ -458,10 +480,14 @@ function Invoke-InventorySpoolDrain {
         Stopped     = $false
     }
 
+    Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolDrainStarted' @{ SpoolDirectory = $SpoolDirectory }
     $lock = Enter-SpoolLock -SpoolDirectory $SpoolDirectory
     if ($null -eq $lock) {
         Write-Verbose 'Invoke-InventorySpoolDrain: another drain holds the lock; skipping.'
         $summary.Stopped = $true
+        Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolDrainCompleted' @{
+            Stage = 'LockUnavailable'; Delivered = 0; Quarantined = 0; Remaining = 0; Stopped = $true
+        }
         return $summary
     }
 
@@ -478,6 +504,9 @@ function Invoke-InventorySpoolDrain {
             Write-Warning 'No usable client certificate; retained telemetry has not been submitted.'
             $summary.Remaining = @(Get-SpoolEntry -SpoolDirectory $SpoolDirectory).Count
             $summary.Stopped = $true
+            Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolDrainCompleted' @{
+                Stage = 'CertificateUnavailable'; Delivered = 0; Quarantined = 0; Remaining = $summary.Remaining; Stopped = $true
+            }
             return $summary
         }
 
@@ -486,11 +515,13 @@ function Invoke-InventorySpoolDrain {
                 Write-Verbose ("Invoke-InventorySpoolDrain: entry {0} exhausted its attempt budget." -f $entry.Path)
                 $null = Move-SpoolEntryToQuarantine -Path $entry.Path -Reason 'attempts-exhausted'
                 $summary.Quarantined++
+                Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolQuarantined' @{ SpoolPath = $entry.Path; Stage = 'AttemptsExhausted' }
                 continue
             }
 
             if ((Update-SpoolEntryAttempt -Path $entry.Path) -lt 0) {
                 $summary.Quarantined++
+                Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolQuarantined' @{ SpoolPath = $entry.Path; Stage = 'InvalidEntry' }
                 continue
             }
 
@@ -501,7 +532,7 @@ function Invoke-InventorySpoolDrain {
                 -MaxAttempts $MaxAttemptsPerEntry `
                 -TimeoutSeconds $TimeoutSeconds `
                 -MaxDelaySeconds $MaxDelaySeconds `
-                -NoSleep:$NoSleep
+                -NoSleep:$NoSleep -DiagnosticSink $DiagnosticSink
 
             switch ($result.Disposition) {
                 'Delivered' {
@@ -511,6 +542,9 @@ function Invoke-InventorySpoolDrain {
                 'Permanent' {
                     $null = Move-SpoolEntryToQuarantine -Path $entry.Path -Reason ("http-{0}" -f $result.StatusCode)
                     $summary.Quarantined++
+                    Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolQuarantined' @{
+                        SpoolPath = $entry.Path; Stage = 'PermanentRejection'; StatusCode = $result.StatusCode
+                    }
                 }
                 default {
                     # Transient or AuthFailure: leave the entry in place and stop.
@@ -528,6 +562,10 @@ function Invoke-InventorySpoolDrain {
         Exit-SpoolLock -LockStream $lock
     }
 
+    Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolDrainCompleted' @{
+        Delivered = $summary.Delivered; Quarantined = $summary.Quarantined
+        Remaining = $summary.Remaining; Stopped = $summary.Stopped
+    }
     return $summary
 }
 
@@ -556,7 +594,8 @@ function Invoke-InventorySubmission {
         [ValidateRange(1, 10)] [int] $MaxDrainAttempts = 2,
         [switch] $QueueOnly,
         [switch] $SkipDrain,
-        [switch] $NoSleep
+        [switch] $NoSleep,
+        [scriptblock] $DiagnosticSink
     )
 
     Initialize-TlsDefaults
@@ -573,6 +612,10 @@ function Invoke-InventorySubmission {
             -MaxEntries $MaxSpoolEntries -MaxTotalBytes $MaxSpoolTotalBytes -MaxAgeDays $MaxSpoolAgeDays
         if (-not $QueueOnly) {
             Write-Warning 'No usable client certificate; the submission is retained in the local spool, not delivered.'
+        }
+        Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolQueued' @{
+            SpoolPath = $path; TableName = $tableName
+            Disposition = $(if ($QueueOnly) { 'Deferred' } else { 'AuthFailure' })
         }
         return [pscustomobject]@{
             Disposition = $(if ($QueueOnly) { 'Deferred' } else { 'AuthFailure' })
@@ -598,7 +641,7 @@ function Invoke-InventorySubmission {
             -MaxAttemptsPerEntry $MaxDrainAttempts `
             -TimeoutSeconds $TimeoutSeconds `
             -MaxDelaySeconds $MaxDelaySeconds `
-            -NoSleep:$NoSleep
+            -NoSleep:$NoSleep -DiagnosticSink $DiagnosticSink
     }
 
     $result = Send-InventoryEnvelope `
@@ -609,7 +652,7 @@ function Invoke-InventorySubmission {
         -BaseDelaySeconds $BaseDelaySeconds `
         -MaxDelaySeconds $MaxDelaySeconds `
         -TimeoutSeconds $TimeoutSeconds `
-        -NoSleep:$NoSleep
+        -NoSleep:$NoSleep -DiagnosticSink $DiagnosticSink
 
     $spoolPath = $null
 
@@ -625,6 +668,9 @@ function Invoke-InventorySubmission {
             -MaxAgeDays $MaxSpoolAgeDays
 
         Write-Verbose ("Invoke-InventorySubmission: spooled to {0} after {1}." -f $spoolPath, $result.Disposition)
+        Write-InventoryTransportDiagnostic $DiagnosticSink 'SpoolQueued' @{
+            SpoolPath = $spoolPath; TableName = $tableName; Disposition = $result.Disposition; StatusCode = $result.StatusCode
+        }
     }
 
     [pscustomobject]@{

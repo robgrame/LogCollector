@@ -1,6 +1,6 @@
 # Custom Inventory - pacchetto Windows universale
 
-Versione **1.3.4**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
+Versione **1.4.5**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
 La cartella generata e autosufficiente: non richiede la repository, OneDrive,
 PowerShell Gallery, Workspace ID/Primary Key o Function key sul dispositivo.
 Codice, nomi dei task e percorsi di installazione non dipendono da un cliente.
@@ -61,7 +61,8 @@ solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake sia nel
 - `Run-Inventory.ps1`: raccolta e invio separato alle destinazioni configurate.
 - `Sync-Spool.ps1`: ritrasmissione senza nuova raccolta.
 - `Inventory.Collection.psm1` / `Inventory.Runtime.psm1`: raccolta e integrazione.
-- `Modules`: tutti i sei file di LogCollector.Client 1.1.1.
+- `Modules`: tutti i sei file di LogCollector.Client 1.2.2.
+- `Inventory.Logging.psm1`: logger locale protetto, condiviso dalle entry point.
 - `Install.ps1`, `Uninstall.ps1`, `Detect.ps1`: gestione Intune Win32.
 - `Config.psd1`: configurazione del deployment.
 
@@ -92,7 +93,7 @@ anche la detection. Versione del codice e hash della configurazione sono distint
 L'installer copia tutti i componenti in:
 
 ```text
-C:\Program Files\LogCollector\CustomInventory\1.3.4
+C:\Program Files\LogCollector\CustomInventory\1.4.5
 ```
 
 Il percorso viene protetto per SYSTEM/amministratori; percorsi preesistenti non
@@ -114,6 +115,55 @@ I task preesistenti di altri collector non vengono modificati.
 Detection positiva significa installato, non ingestione attiva o completata.
 La disinstallazione rimuove solo questi task e conserva file e spool, evitando
 di cancellare dati eventualmente condivisi con altri sender.
+
+## Log locali
+
+La versione 1.4.5 scrive log JSON Lines (un oggetto JSON per riga) sotto:
+
+```text
+C:\ProgramData\LogCollector\Logs\CustomInventory\
+    Install.log
+    Inventory.log
+    Spool.log
+```
+
+Install.log include installazione e disinstallazione. Inventory.log include
+raccolta, invio e anche esecuzioni Preview/QueueOnly; Spool.log riguarda il task
+di ritrasmissione. Non e necessario un utente interattivo. La detection non scrive
+log e non modifica il dispositivo. Install/Uninstall con -WhatIf non creano log.
+
+Ogni esecuzione ha un RunId per correlare gli eventi, con timestamp UTC e PID.
+Sono registrati versione, hash configurazione, endpoint, fasi/provider, conteggi,
+selezione del certificato (thumbprint e scadenza), tentativi HTTP, codici, retry,
+percorsi delle entry accodate e riepiloghi di consegna. I dati completi rimangono
+nello spool, non nei log.
+
+Gli errori includono fase, tipo eccezione, HResult e categoria, senza
+Exception.Message, stack trace o contenuti delle risposte HTTP. I warning della
+raccolta riportano funzione/fase e riga sorgente, non il messaggio potenzialmente
+contenente dati inventariati. Console e codici di uscita mantengono il comportamento
+precedente. Non sono salvati payload, firme, chiavi private o trascrizioni della console.
+
+Limiti predefiniti: 2 MiB per file, quattro archivi oltre al file attivo per
+componente, conservazione archivi di 14 giorni applicata alle scritture.
+Il limite complessivo dei tre componenti e circa 30 MiB, oltre ai piccoli file
+di lock. Nessun processo separato di pulizia; i log restano dopo la disinstallazione.
+SYSTEM e amministratori sono gli unici soggetti ammessi. Directory/file non
+attendibili o reparse point sono rifiutati, non riparati automaticamente.
+
+Un errore di inizializzazione/scrittura dei log e esplicito e interrompe
+l'operazione: non si continua fingendo che la diagnostica sia disponibile.
+Gli errori successivi all'inizializzazione vengono registrati; errori del parser,
+vincoli #Requires o modulo logger mancante non possono essere salvati da un logger
+che non e ancora disponibile. Restano visibili nell'esito/console del processo.
+
+Per leggere gli ultimi eventi da una console elevata:
+
+```powershell
+Get-Content 'C:\ProgramData\LogCollector\Logs\CustomInventory\Install.log' -Tail 30
+Get-Content 'C:\ProgramData\LogCollector\Logs\CustomInventory\Inventory.log' -Tail 50
+Get-Content 'C:\ProgramData\LogCollector\Logs\CustomInventory\Spool.log' -Tail 50
+```
 
 ## Prova locale e attivazione
 

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.1.1. PKI CA-role constraints; no collection or network activity on import.
+# Version 1.4.5. Optional metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Collection.psm1') -ErrorAction Stop
@@ -80,16 +80,26 @@ function Get-InventorySubmissionBatch {
 
 function Invoke-InventoryRun {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $ConfigPath, [switch] $Preview, [switch] $QueueOnly)
+    param([Parameter(Mandatory)] [string] $ConfigPath, [switch] $Preview, [switch] $QueueOnly, [scriptblock] $DiagnosticSink)
     if ($Preview -and $QueueOnly) { throw 'Use Preview or QueueOnly, not both.' }
     $config = Get-InventoryConfiguration -Path $ConfigPath
+    if ($DiagnosticSink) {
+        $null = & $DiagnosticSink 'ConfigurationLoaded' @{
+            PackageVersion = $config.PackageVersion; Endpoint = $config.FrontendUrl
+            ConfigurationSha256 = (Get-FileHash -LiteralPath $ConfigPath -Algorithm SHA256).Hash
+            SubmissionEnabled = $config.SubmissionEnabled; DeviceTableName = $config.DeviceTableName; AppTableName = $config.AppTableName
+            RootConstraintCount = $config.PkiRootCaSubjects.Count + $config.PkiRootCaThumbprints.Count
+            IntermediateConstraintCount = $config.PkiIntermediateCaSubjects.Count + $config.PkiIntermediateCaThumbprints.Count
+        }
+    }
     if (-not $Preview -and -not $QueueOnly -and -not $config.SubmissionEnabled) {
+        if ($DiagnosticSink) { $null = & $DiagnosticSink 'SubmissionDisabled' @{ Stage = 'CollectAndSend' } }
         throw 'Submission is disabled: prepare the configured table schemas and DCR mappings first. Preview or QueueOnly remains available.'
     }
     $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
     $collectedAt = [DateTimeOffset]::UtcNow
     $inventory = Get-Inventory -Identity $identity `
-        -CollectDeviceInventory $config.CollectDeviceInventory -CollectAppInventory $config.CollectAppInventory
+        -CollectDeviceInventory $config.CollectDeviceInventory -CollectAppInventory $config.CollectAppInventory -DiagnosticSink $DiagnosticSink
     $properties = @{ CollectorVersion = $config.PackageVersion; Environment = $config.Environment }
     # Preflight both streams before the first network request.
     $batches = @(
@@ -98,6 +108,12 @@ function Invoke-InventoryRun {
         Get-InventorySubmissionBatch -TableName $config.AppTableName -Records @($inventory.AppRecords) `
             -Identity $identity -Properties $properties -CollectedAtUtc $collectedAt
     )
+    if ($DiagnosticSink) {
+        $null = & $DiagnosticSink 'CollectionCompleted' @{
+            Stage = 'BatchPreflight'; DeviceRecords = @($inventory.DeviceRecords).Count
+            AppRecords = @($inventory.AppRecords).Count; BatchCount = $batches.Count
+        }
+    }
     if ($Preview) {
         return [pscustomobject]@{
             Disposition = 'Preview'; DeviceRecords = @($inventory.DeviceRecords).Count
@@ -111,7 +127,7 @@ function Invoke-InventoryRun {
             -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
             -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
             -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
-            -MaxAttempts $config.MaxAttempts -TimeoutSeconds $config.TimeoutSeconds -QueueOnly:$QueueOnly -SkipDrain
+            -MaxAttempts $config.MaxAttempts -TimeoutSeconds $config.TimeoutSeconds -QueueOnly:$QueueOnly -SkipDrain -DiagnosticSink $DiagnosticSink
         [pscustomobject]@{
             TableName = $batch.TableName; Records = $batch.Records.Count
             Disposition = $result.Disposition; StatusCode = $result.StatusCode
@@ -122,14 +138,24 @@ function Invoke-InventoryRun {
 
 function Invoke-InventoryDrain {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $ConfigPath)
+    param([Parameter(Mandatory)] [string] $ConfigPath, [scriptblock] $DiagnosticSink)
     $config = Get-InventoryConfiguration -Path $ConfigPath
-    if (-not $config.SubmissionEnabled) { throw 'Spool submission is disabled until the original table mappings are ready.' }
+    if ($DiagnosticSink) {
+        $null = & $DiagnosticSink 'ConfigurationLoaded' @{
+            PackageVersion = $config.PackageVersion; Endpoint = $config.FrontendUrl
+            ConfigurationSha256 = (Get-FileHash -LiteralPath $ConfigPath -Algorithm SHA256).Hash
+            SubmissionEnabled = $config.SubmissionEnabled
+        }
+    }
+    if (-not $config.SubmissionEnabled) {
+        if ($DiagnosticSink) { $null = & $DiagnosticSink 'SubmissionDisabled' @{ Stage = 'Drain' } }
+        throw 'Spool submission is disabled until the original table mappings are ready.'
+    }
     Sync-LogCollectorSpool -FrontendUrl $config.FrontendUrl `
         -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
         -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
         -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
-        -TimeoutSeconds $config.TimeoutSeconds -MaxAttemptsPerEntry $config.MaxAttempts
+        -TimeoutSeconds $config.TimeoutSeconds -MaxAttemptsPerEntry $config.MaxAttempts -DiagnosticSink $DiagnosticSink
 }
 
 Export-ModuleMember -Function Get-InventoryConfiguration, Invoke-InventoryRun, Invoke-InventoryDrain

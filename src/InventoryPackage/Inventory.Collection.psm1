@@ -4,12 +4,77 @@
 Collects reusable Windows device and application inventory with the existing record contract.
 
 .NOTES
-Version 1.0.0. Collection logic adapted from the customer-provided script by
+Version 1.1.2. Collection logic adapted from the customer-provided script by
 Jan Ketil Skanke, with contributions from Sandy Zeng and Maurice Daly.
 This module performs no collection or network activity when imported.
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+function Write-InventoryCollectionDiagnostic {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('CollectionStarted', 'CollectionCompleted', 'CollectionWarning')]
+        [string] $Event,
+        [Parameter(Mandatory)] [string] $Stage,
+        [int] $SourceLine = (Get-PSCallStack)[1].ScriptLineNumber,
+        [System.Exception] $Exception,
+        [int] $RecordCount,
+        [int] $DeviceRecords,
+        [int] $AppRecords
+    )
+
+    $context = Get-Variable -Name InventoryDiagnosticContext -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -eq $context -or $null -eq $context.Sink) {
+        return
+    }
+    if ($null -ne $context.Failure) {
+        throw $context.Failure
+    }
+
+    $data = @{ Stage = $Stage; SourceLine = $SourceLine }
+    if ($null -ne $Exception) {
+        $data.ExceptionType = $Exception.GetType().FullName
+        $data.HResult = [int] $Exception.HResult
+    }
+    foreach ($name in @('RecordCount', 'DeviceRecords', 'AppRecords')) {
+        if ($PSBoundParameters.ContainsKey($name)) {
+            $data[$name] = [int] $PSBoundParameters[$name]
+        }
+    }
+
+    try {
+        $null = & $context.Sink $Event $data
+    }
+    catch {
+        # Provider catches must not downgrade a diagnostic callback failure to a warning.
+        $context.Failure = $_
+        throw
+    }
+}
+
+function Write-InventoryCollectionWarning {
+    param(
+        [Parameter(Mandatory)] [string] $Message,
+        [System.Exception] $Exception,
+        [string] $Stage
+    )
+
+    $context = Get-Variable -Name InventoryDiagnosticContext -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $context -and $null -ne $context.Failure) {
+        throw $context.Failure
+    }
+
+    Write-Warning $Message
+    if ($null -ne $context -and $null -ne $context.Sink) {
+        $caller = (Get-PSCallStack)[1]
+        if ([string]::IsNullOrEmpty($Stage)) {
+            $Stage = $caller.FunctionName
+        }
+        Write-InventoryCollectionDiagnostic -Event CollectionWarning -Stage $Stage `
+            -SourceLine $caller.ScriptLineNumber -Exception $Exception
+    }
+}
 
 function Get-InventoryPropertyValue {
     param(
@@ -51,6 +116,8 @@ function Get-InventoryRequiredCimInstance {
         [string] $Namespace
     )
 
+    $stage = "Get-InventoryRequiredCimInstance.$ClassName"
+    Write-InventoryCollectionDiagnostic -Event CollectionStarted -Stage $stage
     try {
         if ([string]::IsNullOrWhiteSpace($Namespace)) {
             $result = @(Get-CimInstance -ClassName $ClassName -ErrorAction Stop)
@@ -60,13 +127,17 @@ function Get-InventoryRequiredCimInstance {
         }
     }
     catch {
+        Write-InventoryCollectionDiagnostic -Event CollectionWarning -Stage $stage -Exception $_.Exception
         throw "Required CIM class '$ClassName' could not be queried: $($_.Exception.Message)"
     }
 
     if ($result.Count -eq 0) {
+        Write-InventoryCollectionDiagnostic -Event CollectionWarning -Stage $stage
         throw "Required CIM class '$ClassName' returned no instances."
     }
 
+    Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage $stage `
+        -RecordCount $result.Count
     return $result
 }
 
@@ -76,6 +147,8 @@ function Get-InventoryOptionalCimInstance {
         [string] $Namespace
     )
 
+    $stage = "Get-InventoryOptionalCimInstance.$ClassName"
+    Write-InventoryCollectionDiagnostic -Event CollectionStarted -Stage $stage
     try {
         if ([string]::IsNullOrWhiteSpace($Namespace)) {
             $result = @(Get-CimInstance -ClassName $ClassName -ErrorAction Stop)
@@ -85,14 +158,17 @@ function Get-InventoryOptionalCimInstance {
         }
     }
     catch {
-        Write-Warning "Optional CIM class '$ClassName' could not be queried: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "Optional CIM class '$ClassName' could not be queried: $($_.Exception.Message)" -Exception $_.Exception -Stage $stage
+        Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage $stage -RecordCount 0
         return @()
     }
 
     if ($result.Count -eq 0) {
-        Write-Warning "Optional CIM class '$ClassName' returned no instances."
+        Write-InventoryCollectionWarning "Optional CIM class '$ClassName' returned no instances." -Stage $stage
     }
 
+    Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage $stage `
+        -RecordCount $result.Count
     return $result
 }
 
@@ -109,7 +185,7 @@ function Get-InventoryRegistryValue {
     }
     catch {
         if ($Optional) {
-            Write-Warning "Optional registry value '$Path\$Name' is unavailable: $($_.Exception.Message)"
+            Write-InventoryCollectionWarning "Optional registry value '$Path\$Name' is unavailable: $($_.Exception.Message)" -Exception $_.Exception
             return $null
         }
         throw "Required registry value '$Path\$Name' is unavailable: $($_.Exception.Message)"
@@ -123,12 +199,12 @@ function Get-InventoryManagedDeviceInfo {
             Sort-Object -Property PSPath)
     }
     catch {
-        Write-Warning "Managed device information could not be read from the enrollment registry: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "Managed device information could not be read from the enrollment registry: $($_.Exception.Message)" -Exception $_.Exception
         return [pscustomobject]@{ ManagedDeviceName = $null; ManagedDeviceID = $null }
     }
 
     if ($keys.Count -eq 0) {
-        Write-Warning 'Managed device information is unavailable because no MS DM Server enrollment registry key was found.'
+        Write-InventoryCollectionWarning 'Managed device information is unavailable because no MS DM Server enrollment registry key was found.'
         return [pscustomobject]@{ ManagedDeviceName = $null; ManagedDeviceID = $null }
     }
 
@@ -139,28 +215,28 @@ function Get-InventoryManagedDeviceInfo {
             $enrollments.Add($item)
         }
         catch {
-            Write-Warning "An MS DM Server enrollment registry key could not be read: $($_.Exception.Message)"
+            Write-InventoryCollectionWarning "An MS DM Server enrollment registry key could not be read: $($_.Exception.Message)" -Exception $_.Exception
         }
     }
     if ($enrollments.Count -eq 0) {
-        Write-Warning 'Managed device information is unavailable because no enrollment registry entry could be read.'
+        Write-InventoryCollectionWarning 'Managed device information is unavailable because no enrollment registry entry could be read.'
         return [pscustomobject]@{ ManagedDeviceName = $null; ManagedDeviceID = $null }
     }
 
     if ($enrollments.Count -gt 1) {
-        Write-Warning 'Multiple MS DM Server enrollment registry entries were found; the first registry path is used.'
+        Write-InventoryCollectionWarning 'Multiple MS DM Server enrollment registry entries were found; the first registry path is used.'
     }
     $selected = $enrollments[0]
 
     $name = Get-InventoryPropertyValue -InputObject $selected -Name 'EntDeviceName'
     if ([string]::IsNullOrWhiteSpace([string] $name)) {
-        Write-Warning 'ManagedDeviceName is unavailable because EntDeviceName is missing from the enrollment registry.'
+        Write-InventoryCollectionWarning 'ManagedDeviceName is unavailable because EntDeviceName is missing from the enrollment registry.'
         $name = $null
     }
 
     $managedDeviceId = Get-InventoryPropertyValue -InputObject $selected -Name 'EntDMID'
     if ([string]::IsNullOrWhiteSpace([string] $managedDeviceId)) {
-        Write-Warning 'ManagedDeviceID is unavailable because EntDMID is missing from the enrollment registry.'
+        Write-InventoryCollectionWarning 'ManagedDeviceID is unavailable because EntDMID is missing from the enrollment registry.'
         $managedDeviceId = $null
     }
 
@@ -176,13 +252,13 @@ function Get-InventoryDefaultUpdateService {
         $service = @($manager.Services | Where-Object { $_.IsDefaultAUService -eq $true } |
             Select-Object -First 1)
         if ($service.Count -eq 0) {
-            Write-Warning 'The default Windows Update service could not be identified.'
+            Write-InventoryCollectionWarning 'The default Windows Update service could not be identified.'
             return $null
         }
         return ConvertTo-InventoryLegacyString (Get-InventoryPropertyValue -InputObject $service[0] -Name 'Name')
     }
     catch {
-        Write-Warning "The Windows Update service provider is unavailable: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "The Windows Update service provider is unavailable: $($_.Exception.Message)" -Exception $_.Exception
         return $null
     }
 }
@@ -193,7 +269,7 @@ function Get-InventoryWindowsVersion {
         $item = Get-ItemProperty -Path $path -ErrorAction Stop
     }
     catch {
-        Write-Warning "Windows version registry data is unavailable: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "Windows version registry data is unavailable: $($_.Exception.Message)" -Exception $_.Exception
         return $null
     }
 
@@ -207,7 +283,7 @@ function Get-InventoryWindowsVersion {
         return ConvertTo-InventoryLegacyString $releaseId
     }
 
-    Write-Warning 'WindowsVersion is unavailable because neither DisplayVersion nor ReleaseId exists.'
+    Write-InventoryCollectionWarning 'WindowsVersion is unavailable because neither DisplayVersion nor ReleaseId exists.'
     return $null
 }
 
@@ -229,13 +305,13 @@ function Get-InventoryTpmData {
     }
 
     if ($null -eq (Get-Command -Name Get-Tpm -ErrorAction SilentlyContinue)) {
-        Write-Warning 'TPM state is unavailable because Get-Tpm is not installed.'
+        Write-InventoryCollectionWarning 'TPM state is unavailable because Get-Tpm is not installed.'
     }
     else {
         try {
             $tpm = Get-Tpm -ErrorAction Stop
             if ($null -eq $tpm) {
-                Write-Warning 'TPM state is unavailable because Get-Tpm returned no data.'
+                Write-InventoryCollectionWarning 'TPM state is unavailable because Get-Tpm returned no data.'
             }
             else {
                 $result.TPMReady = ConvertTo-InventoryLegacyString (Get-InventoryPropertyValue $tpm 'TpmReady')
@@ -245,12 +321,12 @@ function Get-InventoryTpmData {
             }
         }
         catch {
-            Write-Warning "TPM state is unavailable: $($_.Exception.Message)"
+            Write-InventoryCollectionWarning "TPM state is unavailable: $($_.Exception.Message)" -Exception $_.Exception
         }
     }
 
     if ($null -eq (Get-Command -Name Get-TpmEndorsementKeyInfo -ErrorAction SilentlyContinue)) {
-        Write-Warning 'TPM endorsement certificate information is unavailable because Get-TpmEndorsementKeyInfo is not installed.'
+        Write-InventoryCollectionWarning 'TPM endorsement certificate information is unavailable because Get-TpmEndorsementKeyInfo is not installed.'
     }
     else {
         try {
@@ -263,11 +339,11 @@ function Get-InventoryTpmData {
                 $result.TPMThumbprint = $thumbprints -join ' '
             }
             else {
-                Write-Warning 'TPM endorsement certificate information returned no thumbprint.'
+                Write-InventoryCollectionWarning 'TPM endorsement certificate information returned no thumbprint.'
             }
         }
         catch {
-            Write-Warning "TPM endorsement certificate information is unavailable: $($_.Exception.Message)"
+            Write-InventoryCollectionWarning "TPM endorsement certificate information is unavailable: $($_.Exception.Message)" -Exception $_.Exception
         }
     }
 
@@ -326,7 +402,7 @@ function Get-InventoryBitLockerData {
     }
 
     if ([string]::IsNullOrWhiteSpace($env:SystemDrive)) {
-        Write-Warning 'BitLocker state is unavailable because SystemDrive is not defined.'
+        Write-InventoryCollectionWarning 'BitLocker state is unavailable because SystemDrive is not defined.'
         return [pscustomobject] $result
     }
 
@@ -336,16 +412,16 @@ function Get-InventoryBitLockerData {
                 -ClassName 'Win32_EncryptableVolume' -Filter "DriveLetter = '$escapedDrive'" -ErrorAction Stop)
     }
     catch {
-        Write-Warning "BitLocker status CIM data is unavailable: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "BitLocker status CIM data is unavailable: $($_.Exception.Message)" -Exception $_.Exception
         return [pscustomobject] $result
     }
 
     if ($volumes.Count -eq 0) {
-        Write-Warning "BitLocker status is unavailable because no Win32_EncryptableVolume was found for '$env:SystemDrive'."
+        Write-InventoryCollectionWarning "BitLocker status is unavailable because no Win32_EncryptableVolume was found for '$env:SystemDrive'."
         return [pscustomobject] $result
     }
     if ($volumes.Count -gt 1) {
-        Write-Warning "Multiple Win32_EncryptableVolume instances were found for '$env:SystemDrive'; the first is used."
+        Write-InventoryCollectionWarning "Multiple Win32_EncryptableVolume instances were found for '$env:SystemDrive'; the first is used."
     }
     $volume = $volumes[0]
 
@@ -353,7 +429,7 @@ function Get-InventoryBitLockerData {
         $methodResult = Invoke-CimMethod -InputObject $volume -MethodName 'GetEncryptionMethod' -ErrorAction Stop
         $returnValue = Get-InventoryPropertyValue $methodResult 'ReturnValue'
         if ($null -eq $returnValue -or [uint32] $returnValue -ne 0) {
-            Write-Warning "BitLocker GetEncryptionMethod returned failure code '$returnValue'."
+            Write-InventoryCollectionWarning "BitLocker GetEncryptionMethod returned failure code '$returnValue'."
         }
         else {
             $result.EncryptionMethod = ConvertFrom-InventoryBitLockerEncryptionMethod `
@@ -361,14 +437,14 @@ function Get-InventoryBitLockerData {
         }
     }
     catch {
-        Write-Warning "BitLocker GetEncryptionMethod failed: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "BitLocker GetEncryptionMethod failed: $($_.Exception.Message)" -Exception $_.Exception
     }
 
     try {
         $methodResult = Invoke-CimMethod -InputObject $volume -MethodName 'GetConversionStatus' -ErrorAction Stop
         $returnValue = Get-InventoryPropertyValue $methodResult 'ReturnValue'
         if ($null -eq $returnValue -or [uint32] $returnValue -ne 0) {
-            Write-Warning "BitLocker GetConversionStatus returned failure code '$returnValue'."
+            Write-InventoryCollectionWarning "BitLocker GetConversionStatus returned failure code '$returnValue'."
         }
         else {
             $result.VolumeStatus = ConvertFrom-InventoryBitLockerConversionStatus `
@@ -376,14 +452,14 @@ function Get-InventoryBitLockerData {
         }
     }
     catch {
-        Write-Warning "BitLocker GetConversionStatus failed: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "BitLocker GetConversionStatus failed: $($_.Exception.Message)" -Exception $_.Exception
     }
 
     try {
         $methodResult = Invoke-CimMethod -InputObject $volume -MethodName 'GetProtectionStatus' -ErrorAction Stop
         $returnValue = Get-InventoryPropertyValue $methodResult 'ReturnValue'
         if ($null -eq $returnValue -or [uint32] $returnValue -ne 0) {
-            Write-Warning "BitLocker GetProtectionStatus returned failure code '$returnValue'."
+            Write-InventoryCollectionWarning "BitLocker GetProtectionStatus returned failure code '$returnValue'."
         }
         else {
             $result.ProtectionStatus = ConvertFrom-InventoryBitLockerProtectionStatus `
@@ -391,7 +467,7 @@ function Get-InventoryBitLockerData {
         }
     }
     catch {
-        Write-Warning "BitLocker GetProtectionStatus failed: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "BitLocker GetProtectionStatus failed: $($_.Exception.Message)" -Exception $_.Exception
     }
 
     return [pscustomobject] $result
@@ -399,18 +475,18 @@ function Get-InventoryBitLockerData {
 
 function Get-InventoryNetworkAdapters {
     if ($null -eq (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
-        Write-Warning 'Network adapter inventory is unavailable because Get-NetAdapter is not installed.'
+        Write-InventoryCollectionWarning 'Network adapter inventory is unavailable because Get-NetAdapter is not installed.'
         return [object[]] @()
     }
     if ($null -eq (Get-Command -Name Get-NetIPConfiguration -ErrorAction SilentlyContinue)) {
-        Write-Warning 'Network IP configuration is unavailable because Get-NetIPConfiguration is not installed.'
+        Write-InventoryCollectionWarning 'Network IP configuration is unavailable because Get-NetIPConfiguration is not installed.'
     }
 
     try {
         $adapters = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })
     }
     catch {
-        Write-Warning "Network adapter inventory is unavailable: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "Network adapter inventory is unavailable: $($_.Exception.Message)" -Exception $_.Exception
         return [object[]] @()
     }
 
@@ -422,7 +498,7 @@ function Get-InventoryNetworkAdapters {
                 $configuration = Get-NetIPConfiguration -InterfaceIndex $adapter.IfIndex -ErrorAction Stop
             }
             catch {
-                Write-Warning "IP configuration for network adapter '$($adapter.InterfaceAlias)' is unavailable: $($_.Exception.Message)"
+                Write-InventoryCollectionWarning "IP configuration for network adapter '$($adapter.InterfaceAlias)' is unavailable: $($_.Exception.Message)" -Exception $_.Exception
             }
         }
 
@@ -444,11 +520,11 @@ function Get-InventoryNetworkAdapters {
 
 function Get-InventoryDiskHealth {
     if ($null -eq (Get-Command -Name Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
-        Write-Warning 'Disk health inventory is unavailable because Get-PhysicalDisk is not installed.'
+        Write-InventoryCollectionWarning 'Disk health inventory is unavailable because Get-PhysicalDisk is not installed.'
         return [object[]] @()
     }
     if ($null -eq (Get-Command -Name Get-StorageReliabilityCounter -ErrorAction SilentlyContinue)) {
-        Write-Warning 'Disk reliability counters are unavailable because Get-StorageReliabilityCounter is not installed.'
+        Write-InventoryCollectionWarning 'Disk reliability counters are unavailable because Get-StorageReliabilityCounter is not installed.'
     }
 
     try {
@@ -457,7 +533,7 @@ function Get-InventoryDiskHealth {
             Sort-Object -Property DeviceID)
     }
     catch {
-        Write-Warning "Disk health inventory is unavailable: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "Disk health inventory is unavailable: $($_.Exception.Message)" -Exception $_.Exception
         return [object[]] @()
     }
 
@@ -469,7 +545,7 @@ function Get-InventoryDiskHealth {
                 $health = Get-StorageReliabilityCounter -PhysicalDisk $disk -ErrorAction Stop
             }
             catch {
-                Write-Warning "Reliability counters for disk '$($disk.DeviceID)' are unavailable: $($_.Exception.Message)"
+                Write-InventoryCollectionWarning "Reliability counters for disk '$($disk.DeviceID)' are unavailable: $($_.Exception.Message)" -Exception $_.Exception
             }
         }
 
@@ -513,7 +589,7 @@ function Get-InventoryInteractiveUserSid {
         return $sid.Value
     }
     catch {
-        Write-Warning "The interactive user SID for '$UserName' could not be resolved: $($_.Exception.Message)"
+        Write-InventoryCollectionWarning "The interactive user SID for '$UserName' could not be resolved: $($_.Exception.Message)" -Exception $_.Exception
         return $null
     }
 }
@@ -539,7 +615,7 @@ function Get-InventoryInstalledApplications {
                     $hkuAvailable = $true
                 }
                 catch {
-                    Write-Warning "Interactive-user application inventory is unavailable because the HKU drive could not be created: $($_.Exception.Message)"
+                    Write-InventoryCollectionWarning "Interactive-user application inventory is unavailable because the HKU drive could not be created: $($_.Exception.Message)" -Exception $_.Exception
                 }
             }
 
@@ -559,7 +635,7 @@ function Get-InventoryInstalledApplications {
                 $items = @(Get-ItemProperty -Path $path -ErrorAction Stop)
             }
             catch {
-                Write-Warning "Application registry path '$path' is unavailable: $($_.Exception.Message)"
+                Write-InventoryCollectionWarning "Application registry path '$path' is unavailable: $($_.Exception.Message)" -Exception $_.Exception
                 continue
             }
 
@@ -665,7 +741,7 @@ function Get-InventoryDeviceRecord {
                         $biosVersion = $parsedBios.ToString()
                     }
                     else {
-                        Write-Warning "HP BIOS version '$biosVersion' could not be normalized; the original value is retained."
+                        Write-InventoryCollectionWarning "HP BIOS version '$biosVersion' could not be normalized; the original value is retained."
                     }
                 }
             }
@@ -730,7 +806,7 @@ function Get-InventoryDeviceRecord {
         $uptime = [int] (New-TimeSpan -Start $lastBoot -End $CollectedAt).Days
     }
     else {
-        Write-Warning 'ComputerUpTime is unavailable because LastBootUpTime is missing.'
+        Write-InventoryCollectionWarning 'ComputerUpTime is unavailable because LastBootUpTime is missing.'
     }
 
     $memory = Get-InventoryPropertyValue $ComputerInfo 'TotalPhysicalMemory'
@@ -738,7 +814,7 @@ function Get-InventoryDeviceRecord {
         $memory = [Math]::Round(([double] $memory / 1GB))
     }
     else {
-        Write-Warning 'Memory is unavailable because TotalPhysicalMemory is missing.'
+        Write-InventoryCollectionWarning 'Memory is unavailable because TotalPhysicalMemory is missing.'
     }
 
     $processorManufacturers = @($processors | ForEach-Object {
@@ -858,41 +934,73 @@ function Assert-InventoryIdentity {
 }
 
 function Get-Inventory {
+    <#
+    .PARAMETER DiagnosticSink
+    Optional synchronous callback invoked as & $DiagnosticSink $Event $Data.
+    Receives only collection stage identifiers, source lines, exception types/codes,
+    and record counts. Callback output is discarded and callback failures propagate.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [object] $Identity,
         [bool] $CollectDeviceInventory = $true,
-        [bool] $CollectAppInventory = $true
+        [bool] $CollectAppInventory = $true,
+        [scriptblock] $DiagnosticSink
     )
 
-    Assert-InventoryIdentity -Identity $Identity
-    $deviceRecords = New-Object 'System.Collections.Generic.List[object]'
-    $appRecords = New-Object 'System.Collections.Generic.List[object]'
+    $previousContext = Get-Variable -Name InventoryDiagnosticContext -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $script:InventoryDiagnosticContext = [pscustomobject]@{ Sink = $DiagnosticSink; Failure = $null }
+    try {
+        Write-InventoryCollectionDiagnostic -Event CollectionStarted -Stage 'Get-Inventory'
+        Write-InventoryCollectionDiagnostic -Event CollectionStarted -Stage 'Assert-InventoryIdentity'
+        Assert-InventoryIdentity -Identity $Identity
+        Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage 'Assert-InventoryIdentity'
+        $deviceRecords = New-Object 'System.Collections.Generic.List[object]'
+        $appRecords = New-Object 'System.Collections.Generic.List[object]'
 
-    if ($CollectDeviceInventory -or $CollectAppInventory) {
-        $computerInfo = @(Get-InventoryRequiredCimInstance -ClassName 'Win32_ComputerSystem')[0]
-        if ([string]::IsNullOrWhiteSpace([string] (Get-InventoryPropertyValue $computerInfo 'Name'))) {
-            throw "Required CIM class 'Win32_ComputerSystem' did not provide Name."
-        }
-        $managedDeviceInfo = Get-InventoryManagedDeviceInfo
+        if ($CollectDeviceInventory -or $CollectAppInventory) {
+            $computerInfo = @(Get-InventoryRequiredCimInstance -ClassName 'Win32_ComputerSystem')[0]
+            if ([string]::IsNullOrWhiteSpace([string] (Get-InventoryPropertyValue $computerInfo 'Name'))) {
+                throw "Required CIM class 'Win32_ComputerSystem' did not provide Name."
+            }
+            Write-InventoryCollectionDiagnostic -Event CollectionStarted -Stage 'Get-InventoryManagedDeviceInfo'
+            $managedDeviceInfo = Get-InventoryManagedDeviceInfo
+            Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage 'Get-InventoryManagedDeviceInfo'
 
-        if ($CollectDeviceInventory) {
-            $deviceRecords.Add((Get-InventoryDeviceRecord -Identity $Identity -ComputerInfo $computerInfo `
-                    -ManagedDeviceName $managedDeviceInfo.ManagedDeviceName `
-                    -ManagedDeviceId $managedDeviceInfo.ManagedDeviceID -CollectedAt (Get-Date)))
-        }
-        if ($CollectAppInventory) {
-            foreach ($record in @(Get-InventoryAppRecords -ComputerInfo $computerInfo `
+            if ($CollectDeviceInventory) {
+                Write-InventoryCollectionDiagnostic -Event CollectionStarted -Stage 'Get-InventoryDeviceRecord'
+                $deviceRecords.Add((Get-InventoryDeviceRecord -Identity $Identity -ComputerInfo $computerInfo `
                         -ManagedDeviceName $managedDeviceInfo.ManagedDeviceName `
-                        -ManagedDeviceId $managedDeviceInfo.ManagedDeviceID)) {
-                $appRecords.Add($record)
+                        -ManagedDeviceId $managedDeviceInfo.ManagedDeviceID -CollectedAt (Get-Date)))
+                Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage 'Get-InventoryDeviceRecord' `
+                    -RecordCount $deviceRecords.Count
+            }
+            if ($CollectAppInventory) {
+                Write-InventoryCollectionDiagnostic -Event CollectionStarted -Stage 'Get-InventoryAppRecords'
+                foreach ($record in @(Get-InventoryAppRecords -ComputerInfo $computerInfo `
+                            -ManagedDeviceName $managedDeviceInfo.ManagedDeviceName `
+                            -ManagedDeviceId $managedDeviceInfo.ManagedDeviceID)) {
+                    $appRecords.Add($record)
+                }
+                Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage 'Get-InventoryAppRecords' `
+                    -RecordCount $appRecords.Count
             }
         }
-    }
 
-    return [pscustomobject]@{
-        DeviceRecords = [object[]] $deviceRecords.ToArray()
-        AppRecords = [object[]] $appRecords.ToArray()
+        Write-InventoryCollectionDiagnostic -Event CollectionCompleted -Stage 'Get-Inventory' `
+            -DeviceRecords $deviceRecords.Count -AppRecords $appRecords.Count
+        return [pscustomobject]@{
+            DeviceRecords = [object[]] $deviceRecords.ToArray()
+            AppRecords = [object[]] $appRecords.ToArray()
+        }
+    }
+    finally {
+        if ($null -eq $previousContext) {
+            Remove-Variable -Name InventoryDiagnosticContext -Scope Script
+        }
+        else {
+            $script:InventoryDiagnosticContext = $previousContext
+        }
     }
 }
 

@@ -24,7 +24,7 @@ BeforeAll {
 
 AfterAll {
     Remove-Variable -Name InventoryDetectionTestTasks -Scope Global -ErrorAction SilentlyContinue
-    foreach ($name in @('Inventory.Runtime', 'Inventory.Collection', 'LogCollector.Client',
+    foreach ($name in @('Inventory.Runtime', 'Inventory.Collection', 'Inventory.Logging', 'LogCollector.Client',
         'InventoryClient', 'InventorySpool', 'DeviceIdentity', 'RequestSigning')) {
         Get-Module -All -Name $name | Remove-Module -Force -ErrorAction Stop
     }
@@ -82,7 +82,7 @@ Describe 'Configuration-aware inventory detection' {
     }
 
     It 'rejects a missing installed configuration or runtime file' -ForEach @(
-        @{ MissingFile = 'Config.psd1' }, @{ MissingFile = 'Inventory.Runtime.psm1' }
+        @{ MissingFile = 'Config.psd1' }, @{ MissingFile = 'Inventory.Runtime.psm1' }, @{ MissingFile = 'Inventory.Logging.psm1' }
     ) {
         $path = Join-Path $script:Installed $MissingFile
         Remove-Item -LiteralPath $path

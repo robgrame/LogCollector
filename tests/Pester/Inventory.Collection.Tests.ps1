@@ -78,6 +78,394 @@ Import-Module '$escapedPath' -Force -ErrorAction Stop
     }
 }
 
+Describe 'optional collection diagnostics' {
+    BeforeEach {
+        $script:DiagnosticEvents = New-Object 'System.Collections.Generic.List[object]'
+        $events = $script:DiagnosticEvents
+        $script:DiagnosticSink = {
+            param($Event, $Data)
+            $events.Add([pscustomobject]@{ Event = $Event; Data = $Data })
+            'callback output must not become inventory'
+        }.GetNewClosure()
+
+        Mock -ModuleName Inventory.Collection Get-CimInstance {
+            [pscustomobject]@{ Name = 'PRIVATE-SENTINEL'; UserName = 'PRIVATE-SENTINEL' }
+        }
+        Mock -ModuleName Inventory.Collection Get-ChildItem { @() }
+        Mock -ModuleName Inventory.Collection Get-ItemProperty { throw 'Unexpected registry read.' }
+        Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+            [pscustomobject]@{ ComputerName = 'PRIVATE-SENTINEL' }
+        }
+        Mock -ModuleName Inventory.Collection Get-InventoryAppRecords {
+            [pscustomobject]@{ AppName = 'PRIVATE-SENTINEL' }
+            [pscustomobject]@{ AppName = 'PRIVATE-SENTINEL-2' }
+        }
+    }
+
+    AfterEach {
+        $module = Get-Module Inventory.Collection
+        (& $module {
+            Get-Variable -Name InventoryDiagnosticContext -Scope Script -ErrorAction SilentlyContinue
+        }) | Should -BeNullOrEmpty
+    }
+
+    It 'adds only an optional scriptblock parameter to the exported API' {
+        $parameter = (Get-Command Get-Inventory).Parameters['DiagnosticSink']
+        $parameter.ParameterType | Should -Be ([scriptblock])
+        $parameter.Attributes.Mandatory | Should -Not -Contain $true
+        @(Get-Command -Module Inventory.Collection).Name | Should -Be @('Get-Inventory')
+    }
+
+    It 'preserves records and console warnings with no sink or an explicit null sink' {
+        $without = Get-Inventory -Identity $script:Identity -WarningAction SilentlyContinue -WarningVariable withoutWarnings
+        $withNull = Get-Inventory -Identity $script:Identity -DiagnosticSink $null `
+            -WarningAction SilentlyContinue -WarningVariable nullWarnings
+        ($without | ConvertTo-Json -Depth 5) | Should -BeExactly ($withNull | ConvertTo-Json -Depth 5)
+        [string] $withoutWarnings[0] | Should -BeExactly ([string] $nullWarnings[0])
+        $script:DiagnosticEvents.Count | Should -Be 0
+    }
+
+    It 'emits useful stages and typed counts without leaking payloads or callback output' {
+        $output = @(Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink `
+            -WarningAction SilentlyContinue)
+        $output.Count | Should -Be 1
+        $output[0].DeviceRecords.Count | Should -Be 1
+        $output[0].AppRecords.Count | Should -Be 2
+        $output[0].AppRecords[0].AppName | Should -BeExactly 'PRIVATE-SENTINEL'
+
+        foreach ($stage in @('Get-Inventory', 'Assert-InventoryIdentity',
+                'Get-InventoryRequiredCimInstance.Win32_ComputerSystem', 'Get-InventoryManagedDeviceInfo',
+                'Get-InventoryDeviceRecord', 'Get-InventoryAppRecords')) {
+            @($script:DiagnosticEvents | Where-Object {
+                $_.Data.Stage -eq $stage -and $_.Event -eq 'CollectionStarted'
+            }).Count | Should -Be 1
+            @($script:DiagnosticEvents | Where-Object {
+                $_.Data.Stage -eq $stage -and $_.Event -eq 'CollectionCompleted'
+            }).Count | Should -Be 1
+        }
+        $script:DiagnosticEvents[-1].Data.DeviceRecords | Should -Be 1
+        $script:DiagnosticEvents[-1].Data.AppRecords | Should -Be 2
+        ($script:DiagnosticEvents | Where-Object {
+            $_.Event -eq 'CollectionCompleted' -and $_.Data.Stage -eq 'Get-InventoryAppRecords'
+        }).Data.RecordCount | Should -Be 2
+        foreach ($entry in $script:DiagnosticEvents) {
+            foreach ($key in $entry.Data.Keys) {
+                $key | Should -BeIn @('Stage', 'SourceLine', 'ExceptionType', 'HResult',
+                    'RecordCount', 'DeviceRecords', 'AppRecords')
+                if ($key -in @('Stage', 'ExceptionType')) {
+                    $entry.Data[$key] | Should -BeOfType ([string])
+                }
+                else {
+                    $entry.Data[$key] | Should -BeOfType ([int])
+                }
+            }
+            $entry.Data.SourceLine | Should -BeGreaterThan 0
+        }
+        ($script:DiagnosticEvents | ConvertTo-Json -Depth 5) | Should -Not -Match 'PRIVATE-SENTINEL|IDENTITY-NAME'
+    }
+
+    It 'reports disabled collection as zero counts without touching providers' {
+        $null = Get-Inventory -Identity $script:Identity -CollectDeviceInventory $false `
+            -CollectAppInventory $false -DiagnosticSink $script:DiagnosticSink
+        $script:DiagnosticEvents[-1].Data.DeviceRecords | Should -Be 0
+        $script:DiagnosticEvents[-1].Data.AppRecords | Should -Be 0
+        Should -Invoke -ModuleName Inventory.Collection Get-CimInstance -Times 0 -Exactly
+        Should -Invoke -ModuleName Inventory.Collection Get-ChildItem -Times 0 -Exactly
+    }
+
+    It 'keeps exception messages on the console and emits only safe exception metadata' {
+        Mock -ModuleName Inventory.Collection Get-ChildItem {
+            throw [System.InvalidOperationException]::new('PRIVATE-SENTINEL')
+        }
+        $null = Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink `
+            -WarningAction SilentlyContinue -WarningVariable warnings
+        [string] $warnings[0] | Should -BeExactly 'Managed device information could not be read from the enrollment registry: PRIVATE-SENTINEL'
+        $warning = @($script:DiagnosticEvents | Where-Object Event -eq CollectionWarning)
+        $warning.Count | Should -Be 1
+        $warning[0].Data.Stage | Should -BeExactly 'Get-InventoryManagedDeviceInfo'
+        $warning[0].Data.ExceptionType | Should -BeExactly 'System.InvalidOperationException'
+        $warning[0].Data.HResult | Should -Be ([System.InvalidOperationException]::new().HResult)
+        @($warning[0].Data.Keys).Count | Should -Be 4
+        ($script:DiagnosticEvents | ConvertTo-Json -Depth 5) | Should -Not -Match 'PRIVATE-SENTINEL|Message'
+    }
+
+    It 'identifies a data-dependent warning without logging its private registry path' {
+        Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+            $null = & (Get-Module Inventory.Collection) {
+                Get-InventoryRegistryValue -Path 'HKLM:\PRIVATE-SENTINEL' -Name 'PRIVATE-SENTINEL' -Optional
+            }
+            [pscustomobject]@{ ComputerName = 'PRIVATE-SENTINEL' }
+        }
+        Mock -ModuleName Inventory.Collection Get-ItemProperty {
+            throw [System.InvalidOperationException]::new('PRIVATE-SENTINEL')
+        }
+        $null = Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink `
+            -WarningAction SilentlyContinue -WarningVariable warnings
+        ($warnings -join "`n") | Should -Match 'HKLM:\\PRIVATE-SENTINEL\\PRIVATE-SENTINEL'
+        @($script:DiagnosticEvents | Where-Object {
+            $_.Event -eq 'CollectionWarning' -and $_.Data.Stage -eq 'Get-InventoryRegistryValue'
+        }).Count | Should -Be 1
+        ($script:DiagnosticEvents | ConvertTo-Json -Depth 5) | Should -Not -Match 'PRIVATE-SENTINEL'
+    }
+
+    It 'reports optional CIM stage completion with zero records on provider failure' {
+        Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+            $null = & (Get-Module Inventory.Collection) {
+                Get-InventoryOptionalCimInstance -ClassName 'MS_SystemInformation'
+            }
+            [pscustomobject]@{ ComputerName = 'PRIVATE-SENTINEL' }
+        }
+        Mock -ModuleName Inventory.Collection Get-CimInstance {
+            throw [System.InvalidOperationException]::new('PRIVATE-SENTINEL')
+        } -ParameterFilter { $ClassName -eq 'MS_SystemInformation' }
+        $null = Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink `
+            -WarningAction SilentlyContinue
+        $optional = @($script:DiagnosticEvents | Where-Object {
+            $_.Data.Stage -eq 'Get-InventoryOptionalCimInstance.MS_SystemInformation'
+        })
+        $optional.Event | Should -Be @('CollectionStarted', 'CollectionWarning', 'CollectionCompleted')
+        $optional[-1].Data.RecordCount | Should -Be 0
+        ($script:DiagnosticEvents | ConvertTo-Json -Depth 5) | Should -Not -Match 'PRIVATE-SENTINEL'
+    }
+
+    It 'preserves required provider failure and logs its original type and code without console warnings' {
+        Mock -ModuleName Inventory.Collection Write-Warning {}
+        Mock -ModuleName Inventory.Collection Get-CimInstance {
+            throw [System.Runtime.InteropServices.ExternalException]::new('PRIVATE-SENTINEL', -2147024891)
+        }
+        { Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink } |
+            Should -Throw "*Required CIM class 'Win32_ComputerSystem' could not be queried: PRIVATE-SENTINEL*"
+        Should -Invoke -ModuleName Inventory.Collection Write-Warning -Times 0 -Exactly
+        $warning = @($script:DiagnosticEvents | Where-Object Event -eq CollectionWarning)
+        $warning.Count | Should -Be 1
+        $warning[0].Data.Stage | Should -BeExactly 'Get-InventoryRequiredCimInstance.Win32_ComputerSystem'
+        $warning[0].Data.ExceptionType | Should -BeExactly 'System.Runtime.InteropServices.ExternalException'
+        $warning[0].Data.HResult | Should -Be (-2147024891)
+        $warning[0].Data.HResult | Should -BeOfType ([int])
+        $warning[0].Data.SourceLine | Should -BeGreaterThan 0
+        @($warning[0].Data.Keys | Sort-Object) | Should -Be @('ExceptionType', 'HResult', 'SourceLine', 'Stage')
+        @($script:DiagnosticEvents | Where-Object {
+            $_.Event -eq 'CollectionCompleted' -and $_.Data.Stage -eq 'Get-Inventory'
+        }).Count | Should -Be 0
+        ($script:DiagnosticEvents | ConvertTo-Json -Depth 5) | Should -Not -Match 'PRIVATE-SENTINEL|Message'
+    }
+
+    It 'distinguishes fixed required and optional CIM class stages on successful collection' {
+        Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+            $null = & (Get-Module Inventory.Collection) {
+                foreach ($className in @('Win32_OperatingSystem', 'Win32_BIOS',
+                        'Win32_ComputerSystemProduct', 'Win32_Processor')) {
+                    Get-InventoryRequiredCimInstance -ClassName $className
+                }
+                Get-InventoryOptionalCimInstance -ClassName 'MS_SystemInformation' -Namespace 'root\WMI'
+            }
+            [pscustomobject]@{ ComputerName = 'PRIVATE-SENTINEL' }
+        }
+        $null = Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink `
+            -WarningAction SilentlyContinue
+        $cimEvents = @($script:DiagnosticEvents | Where-Object { $_.Data.Stage -like '*CimInstance.*' })
+        $cimEvents.Count | Should -Be 12
+        foreach ($stage in @('Get-InventoryRequiredCimInstance.Win32_ComputerSystem',
+                'Get-InventoryRequiredCimInstance.Win32_OperatingSystem',
+                'Get-InventoryRequiredCimInstance.Win32_BIOS',
+                'Get-InventoryRequiredCimInstance.Win32_ComputerSystemProduct',
+                'Get-InventoryRequiredCimInstance.Win32_Processor',
+                'Get-InventoryOptionalCimInstance.MS_SystemInformation')) {
+            $pair = @($cimEvents | Where-Object { $_.Data.Stage -eq $stage })
+            $pair.Event | Should -Be @('CollectionStarted', 'CollectionCompleted')
+            $pair[-1].Data.RecordCount | Should -Be 1
+        }
+        ($cimEvents | ConvertTo-Json -Depth 5) | Should -Not -Match 'PRIVATE-SENTINEL|Message'
+    }
+
+    It 'qualifies empty optional CIM warnings without changing console text' {
+        Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+            $null = & (Get-Module Inventory.Collection) {
+                Get-InventoryOptionalCimInstance -ClassName 'MS_SystemInformation'
+            }
+            [pscustomobject]@{ ComputerName = 'PRIVATE-SENTINEL' }
+        }
+        Mock -ModuleName Inventory.Collection Get-CimInstance { @() } `
+            -ParameterFilter { $ClassName -eq 'MS_SystemInformation' }
+        $null = Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink `
+            -WarningAction SilentlyContinue -WarningVariable warnings
+        [string] $warnings[-1] | Should -BeExactly "Optional CIM class 'MS_SystemInformation' returned no instances."
+        $optional = @($script:DiagnosticEvents | Where-Object {
+            $_.Data.Stage -eq 'Get-InventoryOptionalCimInstance.MS_SystemInformation'
+        })
+        $optional.Event | Should -Be @('CollectionStarted', 'CollectionWarning', 'CollectionCompleted')
+        @($optional[1].Data.Keys | Sort-Object) | Should -Be @('SourceLine', 'Stage')
+        $optional[-1].Data.RecordCount | Should -Be 0
+    }
+
+    It 'preserves the required empty-result throw without adding console warnings' {
+        Mock -ModuleName Inventory.Collection Write-Warning {}
+        Mock -ModuleName Inventory.Collection Get-CimInstance { @() }
+        { Get-Inventory -Identity $script:Identity -DiagnosticSink $script:DiagnosticSink } |
+            Should -Throw "*Required CIM class 'Win32_ComputerSystem' returned no instances.*"
+        Should -Invoke -ModuleName Inventory.Collection Write-Warning -Times 0 -Exactly
+        $warning = @($script:DiagnosticEvents | Where-Object Event -eq CollectionWarning)
+        $warning.Count | Should -Be 1
+        $warning[0].Data.Stage | Should -BeExactly 'Get-InventoryRequiredCimInstance.Win32_ComputerSystem'
+        @($warning[0].Data.Keys | Sort-Object) | Should -Be @('SourceLine', 'Stage')
+    }
+
+    It 'propagates a required CIM warning callback failure instead of wrapping it as a provider error' {
+        Mock -ModuleName Inventory.Collection Write-Warning {}
+        Mock -ModuleName Inventory.Collection Get-CimInstance { throw 'PRIVATE-SENTINEL' }
+        $sink = {
+            param($Event, $Data)
+            if ($Event -eq 'CollectionWarning') { throw 'diagnostic callback failed' }
+        }
+        { Get-Inventory -Identity $script:Identity -DiagnosticSink $sink } |
+            Should -Throw -ExpectedMessage 'diagnostic callback failed'
+        Should -Invoke -ModuleName Inventory.Collection Write-Warning -Times 0 -Exactly
+    }
+
+    It 'propagates an optional CIM warning callback failure rather than completing the stage' {
+        Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+            $null = & (Get-Module Inventory.Collection) {
+                Get-InventoryOptionalCimInstance -ClassName 'MS_SystemInformation'
+            }
+            [pscustomobject]@{ ComputerName = 'PRIVATE-SENTINEL' }
+        }
+        Mock -ModuleName Inventory.Collection Get-CimInstance { throw 'PRIVATE-SENTINEL' } `
+            -ParameterFilter { $ClassName -eq 'MS_SystemInformation' }
+        $events = $script:DiagnosticEvents
+        $sink = {
+            param($Event, $Data)
+            $events.Add([pscustomobject]@{ Event = $Event; Data = $Data })
+            if ($Event -eq 'CollectionWarning' -and
+                $Data.Stage -eq 'Get-InventoryOptionalCimInstance.MS_SystemInformation') {
+                throw 'diagnostic callback failed'
+            }
+        }.GetNewClosure()
+        { Get-Inventory -Identity $script:Identity -DiagnosticSink $sink -WarningAction SilentlyContinue } |
+            Should -Throw -ExpectedMessage 'diagnostic callback failed'
+        $events[-1].Event | Should -BeExactly 'CollectionWarning'
+        $events[-1].Data.Stage | Should -BeExactly 'Get-InventoryOptionalCimInstance.MS_SystemInformation'
+        ($events | ConvertTo-Json -Depth 5) | Should -Not -Match 'PRIVATE-SENTINEL|Message'
+    }
+
+    It 'restores the sink after identity validation fails' {
+        { Get-Inventory -Identity ([pscustomobject]@{}) -DiagnosticSink $script:DiagnosticSink } |
+            Should -Throw '*Identity must contain*'
+    }
+
+    It 'propagates callback failure on <FailureEvent> and does not retain the sink' -ForEach @(
+        @{ FailureEvent = 'CollectionStarted' }
+        @{ FailureEvent = 'CollectionCompleted' }
+        @{ FailureEvent = 'CollectionWarning' }
+    ) {
+        $sink = {
+            param($Event, $Data)
+            if ($Event -eq $FailureEvent) { throw 'diagnostic callback failed' }
+        }.GetNewClosure()
+        { Get-Inventory -Identity $script:Identity -DiagnosticSink $sink -WarningAction SilentlyContinue } |
+            Should -Throw '*diagnostic callback failed*'
+        $result = Get-Inventory -Identity $script:Identity -WarningAction SilentlyContinue
+        $result.AppRecords.Count | Should -Be 2
+    }
+
+    It 'does not downgrade callback failures caught inside the <Provider> provider' -ForEach @(
+        @{ Provider = 'Update' }
+        @{ Provider = 'Tpm' }
+        @{ Provider = 'Endorsement' }
+        @{ Provider = 'BitLockerEncryption' }
+        @{ Provider = 'BitLockerConversion' }
+        @{ Provider = 'BitLockerProtection' }
+    ) {
+        Mock -ModuleName Inventory.Collection Get-InventoryManagedDeviceInfo {
+            [pscustomobject]@{ ManagedDeviceName = $null; ManagedDeviceID = $null }
+        }
+        Mock -ModuleName Inventory.Collection Get-Command {
+            [pscustomobject]@{ Name = $Name }
+        } -ParameterFilter { $Name -in @('Get-Tpm', 'Get-TpmEndorsementKeyInfo') }
+        Mock -ModuleName Inventory.Collection Get-Tpm { $null }
+        Mock -ModuleName Inventory.Collection Get-TpmEndorsementKeyInfo {
+            [pscustomobject]@{ AdditionalCertificates = @() }
+        }
+        Mock -ModuleName Inventory.Collection New-Object {
+            [pscustomobject]@{ Services = @() }
+        } -ParameterFilter { $ComObject -eq 'Microsoft.Update.ServiceManager' }
+        Mock -ModuleName Inventory.Collection Get-CimInstance {
+            New-CimInstance -Namespace 'root\cimv2\Security\MicrosoftVolumeEncryption' `
+                -ClassName 'Win32_EncryptableVolume' -ClientOnly -Property @{ DriveLetter = 'C:' }
+        } -ParameterFilter { $ClassName -eq 'Win32_EncryptableVolume' }
+        Mock -ModuleName Inventory.Collection Invoke-CimMethod {
+            [pscustomobject]@{ ReturnValue = 5 }
+        }
+        switch ($Provider) {
+            'Update' {
+                Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+                    & (Get-Module Inventory.Collection) { Get-InventoryDefaultUpdateService }
+                }
+            }
+            'Tpm' {
+                Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+                    & (Get-Module Inventory.Collection) { Get-InventoryTpmData }
+                }
+            }
+            'Endorsement' {
+                Mock -ModuleName Inventory.Collection Get-Tpm { [pscustomobject]@{ TpmReady = $true } }
+                Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+                    & (Get-Module Inventory.Collection) { Get-InventoryTpmData }
+                }
+            }
+            default {
+                Mock -ModuleName Inventory.Collection Get-InventoryDeviceRecord {
+                    & (Get-Module Inventory.Collection) { Get-InventoryBitLockerData }
+                }
+                if ($Provider -ne 'BitLockerEncryption') {
+                    Mock -ModuleName Inventory.Collection Invoke-CimMethod {
+                        [pscustomobject]@{ ReturnValue = 0; EncryptionMethod = 7 }
+                    } -ParameterFilter { $MethodName -eq 'GetEncryptionMethod' }
+                }
+                if ($Provider -eq 'BitLockerProtection') {
+                    Mock -ModuleName Inventory.Collection Invoke-CimMethod {
+                        [pscustomobject]@{ ReturnValue = 0; ConversionStatus = 1 }
+                    } -ParameterFilter { $MethodName -eq 'GetConversionStatus' }
+                }
+            }
+        }
+        $events = $script:DiagnosticEvents
+        $sink = {
+            param($Event, $Data)
+            if ($Event -eq 'CollectionWarning') {
+                $events.Add($Data)
+                throw [System.InvalidOperationException]::new('diagnostic callback failed')
+            }
+        }.GetNewClosure()
+        { Get-Inventory -Identity $script:Identity -DiagnosticSink $sink -WarningAction SilentlyContinue `
+                -WarningVariable warnings } | Should -Throw '*diagnostic callback failed*'
+        $events.Count | Should -Be 1
+        @($warnings).Count | Should -Be 1
+    }
+
+    It 'restores an outer sink after a nested no-sink call and a nested failing callback' {
+        $events = $script:DiagnosticEvents
+        $identity = $script:Identity
+        $sink = {
+            param($Event, $Data)
+            $events.Add([pscustomobject]@{ Event = $Event; Data = $Data })
+            if ($Event -eq 'CollectionStarted' -and $Data.Stage -eq 'Get-Inventory') {
+                $null = Get-Inventory -Identity $identity -CollectDeviceInventory $false -CollectAppInventory $false
+                try {
+                    $null = Get-Inventory -Identity $identity -CollectDeviceInventory $false -CollectAppInventory $false `
+                        -DiagnosticSink { throw 'nested callback failed' }
+                }
+                catch {
+                    if ($_.Exception.Message -ne 'nested callback failed') { throw }
+                }
+            }
+        }.GetNewClosure()
+        $null = Get-Inventory -Identity $script:Identity -DiagnosticSink $sink `
+            -CollectDeviceInventory $false -CollectAppInventory $false
+        $events.Event | Should -Be @('CollectionStarted', 'CollectionStarted', 'CollectionCompleted', 'CollectionCompleted')
+        $events[-1].Data.Stage | Should -BeExactly 'Get-Inventory'
+    }
+}
+
 Describe 'legacy device inventory contract' {
     BeforeEach {
         Mock -ModuleName Inventory.Collection Get-InventoryManagedDeviceInfo {

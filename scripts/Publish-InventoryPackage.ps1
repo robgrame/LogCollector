@@ -3,7 +3,7 @@
 .SYNOPSIS
 Creates a customer-neutral inventory folder with the shared client and deployment configuration.
 .NOTES
-Version 1.3.4. No customer source, device inventory, certificates or Azure credentials are read.
+Version 1.4.5. No customer source, device inventory, certificates or Azure credentials are read.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
 param(
@@ -51,7 +51,7 @@ foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediate
     }
 }
 $target = Join-Path $OutputRoot $config.PackageVersion
-$files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1',
+$files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
     'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
 $client = Join-Path $repo 'src\Client'
 Import-Module (Join-Path $client 'LogCollector.Client.psd1') -ErrorAction Stop

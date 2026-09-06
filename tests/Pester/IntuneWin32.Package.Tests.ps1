@@ -8,7 +8,7 @@ BeforeAll {
 }
 
 AfterAll {
-    foreach ($name in @('Inventory.Runtime', 'Inventory.Collection', 'LogCollector.Client',
+    foreach ($name in @('Inventory.Runtime', 'Inventory.Collection', 'Inventory.Logging', 'LogCollector.Client',
         'InventoryClient', 'InventorySpool', 'DeviceIdentity', 'RequestSigning')) {
         Get-Module -All -Name $name | Remove-Module -Force -ErrorAction Stop
     }
@@ -32,7 +32,7 @@ Describe 'Intune Win32 package generation' {
         $result.SubmissionEnabled | Should -BeFalse
         $result.PackageSha256 | Should -Match '^[0-9A-F]{64}$'
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.SourcePath 'Config.psd1')).Hash
-        @(Get-ChildItem -LiteralPath $result.SourcePath -Recurse -File).Count | Should -Be 15
+        @(Get-ChildItem -LiteralPath $result.SourcePath -Recurse -File).Count | Should -Be 16
         (Get-FileHash $result.DetectionScript).Hash |
             Should -BeExactly (Get-FileHash (Join-Path $result.SourcePath 'Detect.ps1')).Hash
         Test-Path -LiteralPath $result.DeploymentGuide | Should -BeTrue
@@ -64,7 +64,7 @@ Describe 'Intune Win32 package generation' {
         (Get-Content $result.DetectionScript -Raw) | Should -Match $result.ConfigurationSha256
         (Get-Content $result.DetectionScript -Raw) | Should -Not -Match '__LOGCOLLECTOR_CONFIGURATION_SHA256__'
         (Get-FileHash (Join-Path $result.SourcePath 'Config.psd1')).Hash | Should -BeExactly (Get-FileHash $custom).Hash
-        @(Get-ChildItem -LiteralPath $result.SourcePath -File -Recurse).Count | Should -Be 15
+        @(Get-ChildItem -LiteralPath $result.SourcePath -File -Recurse).Count | Should -Be 16
     }
 
     It 'rejects mismatched configuration versions before writing output' {

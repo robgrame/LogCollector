@@ -48,6 +48,31 @@ Context 'New-InventoryEnvelope' {
         @($envelope.records).Count | Should -Be 1
     }
 
+    Context 'Metadata-only diagnostics' {
+        It 'reports bounded retries and transport errors without raw error messages' {
+            Mock -ModuleName InventoryClient Invoke-InventoryHttpPost {
+                [pscustomobject]@{
+                    Disposition = 'Transient'; StatusCode = 0; RetryAfterSeconds = $null
+                    Message = 'DO-NOT-LOG-response-body'; ExceptionType = 'System.Net.WebException'
+                    HResult = -2146233079; WebExceptionStatus = 'Timeout'
+                }
+            }
+            $events = New-Object 'Collections.Generic.List[object]'
+            $sink = { param($event, $data) $events.Add([pscustomobject]@{ Event = $event; Data = $data }) }.GetNewClosure()
+            $certificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2
+            try {
+                $result = Send-InventoryEnvelope -Uri 'https://example.invalid/api/inventory' `
+                    -Body 'DO-NOT-LOG-payload' -Certificate $certificate -MaxAttempts 2 -NoSleep -DiagnosticSink $sink
+            }
+            finally { $certificate.Dispose() }
+            $result.Attempts | Should -Be 2
+            @($events | Where-Object Event -eq 'HttpAttempt').Count | Should -Be 2
+            @($events | Where-Object Event -eq 'HttpRetry').Count | Should -Be 1
+            ($events | Where-Object Event -eq 'HttpResult' | Select-Object -First 1).Data.WebExceptionStatus | Should -BeExactly 'Timeout'
+            (ConvertTo-Json -InputObject $events.ToArray() -Depth 5) | Should -Not -Match 'DO-NOT-LOG'
+        }
+    }
+
     It 'normalizes the device id to canonical GUID form' {
         $envelope = New-InventoryEnvelope -TableName 'T_CL' -Records @(@{ a = 1 }) `
             -EntraDeviceId $script:DeviceId.ToUpper()

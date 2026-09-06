@@ -1,7 +1,23 @@
 # Shared PowerShell client
 
+## Optional diagnostics (1.2.2)
+
+`Send-LogCollectorData` and `Sync-LogCollectorSpool` accept an optional
+`-DiagnosticSink` scriptblock with positional arguments `Event` (string) and
+`Data` (hashtable). It receives explicitly selected metadata about certificate
+selection, HTTP attempts/results/retries and spool operations, never the envelope,
+HTTP response body, headers or exception message. Existing calls without the sink
+do not create log files or change output.
+
+The inventory package wires this callback to its protected rotating
+`Inventory.Logging.psm1`. Other callers may supply their own trusted callback.
+Callback output is suppressed; callback failures propagate rather than silently
+losing diagnostics. A logging failure after an HTTP response does not undo a
+request already accepted by the server. Do not use a callback that dumps caller
+variables or arbitrary exceptions into a log.
+
 `src\Client\LogCollector.Client.psd1` is the public module entry point for independent
-inventory, diagnostic and remediation scripts. Version **1.1.1** supports Windows PowerShell
+inventory, diagnostic and remediation scripts. Version **1.2.2** supports Windows PowerShell
 5.1 and PowerShell 7 on Windows. Import does not discover certificates, access Azure, install
 tasks or run collection/remediation.
 
@@ -17,7 +33,7 @@ $package = .\scripts\Publish-ClientModule.ps1
 $package | Format-List ModuleVersion, PackagePath, PackageSha256
 ```
 
-The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.1.1`.
+The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.2.2`.
 It contains no customer scripts, private keys, CA files, credentials or device inventory.
 The SHA-256 identifies the generated artifact; it is not a digital signature or proof of its source.
 
@@ -25,7 +41,7 @@ Distribute it through the customer's trusted management channel to an administra
 directory, for example:
 
 ```text
-C:\Program Files\LogCollector\Modules\LogCollector.Client\1.1.1\
+C:\Program Files\LogCollector\Modules\LogCollector.Client\1.2.2\
     LogCollector.Client.psd1
     LogCollector.Client.psm1
     DeviceIdentity.psm1
@@ -40,7 +56,7 @@ Keep the import path valid for scheduled tasks, self-copies and post-upgrade hoo
 the current working directory to locate it.
 
 ```powershell
-Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.1.1\LogCollector.Client.psd1' -ErrorAction Stop
+Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.2.2\LogCollector.Client.psd1' -ErrorAction Stop
 ```
 
 The high-level commands obtain their endpoint from an explicit parameter. No Function key,
@@ -75,7 +91,7 @@ $record = [pscustomobject]@{
 
 $result = Send-LogCollectorData -FrontendUrl $endpoint `
     -TableName 'InventoryWindows_CL' -Records @($record) `
-    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.1.1' }
+    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.2.2' }
 
 $result | Select-Object Disposition, StatusCode, Attempts, Spooled, SpoolDirectory
 ```

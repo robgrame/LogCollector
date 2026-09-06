@@ -2,7 +2,7 @@
 .SYNOPSIS
 Shared telemetry facade for independent Windows PowerShell scripts.
 .NOTES
-Version 1.1.1. Import the manifest; no authentication, I/O or network calls occur on import.
+Version 1.2.2. Import the manifest; no authentication, I/O or network calls occur on import.
 #>
 Set-StrictMode -Version Latest
 
@@ -107,7 +107,8 @@ function Send-LogCollectorData {
         [ValidateRange(1, 100000)] [int] $MaxSpoolEntries = 500,
         [ValidateRange(1, 2147483647)] [int] $MaxSpoolTotalBytes = 67108864,
         [switch] $QueueOnly,
-        [switch] $SkipDrain
+        [switch] $SkipDrain,
+        [scriptblock] $DiagnosticSink
     )
     $spool = Get-LogCollectorSpoolPath -FrontendUrl $FrontendUrl -SpoolRoot $SpoolRoot
     $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
@@ -118,17 +119,27 @@ function Send-LogCollectorData {
     $certificate = $null
     try {
         if (-not $QueueOnly) {
+            if ($DiagnosticSink) { $null = & $DiagnosticSink 'CertificateSelectionStarted' @{ EntraDeviceId = $identity.EntraDeviceId } }
             $certificate = Resolve-LogCollectorCertificate -DeviceId $identity.EntraDeviceId `
                 -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike `
                 -PkiRootCaThumbprints $PkiRootCaThumbprints -PkiRootCaSubjects $PkiRootCaSubjects `
                 -PkiIntermediateCaThumbprints $PkiIntermediateCaThumbprints `
                 -PkiIntermediateCaSubjects $PkiIntermediateCaSubjects
+            if ($DiagnosticSink) {
+                if ($null -eq $certificate) { $null = & $DiagnosticSink 'CertificateUnavailable' @{} }
+                else {
+                    $null = & $DiagnosticSink 'CertificateSelected' @{
+                        CertificateThumbprint = $certificate.Thumbprint
+                        CertificateNotAfterUtc = $certificate.NotAfter.ToUniversalTime().ToString('o')
+                    }
+                }
+            }
         }
         $result = Invoke-InventorySubmission -Uri $FrontendUrl -Envelope $envelope -Certificate $certificate `
             -SpoolDirectory $spool -MaxAttempts $MaxAttempts -TimeoutSeconds $TimeoutSeconds `
             -MaxDelaySeconds $MaxDelaySeconds -MaxDrainEntries $MaxDrainEntries -MaxDrainAttempts $MaxDrainAttempts `
             -MaxSpoolAgeDays $MaxSpoolAgeDays -MaxSpoolEntries $MaxSpoolEntries -MaxSpoolTotalBytes $MaxSpoolTotalBytes `
-            -QueueOnly:$QueueOnly -SkipDrain:$SkipDrain
+            -QueueOnly:$QueueOnly -SkipDrain:$SkipDrain -DiagnosticSink $DiagnosticSink
         $result | Add-Member -NotePropertyName SpoolDirectory -NotePropertyValue $spool
         return $result
     }
@@ -159,21 +170,33 @@ function Sync-LogCollectorSpool {
         [ValidateRange(1, 900)] [int] $MaxDelaySeconds = 60,
         [ValidateRange(1, 365)] [int] $MaxSpoolAgeDays = 7,
         [ValidateRange(1, 100000)] [int] $MaxSpoolEntries = 500,
-        [ValidateRange(1, 2147483647)] [int] $MaxSpoolTotalBytes = 67108864
+        [ValidateRange(1, 2147483647)] [int] $MaxSpoolTotalBytes = 67108864,
+        [scriptblock] $DiagnosticSink
     )
     $spool = Get-LogCollectorSpoolPath -FrontendUrl $FrontendUrl -SpoolRoot $SpoolRoot
     $null = Initialize-SpoolDirectory -SpoolDirectory $spool
     $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
+    if ($DiagnosticSink) { $null = & $DiagnosticSink 'CertificateSelectionStarted' @{ EntraDeviceId = $identity.EntraDeviceId } }
     $certificate = Resolve-LogCollectorCertificate -DeviceId $identity.EntraDeviceId `
         -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike `
         -PkiRootCaThumbprints $PkiRootCaThumbprints -PkiRootCaSubjects $PkiRootCaSubjects `
         -PkiIntermediateCaThumbprints $PkiIntermediateCaThumbprints `
         -PkiIntermediateCaSubjects $PkiIntermediateCaSubjects
     try {
+        if ($DiagnosticSink) {
+            if ($null -eq $certificate) { $null = & $DiagnosticSink 'CertificateUnavailable' @{} }
+            else {
+                $null = & $DiagnosticSink 'CertificateSelected' @{
+                    CertificateThumbprint = $certificate.Thumbprint
+                    CertificateNotAfterUtc = $certificate.NotAfter.ToUniversalTime().ToString('o')
+                }
+            }
+        }
         $result = Invoke-InventorySpoolDrain -Uri $FrontendUrl -Certificate $certificate -SpoolDirectory $spool `
             -MaxEntriesPerRun $MaxEntriesPerRun -MaxAttemptsPerEntry $MaxAttemptsPerEntry `
             -TimeoutSeconds $TimeoutSeconds -MaxDelaySeconds $MaxDelaySeconds `
-            -MaxSpoolAgeDays $MaxSpoolAgeDays -MaxSpoolEntries $MaxSpoolEntries -MaxSpoolTotalBytes $MaxSpoolTotalBytes
+            -MaxSpoolAgeDays $MaxSpoolAgeDays -MaxSpoolEntries $MaxSpoolEntries -MaxSpoolTotalBytes $MaxSpoolTotalBytes `
+            -DiagnosticSink $DiagnosticSink
         $result | Add-Member -NotePropertyName SpoolDirectory -NotePropertyValue $spool
         return $result
     }

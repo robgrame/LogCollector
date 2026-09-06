@@ -49,6 +49,54 @@ Describe 'Shared client facade' {
         ($commands -join ',') | Should -BeExactly ($expected -join ',')
     }
 
+    It 'reports certificate transport and spool metadata without payload or response text' {
+        Mock -ModuleName LogCollector.Client Get-ClientCertificate {
+            $rsa = [Security.Cryptography.RSA]::Create()
+            try {
+                $request = New-Object Security.Cryptography.X509Certificates.CertificateRequest(
+                    'CN=Private-Sentinel-Subject', $rsa, [Security.Cryptography.HashAlgorithmName]::SHA256,
+                    [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+                return $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-1), [DateTimeOffset]::UtcNow.AddHours(1))
+            }
+            finally { $rsa.Dispose() }
+        }
+        Mock -ModuleName InventoryClient Invoke-InventoryHttpPost {
+            [pscustomobject]@{ Disposition = 'AuthFailure'; StatusCode = 401; RetryAfterSeconds = $null; Message = 'Private-Sentinel-Response' }
+        }
+        $events = New-Object 'Collections.Generic.List[object]'
+        $sink = { param($event, $data) $events.Add([pscustomobject]@{ Event = $event; Data = $data }) }.GetNewClosure()
+        $result = Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'T_CL' `
+            -Records @(@{ Secret = 'Private-Sentinel-Payload' }) -Source 'Pester' -SpoolRoot $script:Root -SkipDrain -DiagnosticSink $sink
+        $result.Spooled | Should -BeTrue
+        $events.Event | Should -Contain 'CertificateSelectionStarted'
+        $events.Event | Should -Contain 'CertificateSelected'
+        $events.Event | Should -Contain 'HttpAttempt'
+        $events.Event | Should -Contain 'HttpResult'
+        $events.Event | Should -Contain 'SpoolQueued'
+        ($events | Where-Object Event -eq 'CertificateSelected').Data.CertificateThumbprint | Should -Match '^[0-9A-F]{40}$'
+        ($events | Where-Object Event -eq 'SpoolQueued').Data.SpoolPath | Should -BeExactly $result.SpoolPath
+        (ConvertTo-Json -InputObject $events.ToArray() -Depth 5) | Should -Not -Match 'Private-Sentinel'
+    }
+
+    It 'records missing certificate selection and retains data without HTTP' {
+        Mock -ModuleName LogCollector.Client Get-ClientCertificate { $null }
+        $events = New-Object 'Collections.Generic.List[string]'
+        $sink = { param($event, $data) $events.Add($event) }.GetNewClosure()
+        $result = Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'T_CL' `
+            -Records @(@{ A = 1 }) -Source 'Pester' -SpoolRoot $script:Root -SkipDrain -DiagnosticSink $sink -WarningAction SilentlyContinue
+        $result.Spooled | Should -BeTrue
+        $events | Should -Contain 'CertificateUnavailable'
+        $events | Should -Contain 'SpoolQueued'
+        Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 0 -Exactly
+    }
+
+    It 'surfaces diagnostic sink failure rather than sending without diagnostics' {
+        { Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'T_CL' `
+            -Records @(@{ A = 1 }) -Source 'Pester' -SpoolRoot $script:Root -SkipDrain `
+            -DiagnosticSink { throw 'Diagnostic sink unavailable' } } | Should -Throw '*Diagnostic sink unavailable*'
+        Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 0 -Exactly
+    }
+
     It 'rejects unsafe endpoints before identity or filesystem access' -TestCases @(
         @{ Url = 'http://example.invalid/api/inventory' }
         @{ Url = 'https://user:password@example.invalid/api/inventory' }
