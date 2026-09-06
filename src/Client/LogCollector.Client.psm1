@@ -2,7 +2,7 @@
 .SYNOPSIS
 Shared telemetry facade for independent Windows PowerShell scripts.
 .NOTES
-Version 1.2.2. Import the manifest; no authentication, I/O or network calls occur on import.
+Version 1.3.3. Import the manifest; no authentication, I/O or network calls occur on import.
 #>
 Set-StrictMode -Version Latest
 
@@ -15,8 +15,10 @@ function Assert-LogCollectorEndpoint {
 
     if ($null -eq $FrontendUrl -or -not $FrontendUrl.IsAbsoluteUri -or
         $FrontendUrl.Scheme -ne 'https' -or $FrontendUrl.UserInfo -or
-        $FrontendUrl.Query -or $FrontendUrl.Fragment -or $FrontendUrl.AbsolutePath -cne '/api/inventory') {
-        throw 'FrontendUrl must be an absolute HTTPS /api/inventory URL without credentials, query or fragment.'
+        $FrontendUrl.Query -or $FrontendUrl.Fragment -or
+        @('/api/submit', '/api/inventory') -cnotcontains $FrontendUrl.AbsolutePath -or
+        $FrontendUrl.OriginalString -cnotmatch '\A(?i:https)://[^/\\?#]+/api/(?:submit|inventory)\z') {
+        throw 'FrontendUrl must be an absolute HTTPS /api/submit or /api/inventory URL without credentials, query or fragment.'
     }
 }
 
@@ -26,7 +28,7 @@ function Get-LogCollectorSpoolPath {
     Returns an endpoint-specific spool path without creating it.
     .DESCRIPTION
     All scripts using this endpoint and root share a queue. Changing endpoints never
-    silently redirects a previous endpoint's retained inventory.
+    silently redirects a previous endpoint's retained telemetry.
     #>
     [CmdletBinding()]
     param(
@@ -112,10 +114,15 @@ function Send-LogCollectorData {
     )
     $spool = Get-LogCollectorSpoolPath -FrontendUrl $FrontendUrl -SpoolRoot $SpoolRoot
     $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
+    $envelopeVersion = if ($FrontendUrl.AbsolutePath -ceq '/api/submit') {
+        'LOGCOLLECTOR-TELEMETRY-V1'
+    } else {
+        'LOGCOLLECTOR-INVENTORY-V1'
+    }
     $envelope = New-InventoryEnvelope -TableName $TableName -Records $Records `
         -EntraDeviceId $identity.EntraDeviceId -DeviceName $identity.DeviceName `
         -IntuneDeviceId $identity.IntuneDeviceId -Source $Source `
-        -Properties $Properties -CollectedAtUtc $CollectedAtUtc
+        -Properties $Properties -CollectedAtUtc $CollectedAtUtc -EnvelopeVersion $envelopeVersion
     $certificate = $null
     try {
         if (-not $QueueOnly) {

@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace LogCollector.Shared.Models;
 
 /// <summary>
-/// The signed request body posted by the Windows inventory client.
+/// The signed request body shared by device telemetry producers of any purpose.
 /// </summary>
 /// <remarks>
 /// The envelope is <b>not</b> an authentication source. Every field on it is
@@ -13,10 +13,11 @@ namespace LogCollector.Shared.Models;
 /// with that certificate's private key, and (c) proven that
 /// <see cref="EntraDeviceId"/> equals the device id the certificate is bound to.
 /// </remarks>
-public sealed class InventoryEnvelope
+public sealed class TelemetryEnvelope
 {
-    /// <summary>Envelope schema version. Only <see cref="CurrentVersion"/> is accepted.</summary>
-    public const string CurrentVersion = "LOGCOLLECTOR-INVENTORY-V1";
+    /// <summary>Purpose-independent schema version; the legacy wire shape is also supported.</summary>
+    public const string CurrentVersion = "LOGCOLLECTOR-TELEMETRY-V1";
+    public const string LegacyVersion = "LOGCOLLECTOR-INVENTORY-V1";
 
     [JsonPropertyName("envelopeVersion")]
     public string EnvelopeVersion { get; set; } = CurrentVersion;
@@ -45,7 +46,7 @@ public sealed class InventoryEnvelope
     [JsonPropertyName("source")]
     public string? Source { get; set; }
 
-    /// <summary>UTC instant the inventory was collected on the device.</summary>
+    /// <summary>UTC instant the records were collected on the device.</summary>
     [JsonPropertyName("collectedAtUtc")]
     public DateTimeOffset? CollectedAtUtc { get; set; }
 
@@ -53,7 +54,7 @@ public sealed class InventoryEnvelope
     [JsonPropertyName("properties")]
     public Dictionary<string, string>? Properties { get; set; }
 
-    /// <summary>The inventory rows. One element becomes one row in the custom table.</summary>
+    /// <summary>Arbitrary record objects. One element becomes one row in the custom table.</summary>
     [JsonPropertyName("records")]
     public List<JsonElement>? Records { get; set; }
 
@@ -69,7 +70,8 @@ public sealed class InventoryEnvelope
     /// </summary>
     public ValidationResult Validate(int maxRecords)
     {
-        if (!string.Equals(EnvelopeVersion?.Trim(), CurrentVersion, StringComparison.Ordinal))
+        if (!string.Equals(EnvelopeVersion?.Trim(), CurrentVersion, StringComparison.Ordinal)
+            && !string.Equals(EnvelopeVersion?.Trim(), LegacyVersion, StringComparison.Ordinal))
             return ValidationResult.Fail($"unsupported envelopeVersion '{EnvelopeVersion}'");
 
         if (string.IsNullOrWhiteSpace(TableName))

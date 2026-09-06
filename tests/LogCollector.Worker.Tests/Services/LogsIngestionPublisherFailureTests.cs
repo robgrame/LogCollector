@@ -123,7 +123,7 @@ public sealed class LogsIngestionPublisherFailureTests
     {
         var ex = new LogsIngestionException("stub", 400, permanent: true, chunksCommitted: 2, chunkCount: 5);
 
-        var reason = InventoryIngestionProcessor.DescribePermanentIngestionFailure(ex);
+        var reason = TelemetryIngestionProcessor.DescribePermanentIngestionFailure(ex);
 
         Assert.Contains("status 400", reason, StringComparison.Ordinal);
         Assert.Contains("2 of 5 chunk(s) had already committed", reason, StringComparison.Ordinal);
@@ -136,7 +136,7 @@ public sealed class LogsIngestionPublisherFailureTests
     {
         var ex = new LogsIngestionException("stub", 400, permanent: true, chunksCommitted: 0, chunkCount: 3);
 
-        var reason = InventoryIngestionProcessor.DescribePermanentIngestionFailure(ex);
+        var reason = TelemetryIngestionProcessor.DescribePermanentIngestionFailure(ex);
 
         Assert.Contains("No chunks committed", reason, StringComparison.Ordinal);
         Assert.Contains("replayed safely", reason, StringComparison.Ordinal);

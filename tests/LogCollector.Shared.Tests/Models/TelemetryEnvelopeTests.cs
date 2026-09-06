@@ -4,13 +4,13 @@ using Xunit;
 
 namespace LogCollector.Shared.Tests.Models;
 
-public sealed class InventoryEnvelopeTests
+public sealed class TelemetryEnvelopeTests
 {
     private const string DeviceId = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
 
-    private static InventoryEnvelope Valid() => new()
+    private static TelemetryEnvelope Valid() => new()
     {
-        EnvelopeVersion = InventoryEnvelope.CurrentVersion,
+        EnvelopeVersion = TelemetryEnvelope.CurrentVersion,
         TableName = "InventoryWindows_CL",
         EntraDeviceId = DeviceId,
         CollectedAtUtc = DateTimeOffset.UtcNow,
@@ -21,6 +21,26 @@ public sealed class InventoryEnvelopeTests
     public void Validate_AcceptsAWellFormedEnvelope()
     {
         Assert.True(Valid().Validate(1000).Ok);
+    }
+
+    [Theory]
+    [InlineData(TelemetryEnvelope.CurrentVersion)]
+    [InlineData(TelemetryEnvelope.LegacyVersion)]
+    public void Validate_AcceptsBothWireVersionsWithoutInventoryFields(string version)
+    {
+        var envelope = Valid();
+        envelope.EnvelopeVersion = version;
+        envelope.TableName = "RemediationResults_CL";
+        envelope.Source = "DiskCleanup";
+        envelope.Records = [JsonSerializer.SerializeToElement(new { Result = "Succeeded", FreedBytes = 123L })];
+
+        Assert.True(envelope.Validate(1000).Ok);
+        var rows = LogCollector.Shared.Ingestion.TelemetryRowFactory.BuildRows(
+            envelope, "server-correlation", DateTimeOffset.UtcNow);
+        Assert.Equal("Succeeded", rows[0].GetProperty("Result").GetString());
+        Assert.Equal(123L, rows[0].GetProperty("FreedBytes").GetInt64());
+        Assert.False(rows[0].TryGetProperty("RecordType", out _));
+        Assert.Equal("DiskCleanup", rows[0].GetProperty("Source").GetString());
     }
 
     [Fact]
@@ -137,7 +157,7 @@ public sealed class InventoryEnvelopeTests
         }
         """;
 
-        var envelope = JsonSerializer.Deserialize<InventoryEnvelope>(
+        var envelope = JsonSerializer.Deserialize<TelemetryEnvelope>(
             json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         Assert.NotNull(envelope);

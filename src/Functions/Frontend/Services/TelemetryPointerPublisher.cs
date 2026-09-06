@@ -20,22 +20,22 @@ namespace LogCollector.Frontend.Services;
 /// pointer to a blob that never existed and a message that dead-letters after
 /// exhausting every delivery attempt.
 /// </remarks>
-public sealed class InventoryPointerPublisher
+public sealed class TelemetryPointerPublisher
 {
     private static readonly JsonSerializerOptions PointerJson = new(JsonSerializerDefaults.Web);
 
     private readonly BlobContainerClient _container;
     private readonly ServiceBusClient _serviceBus;
-    private readonly InventoryIntakeOptions _options;
-    private readonly ILogger<InventoryPointerPublisher> _log;
+    private readonly TelemetryIntakeOptions _options;
+    private readonly ILogger<TelemetryPointerPublisher> _log;
     private readonly SemaphoreSlim _containerLock = new(1, 1);
     private volatile bool _containerEnsured;
 
-    public InventoryPointerPublisher(
+    public TelemetryPointerPublisher(
         BlobContainerClient container,
         ServiceBusClient serviceBus,
-        InventoryIntakeOptions options,
-        ILogger<InventoryPointerPublisher> log)
+        TelemetryIntakeOptions options,
+        ILogger<TelemetryPointerPublisher> log)
     {
         _container = container;
         _serviceBus = serviceBus;
@@ -44,7 +44,7 @@ public sealed class InventoryPointerPublisher
     }
 
     public async Task<QueuedIngestionMessage> PublishAsync(
-        InventoryEnvelope envelope,
+        TelemetryEnvelope envelope,
         byte[] bodyBytes,
         string correlationId,
         string? certificateThumbprint,
@@ -117,7 +117,7 @@ public sealed class InventoryPointerPublisher
         await sender.SendMessageAsync(message, ct).ConfigureAwait(false);
 
         _log.LogInformation(
-            "Accepted inventory submission: correlationId={CorrelationId} table={Table} bytes={Bytes} blob={Blob}",
+            "Accepted telemetry submission: correlationId={CorrelationId} table={Table} bytes={Bytes} blob={Blob}",
             correlationId, envelope.TableName, bodyBytes.LongLength, blobName);
 
         return pointer;

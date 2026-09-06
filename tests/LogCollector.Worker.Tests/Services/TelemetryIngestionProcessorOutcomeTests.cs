@@ -11,12 +11,12 @@ namespace LogCollector.Worker.Tests.Services;
 /// is what routes it to the dead-letter queue with the blob left intact instead of
 /// being retried, completed, or silently deleted.
 /// </summary>
-public sealed class InventoryIngestionProcessorOutcomeTests
+public sealed class TelemetryIngestionProcessorOutcomeTests
 {
     [Fact]
     public void Poison_IsPermanentAndNotSuccessful()
     {
-        var outcome = InventoryIngestionProcessor.ProcessingOutcome.Poison("uningestible");
+        var outcome = TelemetryIngestionProcessor.ProcessingOutcome.Poison("uningestible");
 
         Assert.False(outcome.Ok);
         Assert.True(outcome.Permanent);
@@ -27,7 +27,7 @@ public sealed class InventoryIngestionProcessorOutcomeTests
     [Fact]
     public void Success_IsNotPermanentAndCarriesTheIngestedCount()
     {
-        var outcome = InventoryIngestionProcessor.ProcessingOutcome.Success(42);
+        var outcome = TelemetryIngestionProcessor.ProcessingOutcome.Success(42);
 
         Assert.True(outcome.Ok);
         Assert.False(outcome.Permanent);
@@ -50,7 +50,7 @@ public sealed class InventoryIngestionProcessorOutcomeTests
         var batch = LogsIngestionPublisher.Prepare(rows, budget);
         Assert.True(batch.HasUningestibleRows);
 
-        var outcome = InventoryIngestionProcessor.ProcessingOutcome.Poison(batch.DescribeUningestibleRows());
+        var outcome = TelemetryIngestionProcessor.ProcessingOutcome.Poison(batch.DescribeUningestibleRows());
 
         Assert.True(outcome.Permanent);
         Assert.False(outcome.Ok);
@@ -78,7 +78,7 @@ public sealed class InventoryIngestionProcessorOutcomeTests
         }
         """;
 
-        var pointer = InventoryIngestionProcessor.TryParsePointer(body, out var reason);
+        var pointer = TelemetryIngestionProcessor.TryParsePointer(body, out var reason);
 
         Assert.True(pointer is not null, $"pointer was rejected: {reason}");
         Assert.Null(reason);
@@ -91,7 +91,7 @@ public sealed class InventoryIngestionProcessorOutcomeTests
     [InlineData("{\"version\":\"LOGCOLLECTOR-POINTER-V0\"}", "unsupported pointer version")]
     public void TryParsePointer_ReportsWhyAMessageIsUnusableInsteadOfThrowing(string body, string expectedFragment)
     {
-        var pointer = InventoryIngestionProcessor.TryParsePointer(body, out var reason);
+        var pointer = TelemetryIngestionProcessor.TryParsePointer(body, out var reason);
 
         Assert.Null(pointer);
         Assert.NotNull(reason);
@@ -116,7 +116,7 @@ public sealed class InventoryIngestionProcessorOutcomeTests
 
         var body = JsonSerializer.Serialize(pointer, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
-        Assert.Null(InventoryIngestionProcessor.TryParsePointer(body, out var reason));
+        Assert.Null(TelemetryIngestionProcessor.TryParsePointer(body, out var reason));
         Assert.Contains("canonical relative blob path", reason!, StringComparison.Ordinal);
     }
 }

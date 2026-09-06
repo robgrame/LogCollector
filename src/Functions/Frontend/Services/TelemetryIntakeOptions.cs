@@ -3,11 +3,12 @@ using Microsoft.Extensions.Configuration;
 namespace LogCollector.Frontend.Services;
 
 /// <summary>Frontend intake limits, resolved once at startup.</summary>
-public sealed class InventoryIntakeOptions
+public sealed class TelemetryIntakeOptions
 {
-    public InventoryIntakeOptions(IConfiguration cfg)
+    public TelemetryIntakeOptions(IConfiguration cfg)
     {
-        QueueName = cfg["ServiceBus:InventoryQueue"] ?? "inventory-ingestion";
+        // Keep deployed resource names and the old setting usable during rolling upgrades.
+        QueueName = cfg["ServiceBus:QueueName"] ?? cfg["ServiceBus:InventoryQueue"] ?? "inventory-ingestion";
         ContainerName = cfg["Storage:PayloadContainer"] ?? "inventory-payloads";
         MaxRecordsPerEnvelope = int.TryParse(cfg["Intake:MaxRecordsPerEnvelope"], out var maxRecords)
             ? Math.Clamp(maxRecords, 1, 200_000)

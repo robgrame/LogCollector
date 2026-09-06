@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    LogCollector inventory client: envelope construction, signed submission,
+    LogCollector telemetry client: envelope construction, signed submission,
     exponential backoff with jitter, and durable spool draining.
 
 .DESCRIPTION
     Public surface:
 
-      New-InventoryEnvelope        Builds the LOGCOLLECTOR-INVENTORY-V1 body.
+      New-InventoryEnvelope        Builds a telemetry body (legacy version by default).
       Get-RetryDelaySeconds        Backoff schedule (exponential + full jitter).
       Get-SubmissionDisposition    Maps an HTTP status to a retry decision.
       Send-InventoryEnvelope       Signs and POSTs one envelope, with retries.
@@ -19,7 +19,7 @@
     reintroduce a fleet-wide shared secret without adding any assurance.
 
 .NOTES
-    Version 1.1.2 - optional metadata-only diagnostic callbacks for transport and spool operations.
+    Version 1.1.3 - generic telemetry envelopes alongside unchanged legacy inventory envelopes.
     Windows PowerShell 5.1 compatible.
 #>
 
@@ -69,9 +69,11 @@ function Initialize-TlsDefaults {
 function New-InventoryEnvelope {
     <#
     .SYNOPSIS
-        Builds a LOGCOLLECTOR-INVENTORY-V1 envelope.
+        Builds a telemetry envelope, defaulting to LOGCOLLECTOR-INVENTORY-V1 for compatibility.
     .PARAMETER Records
         One or more objects; each becomes one row in the target custom table.
+    .PARAMETER EnvelopeVersion
+        Use LOGCOLLECTOR-TELEMETRY-V1 for new generic integrations.
     .OUTPUTS
         [pscustomobject] ready for ConvertTo-Json.
     #>
@@ -84,7 +86,9 @@ function New-InventoryEnvelope {
         [string] $IntuneDeviceId,
         [string] $Source = 'WindowsScheduledTask',
         [hashtable] $Properties,
-        [DateTimeOffset] $CollectedAtUtc = [DateTimeOffset]::UtcNow
+        [DateTimeOffset] $CollectedAtUtc = [DateTimeOffset]::UtcNow,
+        [ValidateSet('LOGCOLLECTOR-INVENTORY-V1', 'LOGCOLLECTOR-TELEMETRY-V1', IgnoreCase = $false)]
+        [string] $EnvelopeVersion = $script:EnvelopeVersion
     )
 
     if ([string]::IsNullOrWhiteSpace($DeviceName)) { $DeviceName = [System.Environment]::MachineName }
@@ -97,7 +101,7 @@ function New-InventoryEnvelope {
     }
 
     [pscustomobject][ordered]@{
-        envelopeVersion = $script:EnvelopeVersion
+        envelopeVersion = $EnvelopeVersion
         tableName       = $TableName
         entraDeviceId   = ([guid]$EntraDeviceId).ToString()
         deviceName      = $DeviceName
@@ -183,7 +187,9 @@ function ConvertTo-InventorySubmissionBody {
     foreach ($required in @('envelopeVersion', 'tableName', 'entraDeviceId', 'collectedAtUtc', 'records')) {
         if ($names -notcontains $required) { throw "Envelope is missing $required." }
     }
-    if ($parsed.envelopeVersion -cne $script:EnvelopeVersion) { throw 'Unsupported envelope version.' }
+    if (@($script:EnvelopeVersion, 'LOGCOLLECTOR-TELEMETRY-V1') -cnotcontains $parsed.envelopeVersion) {
+        throw 'Unsupported envelope version.'
+    }
     if ($parsed.tableName -notmatch '^[A-Za-z][A-Za-z0-9_]{0,99}$') { throw 'Invalid table name.' }
     $deviceId = [guid]::Empty
     if (-not [guid]::TryParse([string]$parsed.entraDeviceId, [ref]$deviceId)) {

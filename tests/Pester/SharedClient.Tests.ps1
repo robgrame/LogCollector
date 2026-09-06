@@ -43,6 +43,7 @@ Describe 'Shared client facade' {
     }
 
     It 'exports the documented public surface' {
+        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.3.3'
         $commands = @(Get-Command -Module LogCollector.Client).Name | Sort-Object
         $expected = @('Get-DeviceIdentitySnapshot', 'Get-ClientCertificate', 'New-SignedInventoryRequest',
             'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Send-LogCollectorData', 'Sync-LogCollectorSpool') | Sort-Object
@@ -104,10 +105,28 @@ Describe 'Shared client facade' {
         @{ Url = 'https://example.invalid/api/inventory#fragment' }
         @{ Url = 'https://example.invalid/other' }
         @{ Url = '/api/inventory' }
+        @{ Url = 'http://example.invalid/api/submit' }
+        @{ Url = 'https://user:password@example.invalid/api/submit' }
+        @{ Url = 'https://example.invalid/api/submit?code=placeholder' }
+        @{ Url = 'https://example.invalid/api/submit#fragment' }
+        @{ Url = 'https://example.invalid/api/submit?' }
+        @{ Url = 'https://example.invalid/api/submit#' }
+        @{ Url = 'https://example.invalid/api/submit/' }
+        @{ Url = 'https://example.invalid/api/inventory/' }
+        @{ Url = 'https://example.invalid/API/submit' }
+        @{ Url = 'https://example.invalid/api/Submit' }
+        @{ Url = 'https://example.invalid/api/Inventory' }
+        @{ Url = 'https://example.invalid/api/submit/extra' }
+        @{ Url = 'https://example.invalid/other/../api/submit' }
+        @{ Url = 'https://example.invalid/api/%73ubmit' }
+        @{ Url = 'https://example.invalid\api\submit' }
+        @{ Url = '/api/submit' }
     ) {
         param($Url)
         { Send-LogCollectorData -FrontendUrl $Url -TableName 'T_CL' -Records @(@{ A = 1 }) `
             -Source 'Pester' -SpoolRoot $script:Root } | Should -Throw
+        { Sync-LogCollectorSpool -FrontendUrl $Url -SpoolRoot $script:Root } | Should -Throw
+        { Get-LogCollectorSpoolPath -FrontendUrl $Url -SpoolRoot $script:Root } | Should -Throw
         Should -Invoke -ModuleName LogCollector.Client Get-DeviceIdentitySnapshot -Times 0 -Exactly
         Test-Path -LiteralPath $script:Root | Should -BeFalse
     }
@@ -118,10 +137,16 @@ Describe 'Shared client facade' {
         $other = Get-LogCollectorSpoolPath -FrontendUrl 'https://another.invalid/api/inventory' -SpoolRoot $script:Root
         $same | Should -BeExactly $first
         $other | Should -Not -Be $first
+        $generic = Get-LogCollectorSpoolPath -FrontendUrl 'https://example.invalid/api/submit' -SpoolRoot $script:Root
+        $generic | Should -Not -Be $first
         Test-Path -LiteralPath $script:Root | Should -BeFalse
     }
 
-    It 'preserves nested record types and Unicode through the real submission pipeline' {
+    It 'preserves noninventory records through the <Path> submission pipeline' -TestCases @(
+        @{ Path = '/api/submit'; Version = 'LOGCOLLECTOR-TELEMETRY-V1' }
+        @{ Path = '/api/inventory'; Version = 'LOGCOLLECTOR-INVENTORY-V1' }
+    ) {
+        param($Path, $Version)
         $script:BodySeen = $null
         Mock -ModuleName InventoryClient Invoke-InventoryHttpPost {
             param($Body, $TimeoutSeconds)
@@ -131,16 +156,18 @@ Describe 'Shared client facade' {
         }
         $unicode = 'Caf' + [char]0x00e8
         $record = @{ EventTimeUtc = '2026-09-06T07:00:00Z'; Enabled = $true; Count = 7; Nested = @(@{ Name = $unicode }) }
-        $result = Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'T_CL' `
+        $result = Send-LogCollectorData -FrontendUrl "https://example.invalid$Path" -TableName 'SecureBootStatus_CL' `
             -Records @($record) -Source 'SecureBootReporter' -Properties @{ Version = 12 } `
             -SpoolRoot $script:Root -SkipDrain -TimeoutSeconds 12
         $body = $script:BodySeen | ConvertFrom-Json
-        $body.envelopeVersion | Should -BeExactly 'LOGCOLLECTOR-INVENTORY-V1'
+        $body.envelopeVersion | Should -BeExactly $Version
+        $body.tableName | Should -BeExactly 'SecureBootStatus_CL'
         $body.entraDeviceId | Should -BeExactly $script:DeviceId
         $body.source | Should -BeExactly 'SecureBootReporter'
         $body.records[0].Nested[0].Name | Should -BeExactly $unicode
         $body.records[0].Enabled | Should -BeOfType [bool]
         $body.records[0].Count | Should -Be 7
+        @($body.records[0].PSObject.Properties.Name).Count | Should -Be 4
         $body.properties.Version | Should -BeExactly '12'
         $result.StatusCode | Should -Be 202
         $result.Spooled | Should -BeFalse
@@ -223,6 +250,48 @@ Describe 'Shared client facade' {
         $result.Delivered | Should -Be 0
         Test-Path -LiteralPath $entry.SpoolPath | Should -BeTrue
         Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 0 -Exactly
+    }
+
+    It 'retains exact <Version> body bytes across failure and renewal without migrating endpoint queues' -TestCases @(
+        @{ Path = '/api/submit'; OtherPath = '/api/inventory'; Version = 'LOGCOLLECTOR-TELEMETRY-V1' }
+        @{ Path = '/api/inventory'; OtherPath = '/api/submit'; Version = 'LOGCOLLECTOR-INVENTORY-V1' }
+    ) {
+        param($Path, $OtherPath, $Version)
+        $endpoint = [Uri]"https://example.invalid$Path"
+        $entry = Send-LogCollectorData -FrontendUrl $endpoint -TableName 'RemediationEvents_CL' `
+            -Records @(@{ Action = 'Repair'; ExitCode = 0; Details = @('one', 'two') }) `
+            -Source 'RemediationScript' -SpoolRoot $script:Root -QueueOnly
+        $originalFile = [IO.File]::ReadAllBytes($entry.SpoolPath)
+        $stored = Get-Content -LiteralPath $entry.SpoolPath -Raw | ConvertFrom-Json
+        $originalBytes = [Text.Encoding]::UTF8.GetBytes($stored.body)
+        ([Text.Encoding]::UTF8.GetString($originalBytes) | ConvertFrom-Json).envelopeVersion | Should -BeExactly $Version
+
+        $other = Sync-LogCollectorSpool -FrontendUrl "https://example.invalid$OtherPath" -SpoolRoot $script:Root
+        $other.Delivered | Should -Be 0
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($entry.SpoolPath)) | Should -BeExactly ([Convert]::ToBase64String($originalFile))
+        Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 0 -Exactly
+
+        $script:ExpectedBodyBytes = [Convert]::ToBase64String($originalBytes)
+        $script:ExpectedEndpoint = $endpoint.AbsoluteUri
+        Mock -ModuleName InventoryClient Invoke-InventoryHttpPost {
+            param($Uri, $Body)
+            $Uri.AbsoluteUri | Should -BeExactly $script:ExpectedEndpoint
+            [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Body)) | Should -BeExactly $script:ExpectedBodyBytes
+            [pscustomobject]@{ Disposition = 'AuthFailure'; StatusCode = 401; RetryAfterSeconds = $null; Message = 'renew' }
+        }
+        $failed = Sync-LogCollectorSpool -FrontendUrl $endpoint -SpoolRoot $script:Root
+        $failed.Remaining | Should -Be 1
+        $retainedBody = (Get-Content -LiteralPath $entry.SpoolPath -Raw | ConvertFrom-Json).body
+        [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($retainedBody)) | Should -BeExactly $script:ExpectedBodyBytes
+        Mock -ModuleName InventoryClient Invoke-InventoryHttpPost {
+            param($Uri, $Body)
+            $Uri.AbsoluteUri | Should -BeExactly $script:ExpectedEndpoint
+            [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Body)) | Should -BeExactly $script:ExpectedBodyBytes
+            [pscustomobject]@{ Disposition = 'Delivered'; StatusCode = 202; RetryAfterSeconds = $null; Message = 'ok' }
+        }
+        $drain = Sync-LogCollectorSpool -FrontendUrl $endpoint -SpoolRoot $script:Root
+        $drain.Delivered | Should -Be 1
+        Test-Path -LiteralPath $entry.SpoolPath | Should -BeFalse
     }
 
     It 'enforces retention during certificate-unavailable drains without sending data' {

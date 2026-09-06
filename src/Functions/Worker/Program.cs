@@ -60,6 +60,6 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<PayloadBlobReader>();
 builder.Services.AddSingleton<LogsIngestionPublisher>();
-builder.Services.AddSingleton<InventoryIngestionProcessor>();
+builder.Services.AddSingleton<TelemetryIngestionProcessor>();
 
 builder.Build().Run();

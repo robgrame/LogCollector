@@ -35,7 +35,7 @@ public sealed class IngestionStreamMap
 
             var table = pair[..eq].Trim();
             var stream = pair[(eq + 1)..].Trim();
-            if (!InventoryEnvelope.IsSafeTableName(table)) continue;
+            if (!TelemetryEnvelope.IsSafeTableName(table)) continue;
             if (!stream.StartsWith("Custom-", StringComparison.Ordinal)) continue;
 
             _map[table] = stream;

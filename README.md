@@ -1,9 +1,9 @@
 # LogCollector
 
-Secure Windows inventory collection and ingestion into Azure Monitor, for fleets that cannot use
-Intune Proactive Remediation or Defender for Endpoint automation.
+Purpose-independent, certificate-authenticated device telemetry ingestion into Azure Monitor.
+Inventory, remediation results, health checks and other scripts share the same ingestion platform.
 
-A scheduled task on each device collects inventory, signs it with the device's own certificate, and
+A script on each device produces records, signs them with the device's own certificate, and
 posts it over mutual TLS to a frontend Azure Function. The frontend authenticates the device, parks
 the payload in Blob storage, and enqueues a pointer on Service Bus. A worker Function drains the
 queue and writes rows to a Log Analytics custom table through the Azure Monitor Logs Ingestion API.
@@ -11,6 +11,18 @@ queue and writes rows to a Log Analytics custom table through the Azure Monitor 
 **There is no Function key, no shared secret, and no Log Analytics workspace key anywhere in this
 solution.** The device certificate is the only client credential, and every service-to-service hop
 uses a user-assigned managed identity.
+
+**Inventory is one producer, not a platform requirement.** The frontend `TelemetryIngestFunction`
+(`SubmitTelemetry`, `POST /api/submit`) and worker `TelemetryIngestionFunction` (`IngestTelemetry`)
+have no inventory schema or collection logic. `tableName` selects an operator-approved DCR stream;
+`source` labels the producing script. Both accept arbitrary record objects without requiring
+`RecordType`, hardware or software fields. A new purpose needs a table/schema and stream mapping,
+not another Function or a platform code change. See [Adding a purpose](docs/operations.md#adding-a-purpose).
+
+Backend **1.2.2** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
+`LOGCOLLECTOR-INVENTORY-V1` wire format. `/api/inventory` is an explicit compatibility alias through
+the **same** authentication and processing path. Existing inventory packages, table names, queues,
+retained blobs and spool entries are not renamed or rewritten.
 
 ---
 
@@ -21,7 +33,7 @@ uses a user-assigned managed identity.
    │  Windows PowerShell 5.1
    │  • resolve Entra device id (dsregcmd)
    │  • select certificate: enterprise PKI, else Intune enrollment cert
-   │  • build LOGCOLLECTOR-INVENTORY-V1 envelope
+   │  • build LOGCOLLECTOR-TELEMETRY-V1 envelope
    │  • drain local spool, then submit
    │
    │  HTTPS 1.2+ / mTLS
@@ -87,7 +99,7 @@ LogCollector/
 │   │   ├── InventorySpool.psm1  Durable local spool
 │   │   └── InventoryClient.psm1 Envelope, backoff, drain, submit
 │   ├── Shared/                  LogCollector.Shared (net10.0 library)
-│   │   ├── Models/              InventoryEnvelope, QueuedIngestionMessage
+│   │   ├── Models/              TelemetryEnvelope, QueuedIngestionMessage
 │   │   ├── Security/            Cert validation, signing, replay, orchestration
 │   │   └── Ingestion/           Chunker, Retry-After policy, row factory, stream map
 │   └── Functions/
@@ -121,7 +133,7 @@ using its own managed identity and requires an enabled device in that identity's
 The frontend identity needs Graph **Device.Read.All (application)** permission with administrator
 consent for the Intune fallback. Graph failures never bypass this check.
 
-Then, at the data layer, `InventoryRowFactory` writes the server-asserted identity columns **after**
+Then, at the data layer, `TelemetryRowFactory` writes the server-asserted identity columns **after**
 copying client fields, so a record containing its own `EntraDeviceId` cannot spoof attribution.
 
 ### Dual trust: enterprise PKI and Intune enrollment
@@ -162,7 +174,7 @@ Full rationale, threat model, and residual risks: **[docs/security.md](docs/secu
 ### Request
 
 ```http
-POST /api/inventory HTTP/1.1
+POST /api/submit HTTP/1.1
 Content-Type: application/json
 X-Request-Timestamp: 2026-01-02T03:04:05.6780000+00:00
 X-Request-Nonce: 11111111-2222-3333-4444-555555555555
@@ -180,7 +192,7 @@ both sides by a golden-vector test.
 ```text
 IDA-SIGNATURE-V1
 POST
-/api/inventory
+/api/submit
 2026-01-02T03:04:05.6780000+00:00
 11111111-2222-3333-4444-555555555555
 <base64(SHA-256(exact body bytes))>
@@ -190,16 +202,16 @@ POST
 
 ```json
 {
-  "envelopeVersion": "LOGCOLLECTOR-INVENTORY-V1",
-  "tableName": "InventoryWindows_CL",
+  "envelopeVersion": "LOGCOLLECTOR-TELEMETRY-V1",
+  "tableName": "RemediationResults_CL",
   "entraDeviceId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
   "deviceName": "WKS-001",
   "intuneDeviceId": "…",
   "correlationId": "…",
-  "source": "WindowsScheduledTask",
+  "source": "DiskCleanup",
   "collectedAtUtc": "2026-04-01T06:00:00.0000000+00:00",
   "properties": { "CollectorVersion": "1.0.3" },
-  "records": [ { "RecordType": "Hardware", "Model": "X1" } ]
+  "records": [ { "Result": "Succeeded", "FreedBytes": 1048576 } ]
 }
 ```
 
@@ -253,7 +265,9 @@ Package **1.4.5** also writes protected, bounded JSONL lifecycle, inventory and
 spool logs under `C:\ProgramData\LogCollector\Logs\CustomInventory`, using selected
 metadata rather than a transcript of payloads or HTTP response bodies.
 
-The folder-only builder creates `out\Inventory\1.4.5`, ready for Intune Win32 packaging with `Install.ps1`
+The current package source is **1.4.6**, a build bump for the shared client **1.3.3** dependency.
+Existing installed **1.4.5** packages remain compatible and are not changed by the backend upgrade.
+The folder-only builder creates `out\Inventory\1.4.6`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
 environment and table names are supplied as configuration; `-DeviceTableName` and
 `-AppTableName` default to **DeviceInventory_CL** and **AppInventory_CL** to retain existing
@@ -421,7 +435,7 @@ Full runbook, verification queries and troubleshooting: **[docs/operations.md](d
 | Setting | Default | Purpose |
 |---|---|---|
 | `ServiceBus__fullyQualifiedNamespace` | — | Namespace host name |
-| `ServiceBus__InventoryQueue` | `inventory-ingestion` | Pointer queue |
+| `ServiceBus__QueueName` | `inventory-ingestion` | Shared pointer queue; deployed resource name is preserved |
 | `Storage__AccountName` / `Storage__PayloadContainer` | — / `inventory-payloads` | Payload blobs |
 | `Replay__StorageAccount` / `Replay__TableName` | — / `RequestNonces` | Nonce store |
 | `Replay__MaxTimestampSkewSeconds` | `300` | Freshness window (clamped 30–3600) |

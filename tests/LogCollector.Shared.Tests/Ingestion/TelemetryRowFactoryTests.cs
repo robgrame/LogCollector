@@ -5,13 +5,13 @@ using Xunit;
 
 namespace LogCollector.Shared.Tests.Ingestion;
 
-public sealed class InventoryRowFactoryTests
+public sealed class TelemetryRowFactoryTests
 {
     private const string DeviceId = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
     private static readonly DateTimeOffset Ingested = new(2026, 4, 1, 8, 30, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset Collected = new(2026, 4, 1, 6, 0, 0, TimeSpan.Zero);
 
-    private static InventoryEnvelope Envelope(string recordJson, Dictionary<string, string>? properties = null)
+    private static TelemetryEnvelope Envelope(string recordJson, Dictionary<string, string>? properties = null)
         => new()
         {
             TableName = "InventoryWindows_CL",
@@ -27,7 +27,7 @@ public sealed class InventoryRowFactoryTests
     [Fact]
     public void BuildRows_StampsTheServerAssertedColumns()
     {
-        var rows = InventoryRowFactory.BuildRows(
+        var rows = TelemetryRowFactory.BuildRows(
             Envelope("{\"RecordType\":\"Hardware\",\"Model\":\"X1\"}"), "corr-1", Ingested);
 
         var row = Assert.Single(rows);
@@ -51,7 +51,7 @@ public sealed class InventoryRowFactoryTests
         var envelope = Envelope(
             "{\"RecordType\":\"Hardware\",\"EntraDeviceId\":\"00000000-0000-0000-0000-000000000000\",\"CorrelationId\":\"forged\"}");
 
-        var row = Assert.Single(InventoryRowFactory.BuildRows(envelope, "corr-1", Ingested));
+        var row = Assert.Single(TelemetryRowFactory.BuildRows(envelope, "corr-1", Ingested));
 
         Assert.Equal(DeviceId, row.GetProperty("EntraDeviceId").GetString());
         Assert.Equal("corr-1", row.GetProperty("CorrelationId").GetString());
@@ -64,7 +64,7 @@ public sealed class InventoryRowFactoryTests
             "{\"RecordType\":\"Software\"}",
             new Dictionary<string, string> { ["CollectorVersion"] = "1.0.0", ["CollectedAreas"] = "Software" });
 
-        var row = Assert.Single(InventoryRowFactory.BuildRows(envelope, "corr-1", Ingested));
+        var row = Assert.Single(TelemetryRowFactory.BuildRows(envelope, "corr-1", Ingested));
 
         Assert.Equal("1.0.0", row.GetProperty("CollectorVersion").GetString());
         Assert.Equal("Software", row.GetProperty("CollectedAreas").GetString());
@@ -77,7 +77,7 @@ public sealed class InventoryRowFactoryTests
             "{\"RecordType\":\"Software\",\"CollectorVersion\":\"record-wins\"}",
             new Dictionary<string, string> { ["CollectorVersion"] = "envelope-loses" });
 
-        var row = Assert.Single(InventoryRowFactory.BuildRows(envelope, "corr-1", Ingested));
+        var row = Assert.Single(TelemetryRowFactory.BuildRows(envelope, "corr-1", Ingested));
 
         Assert.Equal("record-wins", row.GetProperty("CollectorVersion").GetString());
     }
@@ -89,7 +89,7 @@ public sealed class InventoryRowFactoryTests
             "{\"RecordType\":\"Software\"}",
             new Dictionary<string, string> { ["DeviceName"] = "spoofed" });
 
-        var row = Assert.Single(InventoryRowFactory.BuildRows(envelope, "corr-1", Ingested));
+        var row = Assert.Single(TelemetryRowFactory.BuildRows(envelope, "corr-1", Ingested));
 
         Assert.Equal("WKS-001", row.GetProperty("DeviceName").GetString());
     }
@@ -100,7 +100,7 @@ public sealed class InventoryRowFactoryTests
         var envelope = Envelope("{\"RecordType\":\"Hardware\"}");
         envelope.CollectedAtUtc = null;
 
-        var row = Assert.Single(InventoryRowFactory.BuildRows(envelope, "corr-1", Ingested));
+        var row = Assert.Single(TelemetryRowFactory.BuildRows(envelope, "corr-1", Ingested));
 
         Assert.Equal(Ingested.UtcDateTime.ToString("O"), row.GetProperty("CollectedAtUtc").GetString());
     }
@@ -110,7 +110,7 @@ public sealed class InventoryRowFactoryTests
     {
         var envelope = Envelope("{\"LogicalProcessors\":8,\"TpmPresent\":true}");
 
-        var row = Assert.Single(InventoryRowFactory.BuildRows(envelope, "corr-1", Ingested));
+        var row = Assert.Single(TelemetryRowFactory.BuildRows(envelope, "corr-1", Ingested));
 
         Assert.Equal(8, row.GetProperty("LogicalProcessors").GetInt32());
         Assert.True(row.GetProperty("TpmPresent").GetBoolean());
@@ -121,8 +121,8 @@ public sealed class InventoryRowFactoryTests
     {
         var envelope = Envelope("{\"RecordIndex\":99,\"Model\":\"A\"}");
         envelope.Records!.Add(envelope.Records[0].Clone());
-        var first = InventoryRowFactory.BuildRows(envelope, "stable-id", Ingested);
-        var retry = InventoryRowFactory.BuildRows(envelope, "stable-id", Ingested.AddMinutes(1));
+        var first = TelemetryRowFactory.BuildRows(envelope, "stable-id", Ingested);
+        var retry = TelemetryRowFactory.BuildRows(envelope, "stable-id", Ingested.AddMinutes(1));
         Assert.Equal(0, first[0].GetProperty("RecordIndex").GetInt32());
         Assert.Equal(1, first[1].GetProperty("RecordIndex").GetInt32());
         Assert.Equal(first[1].GetProperty("RecordIndex").GetInt32(), retry[1].GetProperty("RecordIndex").GetInt32());
@@ -134,6 +134,6 @@ public sealed class InventoryRowFactoryTests
         var envelope = Envelope("{}");
         envelope.Records = null;
 
-        Assert.Empty(InventoryRowFactory.BuildRows(envelope, "corr-1", Ingested));
+        Assert.Empty(TelemetryRowFactory.BuildRows(envelope, "corr-1", Ingested));
     }
 }

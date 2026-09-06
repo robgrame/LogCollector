@@ -11,14 +11,14 @@ namespace LogCollector.Shared.Tests.Security;
 /// End-to-end coverage of the frontend trust pipeline: this is the test that
 /// would fail if any single control were removed.
 /// </summary>
-public sealed class InventoryRequestAuthenticatorTests
+public sealed class TelemetryRequestAuthenticatorTests
 {
     private const string DeviceId = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
     private const string OtherDeviceId = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
     private const string Path = "/api/inventory";
 
     private sealed record Harness(
-        InventoryRequestAuthenticator Authenticator,
+        TelemetryRequestAuthenticator Authenticator,
         X509Certificate2 Ca,
         X509Certificate2 Leaf,
         InMemoryReplayNonceStore Store);
@@ -41,7 +41,7 @@ public sealed class InventoryRequestAuthenticatorTests
         var config = TestCertificates.Config([.. settings]);
         var store = new InMemoryReplayNonceStore();
 
-        var authenticator = new InventoryRequestAuthenticator(
+        var authenticator = new TelemetryRequestAuthenticator(
             new ClientCertValidator(config, NullLogger<ClientCertValidator>.Instance),
             new RequestSignatureVerifier(config),
             new ReplayProtector(store, config));
@@ -49,7 +49,7 @@ public sealed class InventoryRequestAuthenticatorTests
         return new Harness(authenticator, ca, leaf, store);
     }
 
-    private static InventoryRequestContext BuildRequest(
+    private static TelemetryRequestContext BuildRequest(
         X509Certificate2 signingCertificate,
         byte[] body,
         DateTimeOffset? timestamp = null,
@@ -67,7 +67,7 @@ public sealed class InventoryRequestAuthenticatorTests
         var signature = Convert.ToBase64String(
             rsa.SignData(canonical, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
 
-        return new InventoryRequestContext
+        return new TelemetryRequestContext
         {
             Method = "POST",
             Path = Path,
@@ -151,7 +151,7 @@ public sealed class InventoryRequestAuthenticatorTests
         var body = Encoding.UTF8.GetBytes("{}");
 
         var request = BuildRequest(h.Leaf, body);
-        var withoutCert = new InventoryRequestContext
+        var withoutCert = new TelemetryRequestContext
         {
             Method = request.Method,
             Path = request.Path,

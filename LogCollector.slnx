@@ -4,7 +4,10 @@
     <Project Path="src/Functions/Frontend/LogCollector.Frontend.csproj" />
     <Project Path="src/Functions/Worker/LogCollector.Worker.csproj" />
   </Folder>
+  <Folder Name="/src/Functions/" />
+  <Folder Name="/src/Functions/Frontend/" />
   <Folder Name="/tests/">
+    <Project Path="tests/LogCollector.Frontend.Tests/LogCollector.Frontend.Tests.csproj" />
     <Project Path="tests/LogCollector.Shared.Tests/LogCollector.Shared.Tests.csproj" />
     <Project Path="tests/LogCollector.Worker.Tests/LogCollector.Worker.Tests.csproj" />
   </Folder>

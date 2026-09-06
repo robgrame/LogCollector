@@ -112,11 +112,20 @@ the Intune CA chain.
 
 ### Publish a selected component
 
+For the **1.2.2** backend upgrade, add `ServiceBus__QueueName` to **both** apps before deploying,
+with the exact value of the existing `ServiceBus__InventoryQueue`. Keep the legacy setting for
+rollback. The worker host resolves the new binding key directly; changing only the worker's
+in-process configuration is insufficient. Do not create a new queue or move messages.
+
+Deploy the worker first (it understands both envelope versions), then the frontend, and only
+then configure new producers for `/api/submit`. Existing producers can remain on `/api/inventory`.
+Do not roll back to an old worker while generic-version payloads remain queued.
+
 ```powershell
-.\scripts\Publish-Function.ps1 -Component Frontend -Deploy `
-  -SubscriptionId $subscription -ResourceGroup LOGCOLLECTOR-RG -AppName LogCollector-intake
 .\scripts\Publish-Function.ps1 -Component Worker -Deploy `
   -SubscriptionId $subscription -ResourceGroup LOGCOLLECTOR-RG -AppName LogCollector-worker
+.\scripts\Publish-Function.ps1 -Component Frontend -Deploy `
+  -SubscriptionId $subscription -ResourceGroup LOGCOLLECTOR-RG -AppName LogCollector-intake
 ```
 
 The helper includes hidden `.azurefunctions` dependencies and validates package contents.
@@ -127,6 +136,43 @@ After changing app settings, let the configuration-triggered restart finish befo
 Overlapping these operations can make Kudu stop finalization with `SCM container restart` even
 when the new package is already running. In that case confirm restart completion, retry the same
 package without another settings change, and require a completed, successful deployment status.
+
+### Adding a purpose
+
+Reuse the existing endpoint, certificate policy, Blob container, pointer queue and worker.
+Choose a custom table and provision its columns plus the DCR stream/data flow, then add its
+`Table_CL=Custom-Table_CL` entry to `Ingestion__StreamMap` on **both** apps.
+Keep every existing mapping; configuring the map alone does not create a table or DCR stream.
+For example:
+
+```text
+RemediationResults_CL=Custom-RemediationResults_CL;HealthChecks_CL=Custom-HealthChecks_CL
+```
+
+`infra\main.bicep` supports `additionalTelemetryTables`: an array of `{ name, columns }` objects,
+where `columns` contains `{ name, type }` entries. It provisions all those tables, DCR declarations,
+pass-through data flows and both app mappings together. Include the platform columns
+`TimeGenerated` and `CollectedAtUtc` (datetime), `EntraDeviceId`, `DeviceName`, `IntuneDeviceId`,
+`CorrelationId` and `Source` (string), and `RecordIndex` (int), plus the purpose-specific columns.
+Table names must be unique, including the default inventory table. Set `includeInventoryExample=false`
+for a new deployment with no inventory purpose; provide at least one additional table in that case.
+The default remains the original inventory example to preserve existing deployments and queries.
+Keep additional schemas in the environment's parameter file so later infrastructure deployments
+do not replace a manually extended DCR/map with the default example.
+
+Send existing record objects using shared client **1.3.3** or later:
+
+```powershell
+Send-LogCollectorData -FrontendUrl 'https://<frontend>.azurewebsites.net/api/submit' `
+    -TableName 'RemediationResults_CL' -Source 'DiskCleanup' `
+    -Records @(@{ Result = 'Succeeded'; FreedBytes = 1048576 })
+```
+
+`source` distinguishes producers in queries; it is not a routing or security policy.
+Inventory remains an independent application in `src\InventoryPackage`. Its installed **1.4.5**
+package and original table names need no update for this backend change.
+Endpoint-specific local spool buckets are different for `/api/submit` and `/api/inventory`:
+do not change existing endpoints expecting retained entries to migrate automatically.
 
 Verify the frontend using a TLS client certificate:
 

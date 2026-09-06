@@ -19,20 +19,20 @@ namespace LogCollector.Worker.Functions;
 ///   <item>transient failure → rethrow, abandoning the lock for redelivery.</item>
 /// </list>
 /// </remarks>
-public sealed class InventoryIngestionFunction
+public sealed class TelemetryIngestionFunction
 {
-    private readonly InventoryIngestionProcessor _processor;
-    private readonly ILogger<InventoryIngestionFunction> _log;
+    private readonly TelemetryIngestionProcessor _processor;
+    private readonly ILogger<TelemetryIngestionFunction> _log;
 
-    public InventoryIngestionFunction(InventoryIngestionProcessor processor, ILogger<InventoryIngestionFunction> log)
+    public TelemetryIngestionFunction(TelemetryIngestionProcessor processor, ILogger<TelemetryIngestionFunction> log)
     {
         _processor = processor;
         _log = log;
     }
 
-    [Function("IngestInventory")]
+    [Function("IngestTelemetry")]
     public async Task Run(
-        [ServiceBusTrigger("%ServiceBus:InventoryQueue%", Connection = "ServiceBus")]
+        [ServiceBusTrigger("%ServiceBus:QueueName%", Connection = "ServiceBus")]
         ServiceBusReceivedMessage message,
         ServiceBusMessageActions messageActions,
         CancellationToken ct)
@@ -40,7 +40,7 @@ public sealed class InventoryIngestionFunction
         ArgumentNullException.ThrowIfNull(message);
         ArgumentNullException.ThrowIfNull(messageActions);
 
-        var pointer = InventoryIngestionProcessor.TryParsePointer(message.Body.ToString(), out var parseReason);
+        var pointer = TelemetryIngestionProcessor.TryParsePointer(message.Body.ToString(), out var parseReason);
         if (pointer is null)
         {
             _log.LogError("Dead-lettering malformed pointer message {MessageId}: {Reason}", message.MessageId, parseReason);

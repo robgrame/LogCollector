@@ -7,7 +7,7 @@ using Microsoft.Extensions.Configuration;
 namespace LogCollector.Shared.Security;
 
 /// <summary>
-/// Verifies the application-level signature attached to an inventory submission.
+/// Verifies the application-level signature attached to a telemetry submission.
 ///
 /// The signature proves that the holder of the mTLS certificate's private key
 /// authorised this exact (method, path, timestamp, nonce, body) tuple. TLS alone

@@ -1,10 +1,12 @@
-# Custom Inventory 1.4.5 - distribuzione Intune Win32
+# Custom Inventory 1.4.6 - distribuzione Intune Win32
 
 Il pacchetto installa il collector hardware/software e tutti i moduli comuni.
 Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 Gli script originali cliente non vengono letti o modificati. Il modulo condiviso
-passa alla versione 1.2.2; la nuova funzionalita di logging porta il pacchetto
-inventory a **1.4.5** (Major.Minor.Build).
+passa alla versione 1.3.3 con supporto all'endpoint generico `/api/submit`.
+Il pacchetto inventory passa a **1.4.6** per l'aggiornamento della dipendenza;
+mantiene compatibili endpoint e tabelle precedenti. Il logging introdotto in 1.4.5
+resta invariato (versioning Major.Minor.Build).
 
 ## 1. Preparazione del computer di packaging
 
@@ -32,10 +34,10 @@ Output predefiniti:
 
 | File/cartella | Utilizzo |
 |---|---|
-| `out\IntuneWin32\1.4.5\Output\Install.intunewin` | File da caricare nell'app Win32 |
-| `out\IntuneWin32\1.4.5\Detect.ps1` | Script da caricare nella detection rule |
-| `out\IntuneWin32\1.4.5\Intune-Deployment.md` | Copia di questa guida |
-| `out\IntuneWin32\1.4.5\Source\1.4.5` | Tutti i 16 file inclusi nel payload, configurazione e logger compresi |
+| `out\IntuneWin32\1.4.6\Output\Install.intunewin` | File da caricare nell'app Win32 |
+| `out\IntuneWin32\1.4.6\Detect.ps1` | Script da caricare nella detection rule |
+| `out\IntuneWin32\1.4.6\Intune-Deployment.md` | Copia di questa guida |
+| `out\IntuneWin32\1.4.6\Source\1.4.6` | Tutti i 16 file inclusi nel payload, configurazione e logger compresi |
 
 Il comando restituisce SHA256 del pacchetto, ConfigurationSha256 e stato SubmissionEnabled. Source e Output
 sono separati: il tool non ingloba il proprio eseguibile o il file .intunewin.
@@ -62,18 +64,18 @@ Per personalizzare endpoint, selezione certificato, CA, tabelle o attivazione:
     -FrontendUrl 'https://logcollector-intake.azurewebsites.net/api/inventory' `
     -Environment 'MSLabs' -OutputRoot '.\out\Inventory-PilotConfig'
 
-# Modificare out\Inventory-PilotConfig\1.4.5\Config.psd1 con un editor.
+# Modificare out\Inventory-PilotConfig\1.4.6\Config.psd1 con un editor.
 # Impostare SubmissionEnabled = $true SOLO dopo la preparazione lato Azure.
 
 .\scripts\Publish-IntuneWin32Package.ps1 `
     -IntuneWinAppUtilPath 'C:\Tools\IntuneWinAppUtil.exe' `
-    -ConfigurationPath '.\out\Inventory-PilotConfig\1.4.5\Config.psd1' `
+    -ConfigurationPath '.\out\Inventory-PilotConfig\1.4.6\Config.psd1' `
     -OutputRoot '.\out\IntuneWin32-Pilot02'
 ```
 
 ConfigurationPath importa solo dati PSD1, non gli script di quella cartella:
 il payload viene sempre costruito dai sorgenti correnti della repository.
-La versione della configurazione deve coincidere con 1.4.5. La configurazione
+La versione della configurazione deve coincidere con 1.4.6. La configurazione
 viene validata dallo stesso runtime dell'installer prima di chiamare il tool.
 Non inserire chiavi private o credenziali. I certificati non vengono esportati.
 Per PKI vedere `docs\pki-ca-policy.md`: filtri Root/SubCA e trust server sono distinti.
@@ -100,8 +102,8 @@ Config.psd1 dopo la generazione o sul dispositivo gestito.
 4. Mantenere l'assegnazione **Required** al gruppo pilot e avviare una sincronizzazione
    del dispositivo, oppure attendere il normale ciclo di rivalutazione IME.
 
-Nel passaggio da 1.2.3 a 1.4.5 aggiornare anche la command line di uninstall al
-percorso 1.4.5 indicato sotto. Per successive varianti di sola configurazione della
+Nel passaggio da una versione precedente a 1.4.6 aggiornare anche la command line di uninstall al
+percorso 1.4.6 indicato sotto. Per successive varianti di sola configurazione della
 stessa versione le command line restano invariate.
 
 La vecchia configurazione non soddisfa la nuova detection; Intune esegue di nuovo
@@ -126,7 +128,7 @@ non garantisce di anticipare tutti i cicli IME. Riferimento:
 ## 3. Creazione dell'app
 
 Intune admin center > Apps > Windows > Add > **Windows app (Win32)**.
-Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inventory 1.4.5**.
+Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inventory 1.4.6**.
 
 | Impostazione Program | Valore |
 |---|---|
@@ -145,7 +147,7 @@ Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inven
 **Uninstall command** (una sola riga, usa la copia installata, non la cache IME):
 
 ```text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.4.5\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.4.6\Uninstall.ps1"
 ```
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
@@ -204,7 +206,7 @@ SYSTEM, non soltanto come utente interattivo.
 
 ## 6. Comportamento installato e prova
 
-Percorso: `C:\Program Files\LogCollector\CustomInventory\1.4.5`
+Percorso: `C:\Program Files\LogCollector\CustomInventory\1.4.6`
 (il codice usa il percorso Program Files del sistema, senza presupporre il disco C).
 
 | Task SYSTEM in `\LogCollector\` | Azione |

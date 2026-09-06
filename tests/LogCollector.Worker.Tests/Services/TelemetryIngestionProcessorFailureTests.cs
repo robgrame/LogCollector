@@ -15,7 +15,7 @@ namespace LogCollector.Worker.Tests.Services;
 /// function had no catch, and the message was silently redelivered until the
 /// broker dead-lettered it with a reason that named no cause.
 /// </summary>
-public sealed class InventoryIngestionProcessorFailureTests
+public sealed class TelemetryIngestionProcessorFailureTests
 {
     [Fact]
     public async Task ProcessAsync_SucceedsWhenIngestionAccepts()
@@ -50,7 +50,7 @@ public sealed class InventoryIngestionProcessorFailureTests
     public async Task ProcessAsync_DoesNotThrowOnAPermanentIngestionRejection()
     {
         // Throwing would bypass the function's explicit dead-letter path, because
-        // InventoryIngestionFunction has no catch for it.
+        // TelemetryIngestionFunction has no catch for it.
         var payload = WorkerTestHost.EnvelopePayload();
         var handler = WorkerTestHost.PipelineHandler(payload, HttpStatusCode.Forbidden);
         var processor = WorkerTestHost.Processor(WorkerTestHost.Options(), handler);

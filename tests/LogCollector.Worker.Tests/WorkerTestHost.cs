@@ -112,7 +112,8 @@ internal static class WorkerTestHost
         return new LogsIngestionPublisher(client, options, NullLogger<LogsIngestionPublisher>.Instance);
     }
 
-    public static InventoryIngestionProcessor Processor(WorkerIngestionOptions options, HttpMessageHandler handler)
+    public static TelemetryIngestionProcessor Processor(
+        WorkerIngestionOptions options, HttpMessageHandler handler, string streamMap = StreamMap)
     {
         var blobOptions = new BlobClientOptions();
         blobOptions.Retry.MaxRetries = 0;
@@ -123,12 +124,12 @@ internal static class WorkerTestHost
             new StubTokenCredential(),
             blobOptions);
 
-        return new InventoryIngestionProcessor(
+        return new TelemetryIngestionProcessor(
             new PayloadBlobReader(blobService, options, NullLogger<PayloadBlobReader>.Instance),
             Publisher(options, handler),
-            new IngestionStreamMap(StreamMap),
+            new IngestionStreamMap(streamMap),
             options,
-            NullLogger<InventoryIngestionProcessor>.Instance);
+            NullLogger<TelemetryIngestionProcessor>.Instance);
     }
 
     /// <summary>Builds a row of roughly <paramref name="padBytes"/> payload bytes.</summary>

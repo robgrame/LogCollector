@@ -71,8 +71,8 @@ builder.Services.AddSingleton<ReplayProtector>();
 builder.Services.AddSingleton<RequestSignatureVerifier>();
 builder.Services.AddSingleton<ClientCertValidator>();
 builder.Services.AddSingleton<IngestionStreamMap>();
-builder.Services.AddSingleton<InventoryIntakeOptions>();
-builder.Services.AddSingleton<InventoryPointerPublisher>();
+builder.Services.AddSingleton<TelemetryIntakeOptions>();
+builder.Services.AddSingleton<TelemetryPointerPublisher>();
 builder.Services.AddHostedService<NonceCleanupService>();
 builder.Services.AddHttpClient<GraphDeviceAuthorizer>(client => client.Timeout = TimeSpan.FromSeconds(20));
 

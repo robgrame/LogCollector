@@ -1,7 +1,7 @@
 targetScope = 'resourceGroup'
 
 // =============================================================================
-// LogCollector - secure Windows inventory ingestion.
+// LogCollector - secure device telemetry ingestion; inventory is the default example schema.
 //
 //   Windows client  --mTLS + signed body-->  Frontend Function App (Linux B1,
 //   Always On, client certificates REQUIRED)  --blob + pointer-->  Service Bus
@@ -36,10 +36,10 @@ param environment string = 'prod'
 @allowed(['B1', 'B2', 'B3', 'S1', 'S2', 'S3', 'P1v3', 'P2v3', 'P3v3'])
 param frontendPlanSku string = 'B1'
 
-@description('Service Bus queue carrying blob pointer messages.')
+@description('Shared Service Bus queue carrying pointers for all telemetry purposes. Legacy parameter name retained for deployed resources.')
 param inventoryQueueName string = 'inventory-ingestion'
 
-@description('Blob container holding submitted inventory payloads.')
+@description('Blob container holding submitted telemetry payloads of any purpose.')
 param payloadContainerName string = 'inventory-payloads'
 
 @description('Azure Table used for the distributed replay-nonce store.')
@@ -47,6 +47,12 @@ param nonceTableName string = 'RequestNonces'
 
 @description('Primary Log Analytics custom table for Windows inventory.')
 param inventoryTableName string = 'InventoryWindows_CL'
+
+@description('Include the original inventory example schema. Disable for deployments using only additionalTelemetryTables.')
+param includeInventoryExample bool = true
+
+@description('Additional purpose-specific custom tables. Each entry has name and columns (including platform identity columns). No application code changes are needed.')
+param additionalTelemetryTables array = []
 
 @description('Interactive retention (days) for the workspace and the custom table.')
 @minValue(30)
@@ -157,7 +163,10 @@ var frontendDeployContainer = 'intake-deploy'
 var workerDeployContainer = 'worker-deploy'
 
 var inventoryStreamName = 'Custom-${inventoryTableName}'
-var ingestionStreamMap = '${inventoryTableName}=${inventoryStreamName}'
+var telemetryTableDefinitions = concat(includeInventoryExample ? [
+  { name: inventoryTableName, columns: inventoryColumns }
+] : [], additionalTelemetryTables)
+var ingestionStreamMap = join(map(telemetryTableDefinitions, table => '${table.name}=Custom-${table.name}'), ';')
 
 // Built-in role definition ids.
 var roleBlobDataOwner = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
@@ -168,7 +177,7 @@ var roleServiceBusReceiver = subscriptionResourceId('Microsoft.Authorization/rol
 var roleMonitoringMetricsPublisher = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
 var roleMonitoringReader = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
 
-// The flat column set emitted by InventoryRowFactory plus every field the
+// Default inventory example: the flat column set emitted by TelemetryRowFactory plus every field the
 // collector script produces. Column names are unique across record types on
 // purpose: reusing one name with two types (for example a datetime OS install
 // date and a string software install date) makes the table unqueryable.
@@ -271,19 +280,19 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-resource inventoryTable 'Microsoft.OperationalInsights/workspaces/tables@2023-09-01' = {
+resource telemetryTables 'Microsoft.OperationalInsights/workspaces/tables@2023-09-01' = [for table in telemetryTableDefinitions: {
   parent: workspace
-  name: inventoryTableName
+  name: table.name
   properties: {
     plan: 'Analytics'
     retentionInDays: retentionInDays
     totalRetentionInDays: retentionInDays
     schema: {
-      name: inventoryTableName
-      columns: inventoryColumns
+      name: table.name
+      columns: table.columns
     }
   }
-}
+}]
 
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: appInsightsName
@@ -322,11 +331,9 @@ resource dcr 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
   kind: 'Direct'
   properties: {
     dataCollectionEndpointId: dce.id
-    streamDeclarations: {
-      '${inventoryStreamName}': {
-        columns: inventoryColumns
-      }
-    }
+    streamDeclarations: toObject(telemetryTableDefinitions, table => 'Custom-${table.name}', table => {
+      columns: table.columns
+    })
     destinations: {
       logAnalytics: [
         {
@@ -335,19 +342,18 @@ resource dcr 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
         }
       ]
     }
-    dataFlows: [
-      {
-        streams: [ inventoryStreamName ]
+    dataFlows: [for table in telemetryTableDefinitions: {
+        streams: [ 'Custom-${table.name}' ]
         destinations: [ 'inventoryWorkspace' ]
         // 'source' passes rows through unchanged. Column selection already
-        // happened client-side in InventoryRowFactory.
+        // happened in TelemetryRowFactory in the worker.
         transformKql: 'source'
-        outputStream: inventoryStreamName
+        outputStream: 'Custom-${table.name}'
       }
     ]
   }
   dependsOn: [
-    inventoryTable
+    telemetryTables
   ]
 }
 
@@ -715,6 +721,7 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ServiceBus__fullyQualifiedNamespace', value: '${serviceBus.name}.servicebus.windows.net' }
         { name: 'ServiceBus__credential', value: 'managedidentity' }
         { name: 'ServiceBus__clientId', value: frontendIdentity.properties.clientId }
+        { name: 'ServiceBus__QueueName', value: inventoryQueueName }
         { name: 'ServiceBus__InventoryQueue', value: inventoryQueueName }
 
         { name: 'Storage__AccountName', value: storage.name }
@@ -835,6 +842,7 @@ resource workerApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ServiceBus__fullyQualifiedNamespace', value: '${serviceBus.name}.servicebus.windows.net' }
         { name: 'ServiceBus__credential', value: 'managedidentity' }
         { name: 'ServiceBus__clientId', value: workerIdentity.properties.clientId }
+        { name: 'ServiceBus__QueueName', value: inventoryQueueName }
         { name: 'ServiceBus__InventoryQueue', value: inventoryQueueName }
 
         { name: 'Storage__AccountName', value: storage.name }
@@ -869,7 +877,8 @@ resource workerApp 'Microsoft.Web/sites@2023-12-01' = {
 // ---------------------------------------------------------------------------
 
 output frontendAppName string = frontendApp.name
-output frontendIngestUrl string = 'https://${frontendApp.properties.defaultHostName}/api/inventory'
+output frontendIngestUrl string = 'https://${frontendApp.properties.defaultHostName}/api/submit'
+output legacyInventoryIngestUrl string = 'https://${frontendApp.properties.defaultHostName}/api/inventory'
 output frontendHealthUrl string = 'https://${frontendApp.properties.defaultHostName}/api/health'
 output workerAppName string = workerApp.name
 output storageAccountName string = storage.name

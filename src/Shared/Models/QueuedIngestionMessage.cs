@@ -5,7 +5,7 @@ namespace LogCollector.Shared.Models;
 /// <summary>
 /// Service Bus <i>pointer</i> message. The payload itself never travels on the
 /// queue — only the blob coordinates do, which keeps messages far below the
-/// Service Bus Standard 256 KB limit regardless of inventory size.
+/// Service Bus Standard 256 KB limit regardless of payload size.
 /// </summary>
 /// <remarks>
 /// The pointer intentionally carries the container and blob <b>name</b> rather
@@ -70,7 +70,7 @@ public sealed class QueuedIngestionMessage
             return new ValidationResult(false, "blobName is required");
         if (BlobName.Contains("..", StringComparison.Ordinal) || BlobName.StartsWith('/'))
             return new ValidationResult(false, "blobName is not a canonical relative blob path");
-        if (string.IsNullOrWhiteSpace(TableName) || !InventoryEnvelope.IsSafeTableName(TableName))
+        if (string.IsNullOrWhiteSpace(TableName) || !TelemetryEnvelope.IsSafeTableName(TableName))
             return new ValidationResult(false, "tableName is missing or invalid");
         if (string.IsNullOrWhiteSpace(CorrelationId))
             return new ValidationResult(false, "correlationId is required");

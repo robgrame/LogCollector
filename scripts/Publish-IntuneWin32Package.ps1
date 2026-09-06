@@ -3,7 +3,7 @@
 .SYNOPSIS
 Builds a complete inventory Win32 package using Microsoft's local content prep tool.
 .NOTES
-Version 1.4.5. Does not install tasks, collect inventory, upload content or change Azure.
+Version 1.4.6. Does not install tasks, collect inventory, upload content or change Azure.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
 param(

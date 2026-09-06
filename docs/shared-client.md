@@ -17,7 +17,7 @@ request already accepted by the server. Do not use a callback that dumps caller
 variables or arbitrary exceptions into a log.
 
 `src\Client\LogCollector.Client.psd1` is the public module entry point for independent
-inventory, diagnostic and remediation scripts. Version **1.2.2** supports Windows PowerShell
+inventory, diagnostic and remediation scripts. Version **1.3.3** supports Windows PowerShell
 5.1 and PowerShell 7 on Windows. Import does not discover certificates, access Azure, install
 tasks or run collection/remediation.
 
@@ -33,7 +33,7 @@ $package = .\scripts\Publish-ClientModule.ps1
 $package | Format-List ModuleVersion, PackagePath, PackageSha256
 ```
 
-The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.2.2`.
+The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.3.3`.
 It contains no customer scripts, private keys, CA files, credentials or device inventory.
 The SHA-256 identifies the generated artifact; it is not a digital signature or proof of its source.
 
@@ -41,7 +41,7 @@ Distribute it through the customer's trusted management channel to an administra
 directory, for example:
 
 ```text
-C:\Program Files\LogCollector\Modules\LogCollector.Client\1.2.2\
+C:\Program Files\LogCollector\Modules\LogCollector.Client\1.3.3\
     LogCollector.Client.psd1
     LogCollector.Client.psm1
     DeviceIdentity.psm1
@@ -56,7 +56,7 @@ Keep the import path valid for scheduled tasks, self-copies and post-upgrade hoo
 the current working directory to locate it.
 
 ```powershell
-Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.2.2\LogCollector.Client.psd1' -ErrorAction Stop
+Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.3.3\LogCollector.Client.psd1' -ErrorAction Stop
 ```
 
 The high-level commands obtain their endpoint from an explicit parameter. No Function key,
@@ -69,7 +69,7 @@ workspace key, workspace ID or Graph token is distributed with the module.
 | `Get-DeviceIdentitySnapshot` | Returns local `EntraDeviceId`, `DeviceName`, optional `IntuneDeviceId` |
 | `Get-ClientCertificate` | Selects a valid-date certificate with private key and Client Authentication EKU |
 | `New-SignedInventoryRequest` | Returns the exact UTF-8 `BodyBytes` and signature headers for advanced integration |
-| `New-InventoryEnvelope` | Wraps existing records in `LOGCOLLECTOR-INVENTORY-V1` |
+| `New-InventoryEnvelope` | Wraps existing records; legacy version by default, optional `-EnvelopeVersion 'LOGCOLLECTOR-TELEMETRY-V1'` |
 | `Get-LogCollectorSpoolPath` | Computes the endpoint-specific queue directory without creating it |
 | `Send-LogCollectorData` | Discovers identity/certificate, wraps, signs and submits existing record objects |
 | `Sync-LogCollectorSpool` | Retries queued data without re-running the originating scripts |
@@ -79,11 +79,21 @@ cryptography, certificate selection or retry logic.
 
 ## Submit existing data
 
+For new integrations, use **`https://host/api/submit`**. `Send-LogCollectorData` emits
+`LOGCOLLECTOR-TELEMETRY-V1` for this endpoint. Inventory is one application: diagnostics,
+remediation outcomes and other record schemas use the same client, selected by `TableName`
+and `Source`, without renaming or transforming their fields.
+
+The exact legacy **`https://host/api/inventory`** endpoint remains supported and continues to
+emit `LOGCOLLECTOR-INVENTORY-V1`. Existing function names, including
+`New-InventoryEnvelope` and `New-SignedInventoryRequest`, are unchanged. Direct calls to
+`New-InventoryEnvelope` retain their legacy default for existing callers.
+
 This example uses the **currently configured** `InventoryWindows_CL` destination. It does not
 collect additional data or modify device settings:
 
 ```powershell
-$endpoint = 'https://logcollector-intake.azurewebsites.net/api/inventory'
+$endpoint = 'https://logcollector-intake.azurewebsites.net/api/submit'
 $record = [pscustomobject]@{
     RecordType = 'Hardware'
     Model = 'Example model'
@@ -91,7 +101,7 @@ $record = [pscustomobject]@{
 
 $result = Send-LogCollectorData -FrontendUrl $endpoint `
     -TableName 'InventoryWindows_CL' -Records @($record) `
-    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.2.2' }
+    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.3.3' }
 
 $result | Select-Object Disposition, StatusCode, Attempts, Spooled, SpoolDirectory
 ```
@@ -174,7 +184,8 @@ $certificate = Get-ClientCertificate -EntraDeviceId $identity.EntraDeviceId
 try {
     $envelope = New-InventoryEnvelope -TableName 'InventoryWindows_CL' `
         -Records @($record) -EntraDeviceId $identity.EntraDeviceId `
-        -DeviceName $identity.DeviceName -IntuneDeviceId $identity.IntuneDeviceId
+        -DeviceName $identity.DeviceName -IntuneDeviceId $identity.IntuneDeviceId `
+        -EnvelopeVersion 'LOGCOLLECTOR-TELEMETRY-V1'
     $body = $envelope | ConvertTo-Json -Depth 24 -Compress
     $signed = New-SignedInventoryRequest -Uri $endpoint -Body $body -Certificate $certificate
     # $signed.BodyBytes and $signed.Headers belong to this exact request.
@@ -224,6 +235,13 @@ The default root is `C:\ProgramData\LogCollector\SharedSpool`. An SHA-256 direct
 normalized endpoint URL isolates each destination. All scripts targeting the same endpoint/root
 share that bucket; changing endpoints does not redirect old records.
 
+Switching from `/api/inventory` to `/api/submit` creates a different bucket even on the same
+host. There is **no silent spool migration**: drain the old bucket explicitly with
+`Sync-LogCollectorSpool -FrontendUrl 'https://host/api/inventory'` and the original `SpoolRoot`.
+Retained envelope versions, identity, timestamps and exact UTF-8 body bytes are not rewritten;
+only delivery-attempt metadata changes during retries. Upgrading the module does not convert
+legacy queued bodies into generic envelopes.
+
 The older collector's default `C:\ProgramData\LogCollector\Spool` is a separate legacy layout.
 The facade does not import or drain it automatically. Do not move arbitrary old spool files into
 the new queue or repair untrusted files' permissions and replay them.
@@ -258,8 +276,10 @@ time. Use `-SkipDrain` for bounded new-send workflows and a separate drain task,
 when an operation must not wait for HTTP.
 
 The sender refuses HTTP redirects, and uses `Expect: 100-continue` for large mTLS bodies.
-The facade requires an absolute HTTPS URL at `/api/inventory` with no user information, query
-or fragment. Keep App Service certificate exclusions empty.
+The facade requires an absolute HTTPS URL at exactly `/api/submit` or `/api/inventory` with no
+user information, query or fragment. Other paths, trailing slashes, case variants, escaped
+path aliases and dot-segment paths are rejected. Signing uses the actual request path, not
+a hardcoded inventory route. Keep App Service certificate exclusions empty.
 
 The module does not automatically split batches or transform schemas. An individual projected row
 must also fit the worker's 850 KiB chunk limit. Per-event time should be a schema-approved field such

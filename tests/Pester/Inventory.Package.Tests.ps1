@@ -257,7 +257,7 @@ Describe 'inventory package installer' {
     }
 
     It 'rejects an old configuration version before installation' {
-        $script:DefaultConfigText.Replace("PackageVersion = '1.4.5'", "PackageVersion = '1.0.0'") |
+        $script:DefaultConfigText.Replace("PackageVersion = '1.4.6'", "PackageVersion = '1.0.0'") |
             Set-Content $script:ConfigPath
         { & (Join-Path $script:Fixture 'Install.ps1') } | Should -Throw '*must match package version*'
         Should -Invoke Write-InventoryLogFailure -Times 1 -Exactly -ParameterFilter { $Stage -eq 'LoadConfiguration' }
@@ -308,7 +308,7 @@ Describe 'inventory distribution builder' {
         $output = Join-Path $TestDrive 'Distribution'
         $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
         $result.FileCount | Should -Be 16
-        $result.PackageVersion | Should -BeExactly '1.4.5'
+        $result.PackageVersion | Should -BeExactly '1.4.6'
         $result.SubmissionEnabled | Should -BeFalse
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.PackagePath 'Config.psd1')).Hash
         (Get-Content (Join-Path $result.PackagePath 'Detect.ps1') -Raw) | Should -Match $result.ConfigurationSha256
@@ -320,7 +320,7 @@ Describe 'inventory distribution builder' {
         $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
         @($copied.PkiRootCaThumbprints).Count | Should -Be 0
         (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
-            Should -BeExactly '1.2.2'
+            Should -BeExactly '1.3.3'
     }
 
     It 'escapes deployment configuration as data and supports alternative tables' {

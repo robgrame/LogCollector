@@ -7,6 +7,7 @@
 BeforeAll {
     $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     Import-Module (Join-Path $repoRoot 'src\Client\InventorySpool.psm1') -Force -DisableNameChecking
+    Import-Module (Join-Path $repoRoot 'src\Client\RequestSigning.psm1') -Force -DisableNameChecking
     Import-Module (Join-Path $repoRoot 'src\Client\InventoryClient.psm1') -Force -DisableNameChecking
 
     $script:DeviceId = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
@@ -78,6 +79,16 @@ Context 'New-InventoryEnvelope' {
             -EntraDeviceId $script:DeviceId.ToUpper()
 
         $envelope.entraDeviceId | Should -BeExactly $script:DeviceId
+    }
+
+    It 'builds generic telemetry with caller-selected schema and source' {
+        $record = @{ Operation = 'Remediate'; Succeeded = $true; DurationMs = 42; Details = @{ Steps = @('a', 'b') } }
+        $envelope = New-InventoryEnvelope -TableName 'RemediationEvents_CL' -Records @($record) `
+            -EntraDeviceId $script:DeviceId -Source 'RepairScript' -EnvelopeVersion 'LOGCOLLECTOR-TELEMETRY-V1'
+        $envelope.envelopeVersion | Should -BeExactly 'LOGCOLLECTOR-TELEMETRY-V1'
+        $envelope.tableName | Should -BeExactly 'RemediationEvents_CL'
+        $envelope.source | Should -BeExactly 'RepairScript'
+        $envelope.records[0] | Should -Be $record
     }
 
     It 'rejects a device id that is not a GUID' {
@@ -209,7 +220,12 @@ Context 'Send-InventoryEnvelope' {
             [DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddYears(1))
     }
 
-    It 'enables Expect 100-continue without changing signed body bytes' {
+    It 'signs the actual <Path> path and exact bytes with redirects disabled' -TestCases @(
+        @{ Path = '/api/submit' }
+        @{ Path = '/api/inventory' }
+    ) {
+        param($Path)
+        $script:HttpRequest = $null
         Mock -ModuleName InventoryClient Invoke-WebRequest {
             param($Uri, $Headers, $Body, $MaximumRedirection)
             $MaximumRedirection | Should -Be 0
@@ -220,11 +236,25 @@ Context 'Send-InventoryEnvelope' {
                 [Net.ServicePointManager]::FindServicePoint($Uri).Expect100Continue | Should -BeTrue
             }
             [Text.Encoding]::UTF8.GetString($Body) | Should -BeExactly '{"probe":true}'
+            $script:HttpRequest = @{ Uri = $Uri; Headers = $Headers; Body = $Body }
             [pscustomobject]@{ StatusCode = 202 }
         }
-        $result = Send-InventoryEnvelope -Uri ([Uri]'https://example.invalid/api/inventory') `
+        $result = Send-InventoryEnvelope -Uri ([Uri]"https://example.invalid$Path") `
             -Body '{"probe":true}' -Certificate $script:Certificate -NoSleep
         $result.Disposition | Should -BeExactly 'Delivered'
+        $script:HttpRequest.Uri.AbsolutePath | Should -BeExactly $Path
+        $headers = $script:HttpRequest.Headers
+        $canonical = Get-SignedRequestCanonicalText -Method 'POST' -Path $Path `
+            -Timestamp ([DateTimeOffset]::Parse($headers['X-Request-Timestamp'])) `
+            -Nonce ([guid]$headers['X-Request-Nonce']) -BodyBytes $script:HttpRequest.Body
+        $publicKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($script:Certificate)
+        try {
+            $publicKey.VerifyData([Text.Encoding]::UTF8.GetBytes($canonical),
+                [Convert]::FromBase64String($headers['X-Request-Signature']),
+                [Security.Cryptography.HashAlgorithmName]::SHA256,
+                [Security.Cryptography.RSASignaturePadding]::Pkcs1) | Should -BeTrue
+        }
+        finally { $publicKey.Dispose() }
         Should -Invoke -ModuleName InventoryClient Invoke-WebRequest -Times 1 -Exactly
     }
 
@@ -513,9 +543,12 @@ Context 'Invoke-InventorySubmission' {
 
     It 'rejects an invalid envelope before creating a spool' -TestCases @(
         @{ Kind = 'Empty' }; @{ Kind = 'Scalar' }; @{ Kind = 'TooMany' }; @{ Kind = 'Deep' }; @{ Kind = 'Large' }
+        @{ Kind = 'UnknownVersion' }; @{ Kind = 'WrongCaseVersion' }
     ) {
         param($Kind)
         switch ($Kind) {
+            'UnknownVersion' { $script:Envelope.envelopeVersion = 'LOGCOLLECTOR-OTHER-V1' }
+            'WrongCaseVersion' { $script:Envelope.envelopeVersion = 'logcollector-telemetry-v1' }
             'Empty' { $script:Envelope.records = @() }
             'Scalar' { $script:Envelope.records = @('not an object') }
             'TooMany' { $script:Envelope.records = @(@{ A = 1 }) * 50001 }

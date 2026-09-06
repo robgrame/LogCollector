@@ -7,7 +7,7 @@ namespace LogCollector.Shared.Security;
 /// pipeline needs. Keeping this free of ASP.NET types is what makes the whole
 /// authentication path unit-testable without a host.
 /// </summary>
-public sealed class InventoryRequestContext
+public sealed class TelemetryRequestContext
 {
     public required string Method { get; init; }
 
@@ -41,7 +41,7 @@ public sealed class InventoryRequestContext
 /// and signature verify, so unauthenticated traffic cannot flood the nonce
 /// table. Device binding is last because it needs the parsed body.
 /// </remarks>
-public sealed class InventoryRequestAuthenticator
+public sealed class TelemetryRequestAuthenticator
 {
     public sealed record AuthenticationOutcome(
         bool Ok,
@@ -57,7 +57,7 @@ public sealed class InventoryRequestAuthenticator
     private readonly RequestSignatureVerifier _signatureVerifier;
     private readonly ReplayProtector _replayProtector;
 
-    public InventoryRequestAuthenticator(
+    public TelemetryRequestAuthenticator(
         ClientCertValidator certValidator,
         RequestSignatureVerifier signatureVerifier,
         ReplayProtector replayProtector)
@@ -69,7 +69,7 @@ public sealed class InventoryRequestAuthenticator
 
     public int MaxBodyBytes => _signatureVerifier.MaxBodyBytes;
 
-    public async Task<AuthenticationOutcome> AuthenticateAsync(InventoryRequestContext context, CancellationToken ct)
+    public async Task<AuthenticationOutcome> AuthenticateAsync(TelemetryRequestContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
 
@@ -121,7 +121,7 @@ public sealed class InventoryRequestAuthenticator
     /// <summary>
     /// Confirms the certificate is bound to the device id claimed in the body.
     /// This is the control that stops an authenticated device from submitting
-    /// inventory on behalf of another device (IDOR).
+    /// telemetry on behalf of another device (IDOR).
     /// </summary>
     public (bool Ok, int StatusCode, string? Reason, string? BoundDeviceId) AuthorizeDeviceBinding(
         X509Certificate2 certificate,

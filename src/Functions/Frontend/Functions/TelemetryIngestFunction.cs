@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace LogCollector.Frontend.Functions;
 
 /// <summary>
-/// <c>POST /api/inventory</c> — the only ingress into the pipeline.
+/// Purpose-independent submission intake, with an alias for existing inventory clients.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,31 +29,31 @@ namespace LogCollector.Frontend.Functions;
 /// only reintroduce the shared secret this design exists to eliminate.
 /// </para>
 /// </remarks>
-public sealed class InventoryIngestFunction
+public sealed class TelemetryIngestFunction
 {
     private static readonly JsonSerializerOptions EnvelopeJson = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
     };
 
-    private readonly InventoryRequestAuthenticator _authenticator;
-    private readonly InventoryPointerPublisher _publisher;
+    private readonly TelemetryRequestAuthenticator _authenticator;
+    private readonly TelemetryPointerPublisher _publisher;
     private readonly IngestionStreamMap _streamMap;
-    private readonly InventoryIntakeOptions _options;
+    private readonly TelemetryIntakeOptions _options;
     private readonly GraphDeviceAuthorizer _deviceAuthorizer;
-    private readonly ILogger<InventoryIngestFunction> _log;
+    private readonly ILogger<TelemetryIngestFunction> _log;
 
-    public InventoryIngestFunction(
+    public TelemetryIngestFunction(
         ClientCertValidator certValidator,
         RequestSignatureVerifier signatureVerifier,
         ReplayProtector replayProtector,
-        InventoryPointerPublisher publisher,
+        TelemetryPointerPublisher publisher,
         IngestionStreamMap streamMap,
-        InventoryIntakeOptions options,
+        TelemetryIntakeOptions options,
         GraphDeviceAuthorizer deviceAuthorizer,
-        ILogger<InventoryIngestFunction> log)
+        ILogger<TelemetryIngestFunction> log)
     {
-        _authenticator = new InventoryRequestAuthenticator(certValidator, signatureVerifier, replayProtector);
+        _authenticator = new TelemetryRequestAuthenticator(certValidator, signatureVerifier, replayProtector);
         _publisher = publisher;
         _streamMap = streamMap;
         _options = options;
@@ -61,9 +61,20 @@ public sealed class InventoryIngestFunction
         _log = log;
     }
 
-    [Function("SubmitInventory")]
+    [Function("SubmitTelemetry")]
     public async Task<IActionResult> Run(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "submit")] HttpRequest req,
+        CancellationToken ct)
+        => await HandleAsync(req, ct).ConfigureAwait(false);
+
+    [Function("SubmitLegacyInventory")]
+    public async Task<IActionResult> RunLegacy(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "inventory")] HttpRequest req,
+        CancellationToken ct)
+        => await HandleAsync(req, ct).ConfigureAwait(false);
+
+    private async Task<IActionResult> HandleAsync(
+        HttpRequest req,
         CancellationToken ct)
     {
         var correlationId = Guid.NewGuid().ToString("N");
@@ -86,10 +97,10 @@ public sealed class InventoryIngestFunction
         if (bodyBytes.Length == 0)
             return Problem(StatusCodes.Status400BadRequest, "request body is empty", correlationId);
 
-        var context = new InventoryRequestContext
+        var context = new TelemetryRequestContext
         {
             Method = req.Method,
-            Path = req.Path.Value ?? "/api/inventory",
+            Path = req.Path.Value ?? string.Empty,
             Body = bodyBytes,
             TimestampHeader = req.Headers[RequestSignatureVerifier.TimestampHeader].ToString(),
             NonceHeader = req.Headers[RequestSignatureVerifier.NonceHeader].ToString(),
@@ -109,10 +120,10 @@ public sealed class InventoryIngestFunction
             return Problem(auth.StatusCode, auth.Reason ?? "request denied", correlationId);
         }
 
-        InventoryEnvelope? envelope;
+        TelemetryEnvelope? envelope;
         try
         {
-            envelope = JsonSerializer.Deserialize<InventoryEnvelope>(bodyBytes, EnvelopeJson);
+            envelope = JsonSerializer.Deserialize<TelemetryEnvelope>(bodyBytes, EnvelopeJson);
         }
         catch (JsonException ex)
         {

@@ -8,12 +8,17 @@ Protocol-level reference for the wire formats and the ingestion path. For the th
 ### Endpoint
 
 ```text
-POST https://<frontend>.azurewebsites.net/api/inventory
+POST https://<frontend>.azurewebsites.net/api/submit
 ```
 
 `AuthorizationLevel.Anonymous` at the trigger, mandatory client certificates at the platform,
 certificate/signature/replay/device controls in the function and tenant authorization for Intune
 fallback. No Function key, no API key, no shared secret.
+
+`/api/inventory` remains a compatibility alias. Both routes use the same handler and controls,
+and both accept current and legacy envelopes. Sign the actual path used in the request:
+a signature for `/api/inventory` is not valid for `/api/submit`. Nonce reservation is shared
+across routes, not scoped to the alias.
 
 ### Headers
 
@@ -53,28 +58,33 @@ POST
 
 Changing any line is a breaking protocol change and requires a new version token on both sides.
 
-### Envelope — `LOGCOLLECTOR-INVENTORY-V1`
+### Envelope — `LOGCOLLECTOR-TELEMETRY-V1`
 
 ```json
 {
-  "envelopeVersion": "LOGCOLLECTOR-INVENTORY-V1",
-  "tableName": "InventoryWindows_CL",
+  "envelopeVersion": "LOGCOLLECTOR-TELEMETRY-V1",
+  "tableName": "RemediationResults_CL",
   "entraDeviceId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
   "deviceName": "WKS-001",
   "intuneDeviceId": "…",
   "correlationId": "…",
-  "source": "WindowsScheduledTask",
+  "source": "DiskCleanup",
   "collectedAtUtc": "2026-04-01T06:00:00.0000000+00:00",
-  "properties": { "CollectorVersion": "1.0.3", "CollectedAreas": "Hardware,Software" },
-  "records": [ { "RecordType": "Hardware", "Model": "X1" } ]
+  "properties": { "ScriptVersion": "1.0.3" },
+  "records": [ { "Result": "Succeeded", "FreedBytes": 1048576 } ]
 }
 ```
 
-Structural rules (`InventoryEnvelope.Validate`):
+The legacy `LOGCOLLECTOR-INVENTORY-V1` version retains the same wire shape and is accepted by
+both intake and worker, including previously queued blobs. There is no payload rewrite.
+`source` is a diagnostic label, not an authorization claim or a code/plugin selector. Purposes
+share the device authentication policy; the global table allow-list is not per-purpose RBAC.
+
+Structural rules (`TelemetryEnvelope.Validate`):
 
 | Field | Rule |
 |---|---|
-| `envelopeVersion` | Must equal the current token exactly |
+| `envelopeVersion` | Current or legacy token (ordinal match after trimming) |
 | `tableName` | ASCII letter first, then letters/digits/underscore, ≤ 100 chars, **and** present in the stream map |
 | `entraDeviceId` | Parseable GUID, and equal to the certificate-bound device id |
 | `records` | 1 … `Intake:MaxRecordsPerEnvelope` (default 50 000), each a JSON object |
@@ -82,6 +92,9 @@ Structural rules (`InventoryEnvelope.Validate`):
 | `collectedAtUtc` | Required |
 
 `deviceName` and `intuneDeviceId` are diagnostic only and are never used for authorization.
+Records do not require inventory fields. `TelemetryRowFactory` preserves arbitrary fields and
+adds the same protected platform columns for every purpose. Log Analytics/DCR schemas remain
+operator-managed; accepting JSON objects does not provision destinations or guarantee schema acceptance.
 
 ## Pointer protocol — `LOGCOLLECTOR-POINTER-V1`
 
@@ -158,7 +171,7 @@ layer would burn the attempt budget before the server-supplied delay was ever re
 
 ### Row projection
 
-`InventoryRowFactory` emits, per record: the client's fields, then the envelope properties (record
+`TelemetryRowFactory` emits, per record: the client's fields, then the envelope properties (record
 fields win on conflict), then the server-asserted columns last. Names in `ReservedColumns` are
 stripped from client input, so a device cannot spoof its own attribution.
 

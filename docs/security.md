@@ -23,8 +23,8 @@ completes**, and **the worker treats the queue message as attacker-controlled fo
 
 ## The ordered pipeline
 
-Implemented by `InventoryRequestAuthenticator.AuthenticateAsync`, then the device-binding check in
-`InventoryIngestFunction`. Order is a security property, not a style choice.
+Implemented by `TelemetryRequestAuthenticator.AuthenticateAsync`, then the device-binding check in
+`TelemetryIngestFunction`. Order is a security property, not a style choice.
 
 ### 1. Timestamp freshness — `ReplayProtector.ValidateFreshness`
 
@@ -78,7 +78,7 @@ link between them. The IDA-SIGNATURE-V1 signature re-establishes that link end t
 method, path, timestamp, nonce and exact body bytes at the same time.
 
 Concretely: without step 3, anything able to inject a request between the edge and the function could
-swap the body under a legitimate certificate. `InventoryRequestAuthenticatorTests` includes exactly
+swap the body under a legitimate certificate. `TelemetryRequestAuthenticatorTests` includes exactly
 that scenario — sign with one key, present another certificate — and asserts a 401.
 
 The body is read as raw bytes and verified **before** deserialisation. Deserialising and
@@ -164,7 +164,7 @@ record. If it does not match, onboarding fails closed; do not substitute a guess
 
 ## Data-layer integrity
 
-`InventoryRowFactory` writes the server-asserted columns — `TimeGenerated`, `CollectedAtUtc`,
+`TelemetryRowFactory` writes the server-asserted columns — `TimeGenerated`, `CollectedAtUtc`,
 `EntraDeviceId`, `DeviceName`, `IntuneDeviceId`, `CorrelationId`, `Source` — **after** copying the
 client's fields, and drops any client value using those names. A record containing its own
 `EntraDeviceId` therefore cannot change the attribution of the row it produces.

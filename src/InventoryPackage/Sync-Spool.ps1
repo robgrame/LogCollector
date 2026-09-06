@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.4.5. Protected metadata-only spool diagnostics; no new collection.
+# Version 1.4.6. Protected metadata-only spool diagnostics; no new collection.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
@@ -9,7 +9,7 @@ $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     $log = New-InventoryLogContext -Component Spool
-    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.4.5'; Mode = 'Drain' }
+    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.4.6'; Mode = 'Drain' }
     $stage = 'ImportRuntime'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
     $stage = 'Drain'

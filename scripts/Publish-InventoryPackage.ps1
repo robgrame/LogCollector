@@ -3,7 +3,7 @@
 .SYNOPSIS
 Creates a customer-neutral inventory folder with the shared client and deployment configuration.
 .NOTES
-Version 1.4.5. No customer source, device inventory, certificates or Azure credentials are read.
+Version 1.4.6. No customer source, device inventory, certificates or Azure credentials are read.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
 param(

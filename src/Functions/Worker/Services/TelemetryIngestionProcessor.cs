@@ -20,7 +20,7 @@ namespace LogCollector.Worker.Services;
 /// dead-letter message plus the retained blob together are what make the sample
 /// recoverable once the underlying defect is remediated.
 /// </remarks>
-public sealed class InventoryIngestionProcessor
+public sealed class TelemetryIngestionProcessor
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -31,14 +31,14 @@ public sealed class InventoryIngestionProcessor
     private readonly LogsIngestionPublisher _publisher;
     private readonly IngestionStreamMap _streamMap;
     private readonly WorkerIngestionOptions _options;
-    private readonly ILogger<InventoryIngestionProcessor> _log;
+    private readonly ILogger<TelemetryIngestionProcessor> _log;
 
-    public InventoryIngestionProcessor(
+    public TelemetryIngestionProcessor(
         PayloadBlobReader blobReader,
         LogsIngestionPublisher publisher,
         IngestionStreamMap streamMap,
         WorkerIngestionOptions options,
-        ILogger<InventoryIngestionProcessor> log)
+        ILogger<TelemetryIngestionProcessor> log)
     {
         _blobReader = blobReader;
         _publisher = publisher;
@@ -98,10 +98,10 @@ public sealed class InventoryIngestionProcessor
                 : throw new InvalidOperationException(read.Reason);
         }
 
-        InventoryEnvelope? envelope;
+        TelemetryEnvelope? envelope;
         try
         {
-            envelope = JsonSerializer.Deserialize<InventoryEnvelope>(read.Content, Json);
+            envelope = JsonSerializer.Deserialize<TelemetryEnvelope>(read.Content, Json);
         }
         catch (JsonException ex)
         {
@@ -124,7 +124,7 @@ public sealed class InventoryIngestionProcessor
         if (!string.Equals(envelope.TableName, pointer.TableName, StringComparison.Ordinal))
             return ProcessingOutcome.Poison("payload table name does not match the pointer table name");
 
-        var rows = InventoryRowFactory.BuildRows(envelope, pointer.CorrelationId, DateTimeOffset.UtcNow);
+        var rows = TelemetryRowFactory.BuildRows(envelope, pointer.CorrelationId, DateTimeOffset.UtcNow);
 
         // Chunk and detect uningestible rows BEFORE any upload. A row larger than
         // the chunk budget can never be ingested, so this payload will never

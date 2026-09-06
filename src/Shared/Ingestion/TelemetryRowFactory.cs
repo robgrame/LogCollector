@@ -4,7 +4,7 @@ using LogCollector.Shared.Models;
 namespace LogCollector.Shared.Ingestion;
 
 /// <summary>
-/// Projects an <see cref="InventoryEnvelope"/> into the rows written to the
+/// Projects an <see cref="TelemetryEnvelope"/> into the rows written to the
 /// Log Analytics custom table.
 /// </summary>
 /// <remarks>
@@ -13,7 +13,7 @@ namespace LogCollector.Shared.Ingestion;
 /// malicious client cannot spoof its own identity in the ingested data by
 /// including a <c>EntraDeviceId</c> key in its record.
 /// </remarks>
-public static class InventoryRowFactory
+public static class TelemetryRowFactory
 {
     /// <summary>Column names owned by the platform. Client values for these are dropped.</summary>
     public static readonly IReadOnlySet<string> ReservedColumns =
@@ -30,7 +30,7 @@ public static class InventoryRowFactory
         };
 
     public static IReadOnlyList<JsonElement> BuildRows(
-        InventoryEnvelope envelope,
+        TelemetryEnvelope envelope,
         string correlationId,
         DateTimeOffset ingestedAtUtc)
     {

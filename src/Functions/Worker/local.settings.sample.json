@@ -5,7 +5,7 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
 
     "ServiceBus__fullyQualifiedNamespace": "<namespace>.servicebus.windows.net",
-    "ServiceBus__InventoryQueue": "inventory-ingestion",
+    "ServiceBus__QueueName": "inventory-ingestion",
 
     "Storage__AccountName": "<storage-account-name>",
     "Storage__PayloadContainer": "inventory-payloads",
