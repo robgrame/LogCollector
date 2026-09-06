@@ -1,6 +1,6 @@
 # Custom Inventory - pacchetto Windows universale
 
-Versione **1.1.1**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
+Versione **1.2.3**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
 La cartella generata e autosufficiente: non richiede la repository, OneDrive,
 PowerShell Gallery, Workspace ID/Primary Key o Function key sul dispositivo.
 Codice, nomi dei task e percorsi di installazione non dipendono da un cliente.
@@ -83,7 +83,7 @@ client a 64 bit impostata a **No**.
 L'installer copia tutti i componenti in:
 
 ```text
-C:\Program Files\LogCollector\CustomInventory\1.1.1
+C:\Program Files\LogCollector\CustomInventory\1.2.3
 ```
 
 Il percorso viene protetto per SYSTEM/amministratori; percorsi preesistenti non

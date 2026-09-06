@@ -241,7 +241,12 @@ Those scripts and their Azure schemas have not been migrated by adding this modu
     -Environment 'MSLabs'
 ```
 
-This creates `out\Inventory\1.1.1`, ready for Intune Win32 packaging with `Install.ps1`
+For a complete `.intunewin` release, use `scripts\Publish-IntuneWin32Package.ps1`
+with a local Microsoft `IntuneWinAppUtil.exe`. See
+[Intune Win32 deployment](docs/intune-win32-deployment.md) for the laboratory build
+command, install/uninstall commands, detection settings and requirements.
+
+The folder-only builder creates `out\Inventory\1.2.3`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
 environment and table names are supplied as configuration; `-DeviceTableName` and
 `-AppTableName` default to **DeviceInventory_CL** and **AppInventory_CL** to retain existing

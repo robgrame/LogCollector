@@ -229,7 +229,7 @@ Describe 'inventory package installer' {
     }
 
     It 'rejects an old configuration version before installation' {
-        $script:DefaultConfigText.Replace("PackageVersion = '1.1.1'", "PackageVersion = '1.0.0'") |
+        $script:DefaultConfigText.Replace("PackageVersion = '1.2.3'", "PackageVersion = '1.0.0'") |
             Set-Content $script:ConfigPath
         { & (Join-Path $script:Fixture 'Install.ps1') } | Should -Throw '*must match package version*'
         Should -Invoke Copy-Item -Times 0 -Exactly
@@ -278,7 +278,7 @@ Describe 'inventory distribution builder' {
         $output = Join-Path $TestDrive 'Distribution'
         $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
         $result.FileCount | Should -Be 15
-        $result.PackageVersion | Should -BeExactly '1.1.1'
+        $result.PackageVersion | Should -BeExactly '1.2.3'
         $result.SubmissionEnabled | Should -BeFalse
         Test-Path (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1') | Should -BeTrue
         { & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory' } | Should -Throw '*already exists*'

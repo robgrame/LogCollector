@@ -3,7 +3,7 @@
 .SYNOPSIS
 Creates a customer-neutral inventory folder with the shared client and deployment configuration.
 .NOTES
-Version 1.1.1. No customer source, device inventory, certificates or Azure credentials are read.
+Version 1.2.3. No customer source, device inventory, certificates or Azure credentials are read.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -15,11 +15,12 @@ param(
     [string[]] $PkiRootCaSubjects = @(),
     [string[]] $PkiIntermediateCaThumbprints = @(),
     [string[]] $PkiIntermediateCaSubjects = @(),
-    [string] $OutputRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) 'out\Inventory')
+    [ValidateNotNullOrEmpty()] [string] $OutputRoot
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = Split-Path $PSScriptRoot -Parent
+if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $repo 'out\Inventory' }
 $source = Join-Path $repo 'src\InventoryPackage'
 $config = Import-PowerShellDataFile -LiteralPath (Join-Path $source 'Config.psd1')
 $config.FrontendUrl = $FrontendUrl.AbsoluteUri
