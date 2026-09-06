@@ -54,6 +54,30 @@ Describe 'InventorySpool' {
     }
 
     Context 'Filesystem trust boundary' {
+        It 'reports when concurrent maintenance evicts the just-written entry' {
+            Mock -ModuleName InventorySpool Invoke-SpoolMaintenance {
+                param($SpoolDirectory)
+                foreach ($entry in @(Get-ChildItem -LiteralPath $SpoolDirectory -Filter '*.json' -File)) {
+                    Remove-Item -LiteralPath $entry.FullName -ErrorAction Stop
+                }
+            }
+            { Save-SpoolEntry -SpoolDirectory $script:SpoolRoot -Body '{}' -TableName 'T_CL' } |
+                Should -Throw '*evicted during maintenance*'
+        }
+
+        It 'rejects a new entry larger than the entire quota rather than returning a deleted path' {
+            { Save-SpoolEntry -SpoolDirectory $script:SpoolRoot -Body ('x' * 1024) `
+                -TableName 'T_CL' -MaxTotalBytes 512 } | Should -Throw '*entire spool quota*'
+            @(Get-SpoolEntry -SpoolDirectory $script:SpoolRoot).Count | Should -Be 0
+        }
+
+        It 'honors the caller retention policy while saving another entry' {
+            $old = Save-SpoolEntry -SpoolDirectory $script:SpoolRoot -Body '{}' -TableName 'T_CL'
+            (Get-Item -LiteralPath $old).LastWriteTimeUtc = [DateTime]::UtcNow.AddDays(-10)
+            $null = Save-SpoolEntry -SpoolDirectory $script:SpoolRoot -Body '{}' -TableName 'T_CL' -MaxAgeDays 14
+            Test-Path -LiteralPath $old | Should -BeTrue
+        }
+
         It 'creates protected new directories and files and accepts them on reuse' {
             $nested = Join-Path $script:SpoolRoot 'new-parent\new-spool'
             $path = Save-SpoolEntry -SpoolDirectory $nested -Body '{}' -TableName 'T_CL'

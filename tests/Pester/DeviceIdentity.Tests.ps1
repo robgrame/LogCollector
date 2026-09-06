@@ -18,7 +18,8 @@ BeforeAll {
         param(
             [string] $Subject = 'CN=pester-device',
             [string] $SanUriDeviceId,
-            [string] $IntuneDeviceId
+            [string] $IntuneDeviceId,
+            [switch] $WithoutClientAuth
         )
 
         $rsa = [System.Security.Cryptography.RSA]::Create(2048)
@@ -28,6 +29,12 @@ BeforeAll {
             [System.Security.Cryptography.HashAlgorithmName]::SHA256,
             [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
 
+        if (-not $WithoutClientAuth) {
+            $oids = New-Object Security.Cryptography.OidCollection
+            $null = $oids.Add((New-Object Security.Cryptography.Oid('1.3.6.1.5.5.7.3.2')))
+            $request.CertificateExtensions.Add(
+                (New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension($oids, $false)))
+        }
         if ($SanUriDeviceId) {
             $san = New-Object System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder
             $san.AddUri([Uri]("urn:uuid:$SanUriDeviceId"))
@@ -154,6 +161,24 @@ Describe 'Get-IntuneEnrollmentDeviceId' {
 }
 
 Describe 'Get-ClientCertificate' {
+
+    It 'returns a stable error identifier for expected certificate absence' {
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @() }
+        try {
+            Get-ClientCertificate -EntraDeviceId $script:DeviceId
+            throw 'Expected certificate selection to fail.'
+        }
+        catch {
+            $_.FullyQualifiedErrorId | Should -BeLike 'LogCollector.ClientCertificateNotFound*'
+        }
+    }
+
+    It 'does not select a certificate without the EKU required by intake' {
+        $cert = New-TestCertificate -SanUriDeviceId $script:DeviceId -WithoutClientAuth
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($cert) }
+        { Get-ClientCertificate -EntraDeviceId $script:DeviceId } |
+            Should -Throw '*No usable client certificate found*'
+    }
 
     It 'throws a clear error when no usable certificate exists' {
         Mock -ModuleName DeviceIdentity Get-ChildItem { @() }

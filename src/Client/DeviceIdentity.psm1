@@ -28,6 +28,7 @@
     mock, so selection logic is unit-testable off-box.
 
 .NOTES
+    Version 1.0.1 - stable certificate-absence error and explicit Client Authentication EKU.
     Windows PowerShell 5.1 compatible. No external dependencies.
 #>
 
@@ -225,7 +226,7 @@ function Get-ClientCertificate {
 
         $all = @($all | Where-Object {
             $ekus = $_.EnhancedKeyUsageList
-            (-not $ekus) -or ($ekus | Where-Object { $_.ObjectId -eq $script:ClientAuthEku })
+            $ekus | Where-Object { $_.ObjectId -eq $script:ClientAuthEku }
         })
 
         Write-Verbose ("Get-ClientCertificate: store={0} usable={1}" -f $store, $all.Count)
@@ -275,7 +276,11 @@ function Get-ClientCertificate {
         if ($selected) { return $selected }
     }
 
-    throw 'No usable client certificate found (needs a private key, Client Authentication EKU, and a device-id binding).'
+    $exception = [InvalidOperationException]::new(
+        'No usable client certificate found (needs a private key, Client Authentication EKU, and a device-id binding).')
+    $PSCmdlet.ThrowTerminatingError([Management.Automation.ErrorRecord]::new(
+        $exception, 'LogCollector.ClientCertificateNotFound',
+        [Management.Automation.ErrorCategory]::ObjectNotFound, $null))
 }
 
 function Get-DeviceIdentitySnapshot {

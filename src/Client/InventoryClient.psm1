@@ -19,6 +19,7 @@
     reintroduce a fleet-wide shared secret without adding any assurance.
 
 .NOTES
+    Version 1.0.1 - shared submission validation, deferred delivery and bounded drain transport.
     Windows PowerShell 5.1 compatible.
 #>
 
@@ -145,6 +146,65 @@ function Get-RetryDelaySeconds {
     return $delay
 }
 
+function Assert-InventoryJsonDepth {
+    param([AllowNull()] $Value, [int] $Depth = 0)
+
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [ValueType]) { return }
+    if ($Depth -gt 24) { throw 'Envelope nesting exceeds JSON depth 24; refusing to truncate data.' }
+    if ($Value -is [Collections.IDictionary]) {
+        foreach ($key in $Value.Keys) { Assert-InventoryJsonDepth -Value $Value[$key] -Depth ($Depth + 1) }
+    }
+    elseif ($Value -is [Collections.IEnumerable]) {
+        foreach ($item in $Value) { Assert-InventoryJsonDepth -Value $item -Depth ($Depth + 1) }
+    }
+    else {
+        foreach ($property in $Value.PSObject.Properties) {
+            Assert-InventoryJsonDepth -Value $property.Value -Depth ($Depth + 1)
+        }
+    }
+}
+
+function ConvertTo-InventorySubmissionBody {
+    param([Parameter(Mandatory)] [object] $Envelope)
+
+    Assert-InventoryJsonDepth -Value $Envelope
+    $body = ConvertTo-Json -InputObject $Envelope -Depth 24 -Compress -ErrorAction Stop -WarningAction Stop
+    if ([Text.Encoding]::UTF8.GetByteCount($body) -gt 4194304) {
+        throw 'Envelope exceeds the 4 MiB intake limit; split the records into smaller submissions.'
+    }
+    $parsed = ConvertFrom-Json -InputObject $body -ErrorAction Stop
+    if ($parsed -isnot [pscustomobject]) { throw 'Envelope must be a JSON object.' }
+    $names = @($parsed.PSObject.Properties.Name)
+    foreach ($required in @('envelopeVersion', 'tableName', 'entraDeviceId', 'collectedAtUtc', 'records')) {
+        if ($names -notcontains $required) { throw "Envelope is missing $required." }
+    }
+    if ($parsed.envelopeVersion -cne $script:EnvelopeVersion) { throw 'Unsupported envelope version.' }
+    if ($parsed.tableName -notmatch '^[A-Za-z][A-Za-z0-9_]{0,99}$') { throw 'Invalid table name.' }
+    $deviceId = [guid]::Empty
+    if (-not [guid]::TryParse([string]$parsed.entraDeviceId, [ref]$deviceId)) {
+        throw 'Envelope entraDeviceId must be a GUID.'
+    }
+    $when = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse([string]$parsed.collectedAtUtc, [ref]$when)) {
+        throw 'Envelope collectedAtUtc must be a timestamp.'
+    }
+    if ($parsed.records -isnot [array] -or $parsed.records.Count -eq 0 -or $parsed.records.Count -gt 50000) {
+        throw 'Envelope records must be an array containing between 1 and 50000 objects.'
+    }
+    foreach ($record in $parsed.records) {
+        if ($record -isnot [pscustomobject]) { throw 'Every record must serialize to a JSON object.' }
+    }
+    if ($names -contains 'properties' -and $null -ne $parsed.properties) {
+        if ($parsed.properties -isnot [pscustomobject] -or @($parsed.properties.PSObject.Properties).Count -gt 32) {
+            throw 'Envelope properties must contain at most 32 string-valued annotations.'
+        }
+        foreach ($property in $parsed.properties.PSObject.Properties) {
+            if ($property.Value -isnot [string]) { throw 'Envelope properties must be string-valued.' }
+        }
+    }
+    return $body
+}
+
 function Get-SubmissionDisposition {
     <#
     .SYNOPSIS
@@ -163,7 +223,8 @@ function Get-SubmissionDisposition {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [int] $StatusCode)
 
-    if ($StatusCode -ge 200 -and $StatusCode -lt 300) { return 'Delivered' }
+    if ($StatusCode -eq 202) { return 'Delivered' }
+    if ($StatusCode -ge 200 -and $StatusCode -lt 300) { return 'Transient' }
 
     switch ($StatusCode) {
         401 { return 'AuthFailure' }
@@ -276,6 +337,7 @@ function Invoke-InventoryHttpPost {
             -ContentType 'application/json' `
             -Headers $signed.Headers `
             -Certificate $Certificate `
+            -MaximumRedirection 0 `
             -TimeoutSec $TimeoutSeconds `
             -UseBasicParsing `
             -ErrorAction Stop
@@ -285,7 +347,9 @@ function Invoke-InventoryHttpPost {
             StatusCode        = $statusCode
             RetryAfterSeconds = $null
             Disposition       = (Get-SubmissionDisposition -StatusCode $statusCode)
-            Message           = 'ok'
+            Message           = $(if ($statusCode -eq 202) { 'ok' } else {
+                "Unexpected HTTP $statusCode; intake acknowledgement must be HTTP 202."
+            })
         }
     }
     catch {
@@ -373,7 +437,7 @@ function Invoke-InventorySpoolDrain {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [Uri] $Uri,
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory)] [AllowNull()]
         [System.Security.Cryptography.X509Certificates.X509Certificate2] $Certificate,
         [Parameter(Mandatory)] [string] $SpoolDirectory,
         [int] $MaxEntriesPerRun = 50,
@@ -382,6 +446,8 @@ function Invoke-InventorySpoolDrain {
         [int] $MaxSpoolEntries = 500,
         [int] $MaxSpoolTotalBytes = 67108864,
         [int] $MaxDeliveryAttempts = 10,
+        [ValidateRange(1, 300)] [int] $TimeoutSeconds = 100,
+        [ValidateRange(1, 900)] [int] $MaxDelaySeconds = 300,
         [switch] $NoSleep
     )
 
@@ -408,6 +474,13 @@ function Invoke-InventorySpoolDrain {
             -MaxEntries $MaxSpoolEntries `
             -MaxTotalBytes $MaxSpoolTotalBytes
 
+        if ($null -eq $Certificate) {
+            Write-Warning 'No usable client certificate; retained telemetry has not been submitted.'
+            $summary.Remaining = @(Get-SpoolEntry -SpoolDirectory $SpoolDirectory).Count
+            $summary.Stopped = $true
+            return $summary
+        }
+
         foreach ($entry in @(Get-SpoolEntry -SpoolDirectory $SpoolDirectory -First $MaxEntriesPerRun)) {
             if ($entry.Attempts -ge $MaxDeliveryAttempts) {
                 Write-Verbose ("Invoke-InventorySpoolDrain: entry {0} exhausted its attempt budget." -f $entry.Path)
@@ -426,6 +499,8 @@ function Invoke-InventorySpoolDrain {
                 -Body $entry.Body `
                 -Certificate $Certificate `
                 -MaxAttempts $MaxAttemptsPerEntry `
+                -TimeoutSeconds $TimeoutSeconds `
+                -MaxDelaySeconds $MaxDelaySeconds `
                 -NoSleep:$NoSleep
 
             switch ($result.Disposition) {
@@ -467,7 +542,7 @@ function Invoke-InventorySubmission {
     param(
         [Parameter(Mandatory)] [Uri] $Uri,
         [Parameter(Mandatory)] [object] $Envelope,
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory)] [AllowNull()]
         [System.Security.Cryptography.X509Certificates.X509Certificate2] $Certificate,
         [string] $SpoolDirectory = 'C:\ProgramData\LogCollector\Spool',
         [int] $MaxAttempts = 4,
@@ -476,18 +551,39 @@ function Invoke-InventorySubmission {
         [int] $MaxSpoolAgeDays = 7,
         [int] $MaxSpoolEntries = 500,
         [int] $MaxSpoolTotalBytes = 67108864,
+        [ValidateRange(1, 300)] [int] $TimeoutSeconds = 100,
+        [ValidateRange(1, 500)] [int] $MaxDrainEntries = 50,
+        [ValidateRange(1, 10)] [int] $MaxDrainAttempts = 2,
+        [switch] $QueueOnly,
         [switch] $SkipDrain,
         [switch] $NoSleep
     )
 
     Initialize-TlsDefaults
 
+    $body = ConvertTo-InventorySubmissionBody -Envelope $Envelope
+    $tableName = [string]$Envelope.tableName
+
     # Fail closed even with -SkipDrain: unsafe pre-existing spool contents must
     # never be repaired or used by a later privileged invocation.
     $null = Initialize-SpoolDirectory -SpoolDirectory $SpoolDirectory
 
-    $body = $Envelope | ConvertTo-Json -Depth 24 -Compress
-    $tableName = [string]$Envelope.tableName
+    if ($QueueOnly -or $null -eq $Certificate) {
+        $path = Save-SpoolEntry -Body $body -TableName $tableName -SpoolDirectory $SpoolDirectory `
+            -MaxEntries $MaxSpoolEntries -MaxTotalBytes $MaxSpoolTotalBytes -MaxAgeDays $MaxSpoolAgeDays
+        if (-not $QueueOnly) {
+            Write-Warning 'No usable client certificate; the submission is retained in the local spool, not delivered.'
+        }
+        return [pscustomobject]@{
+            Disposition = $(if ($QueueOnly) { 'Deferred' } else { 'AuthFailure' })
+            StatusCode = 0
+            Attempts = 0
+            Message = $(if ($QueueOnly) { 'Queued locally; no HTTP request made.' } else { 'Client certificate unavailable; queued locally.' })
+            Spooled = $true
+            SpoolPath = $path
+            Drain = $null
+        }
+    }
 
     $drain = $null
     if (-not $SkipDrain) {
@@ -498,6 +594,10 @@ function Invoke-InventorySubmission {
             -MaxSpoolAgeDays $MaxSpoolAgeDays `
             -MaxSpoolEntries $MaxSpoolEntries `
             -MaxSpoolTotalBytes $MaxSpoolTotalBytes `
+            -MaxEntriesPerRun $MaxDrainEntries `
+            -MaxAttemptsPerEntry $MaxDrainAttempts `
+            -TimeoutSeconds $TimeoutSeconds `
+            -MaxDelaySeconds $MaxDelaySeconds `
             -NoSleep:$NoSleep
     }
 
@@ -508,6 +608,7 @@ function Invoke-InventorySubmission {
         -MaxAttempts $MaxAttempts `
         -BaseDelaySeconds $BaseDelaySeconds `
         -MaxDelaySeconds $MaxDelaySeconds `
+        -TimeoutSeconds $TimeoutSeconds `
         -NoSleep:$NoSleep
 
     $spoolPath = $null
@@ -520,7 +621,8 @@ function Invoke-InventorySubmission {
             -TableName $tableName `
             -SpoolDirectory $SpoolDirectory `
             -MaxEntries $MaxSpoolEntries `
-            -MaxTotalBytes $MaxSpoolTotalBytes
+            -MaxTotalBytes $MaxSpoolTotalBytes `
+            -MaxAgeDays $MaxSpoolAgeDays
 
         Write-Verbose ("Invoke-InventorySubmission: spooled to {0} after {1}." -f $spoolPath, $result.Disposition)
     }

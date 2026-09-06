@@ -146,7 +146,8 @@ Context 'Get-RetryDelaySeconds' {
 Context 'Get-SubmissionDisposition' {
 
     It 'treats 2xx as delivered' {
-        Get-SubmissionDisposition -StatusCode 200 | Should -BeExactly 'Delivered'
+        Get-SubmissionDisposition -StatusCode 200 | Should -BeExactly 'Transient'
+        Get-SubmissionDisposition -StatusCode 204 | Should -BeExactly 'Transient'
         Get-SubmissionDisposition -StatusCode 202 | Should -BeExactly 'Delivered'
     }
 
@@ -185,7 +186,8 @@ Context 'Send-InventoryEnvelope' {
 
     It 'enables Expect 100-continue without changing signed body bytes' {
         Mock -ModuleName InventoryClient Invoke-WebRequest {
-            param($Uri, $Headers, $Body)
+            param($Uri, $Headers, $Body, $MaximumRedirection)
+            $MaximumRedirection | Should -Be 0
             if ($PSVersionTable.PSVersion.Major -ge 6) {
                 $Headers['Expect'] | Should -BeExactly '100-continue'
             }
@@ -199,6 +201,14 @@ Context 'Send-InventoryEnvelope' {
             -Body '{"probe":true}' -Certificate $script:Certificate -NoSleep
         $result.Disposition | Should -BeExactly 'Delivered'
         Should -Invoke -ModuleName InventoryClient Invoke-WebRequest -Times 1 -Exactly
+    }
+
+    It 'does not treat an unexpected HTTP 200 as an intake acknowledgement' {
+        Mock -ModuleName InventoryClient Invoke-WebRequest { [pscustomobject]@{ StatusCode = 200 } }
+        $result = Send-InventoryEnvelope -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Body '{"probe":true}' -Certificate $script:Certificate -MaxAttempts 1 -NoSleep
+        $result.Disposition | Should -BeExactly 'Transient'
+        $result.Message | Should -BeLike '*must be HTTP 202*'
     }
 
     It 'reports Delivered and stops after a single successful attempt' {
@@ -453,6 +463,64 @@ Context 'Invoke-InventorySubmission' {
     AfterEach {
         if (Test-Path -LiteralPath $script:SpoolRoot) {
             Remove-Item -LiteralPath $script:SpoolRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'queues without a certificate and without attempting HTTP' {
+        Mock -ModuleName InventoryClient Send-InventoryEnvelope { throw 'Must not send' }
+        $result = Invoke-InventorySubmission -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Envelope $script:Envelope -Certificate $null -SpoolDirectory $script:SpoolRoot -QueueOnly
+        $result.Disposition | Should -BeExactly 'Deferred'
+        $result.Spooled | Should -BeTrue
+        $result.Attempts | Should -Be 0
+        @(Get-SpoolEntry -SpoolDirectory $script:SpoolRoot).Count | Should -Be 1
+        Should -Invoke -ModuleName InventoryClient Send-InventoryEnvelope -Times 0 -Exactly
+    }
+
+    It 'retains a sample when a certificate is unavailable without claiming delivery' {
+        Mock -ModuleName InventoryClient Send-InventoryEnvelope { throw 'Must not send' }
+        $result = Invoke-InventorySubmission -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Envelope $script:Envelope -Certificate $null -SpoolDirectory $script:SpoolRoot -WarningAction SilentlyContinue
+        $result.Disposition | Should -BeExactly 'AuthFailure'
+        $result.StatusCode | Should -Be 0
+        Test-Path -LiteralPath $result.SpoolPath | Should -BeTrue
+    }
+
+    It 'rejects an invalid envelope before creating a spool' -TestCases @(
+        @{ Kind = 'Empty' }; @{ Kind = 'Scalar' }; @{ Kind = 'TooMany' }; @{ Kind = 'Deep' }; @{ Kind = 'Large' }
+    ) {
+        param($Kind)
+        switch ($Kind) {
+            'Empty' { $script:Envelope.records = @() }
+            'Scalar' { $script:Envelope.records = @('not an object') }
+            'TooMany' { $script:Envelope.records = @(@{ A = 1 }) * 50001 }
+            'Deep' {
+                $nested = @{ A = 1 }
+                1..30 | ForEach-Object { $nested = @{ Child = $nested } }
+                $script:Envelope.records = @($nested)
+            }
+            'Large' { $script:Envelope.records = @(@{ Text = ('x' * 4194304) }) }
+        }
+        { Invoke-InventorySubmission -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Envelope $script:Envelope -Certificate $null -SpoolDirectory $script:SpoolRoot -QueueOnly } | Should -Throw
+        Test-Path -LiteralPath $script:SpoolRoot | Should -BeFalse
+    }
+
+    It 'passes timeout and drain bounds through both submission paths' {
+        Mock -ModuleName InventoryClient Invoke-InventorySpoolDrain {
+            [pscustomobject]@{ Delivered = 0; Quarantined = 0; Remaining = 0; Stopped = $false }
+        }
+        Mock -ModuleName InventoryClient Send-InventoryEnvelope {
+            [pscustomobject]@{ Disposition = 'Delivered'; StatusCode = 202; Attempts = 1; Message = 'ok' }
+        }
+        $null = Invoke-InventorySubmission -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Envelope $script:Envelope -Certificate $script:Certificate -SpoolDirectory $script:SpoolRoot `
+            -TimeoutSeconds 12 -MaxDelaySeconds 17 -MaxDrainEntries 4 -MaxDrainAttempts 1
+        Should -Invoke -ModuleName InventoryClient Invoke-InventorySpoolDrain -Times 1 -Exactly -ParameterFilter {
+            $TimeoutSeconds -eq 12 -and $MaxDelaySeconds -eq 17 -and $MaxEntriesPerRun -eq 4 -and $MaxAttemptsPerEntry -eq 1
+        }
+        Should -Invoke -ModuleName InventoryClient Send-InventoryEnvelope -Times 1 -Exactly -ParameterFilter {
+            $TimeoutSeconds -eq 12 -and $MaxDelaySeconds -eq 17
         }
     }
 

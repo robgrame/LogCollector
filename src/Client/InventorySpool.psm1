@@ -38,6 +38,7 @@
     is drained, so every drain re-signs with a fresh timestamp and nonce.
 
 .NOTES
+    Version 1.0.1 - explicit retention on save and rejection of entries exceeding the entire quota.
     Windows PowerShell 5.1 compatible.
 #>
 
@@ -283,8 +284,9 @@ function Save-SpoolEntry {
         [Parameter(Mandatory)] [string] $Body,
         [Parameter(Mandatory)] [string] $TableName,
         [Parameter(Mandatory)] [string] $SpoolDirectory,
-        [int] $MaxEntries = 500,
-        [int] $MaxTotalBytes = 67108864
+        [ValidateRange(1, 100000)] [int] $MaxEntries = 500,
+        [ValidateRange(1, 2147483647)] [int] $MaxTotalBytes = 67108864,
+        [ValidateRange(1, 365)] [int] $MaxAgeDays = 7
     )
 
     $null = Initialize-SpoolDirectory -SpoolDirectory $SpoolDirectory
@@ -305,11 +307,18 @@ function Save-SpoolEntry {
     $tempPath = "$finalPath.tmp"
 
     $json = $entry | ConvertTo-Json -Depth 8 -Compress
+    if ($script:Utf8NoBom.GetByteCount($json) -gt $MaxTotalBytes) {
+        throw 'The serialized spool entry exceeds the entire spool quota; it cannot be retained.'
+    }
     Write-SpoolFile -Path $tempPath -Content $json
     [System.IO.File]::Move($tempPath, $finalPath)
 
-    $null = Invoke-SpoolMaintenance -SpoolDirectory $SpoolDirectory -MaxEntries $MaxEntries -MaxTotalBytes $MaxTotalBytes
+    $null = Invoke-SpoolMaintenance -SpoolDirectory $SpoolDirectory -MaxEntries $MaxEntries `
+        -MaxTotalBytes $MaxTotalBytes -MaxAgeDays $MaxAgeDays
 
+    if (-not [IO.File]::Exists($finalPath)) {
+        throw 'The new spool entry was evicted during maintenance; delivery has not been retained.'
+    }
     return $finalPath
 }
 

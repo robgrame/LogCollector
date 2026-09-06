@@ -219,6 +219,20 @@ POST
 
 ## Client reliability
 
+### Shared client for existing scripts
+
+Import **`src\Client\LogCollector.Client.psd1`** to reuse identity discovery, certificate selection,
+signing and delivery from independent scripts. `Send-LogCollectorData` accepts existing record
+objects; `Sync-LogCollectorSpool` retries retained data without re-running collection/remediation.
+`-QueueOnly` persists before a reboot without attempting HTTP. Certificate absence is retained
+explicitly; a missing Entra identity or unexpected local error is not silently bypassed.
+
+Package the six-file, versioned module with **`scripts\Publish-ClientModule.ps1`**.
+See **[shared-client.md](docs/shared-client.md)** for installation, examples, return values,
+endpoint-isolated spool and limits. **[aci-migration-findings.md](docs/aci-migration-findings.md)**
+preserves the detailed analysis of the original ACI scripts and their 13 legacy destinations.
+Those scripts and their Azure schemas have not been migrated by adding this module.
+
 **Large mTLS uploads.** The client enables `Expect: 100-continue` using the runtime-appropriate
 transport API. App Service must use `clientCertMode: Required` with **no certificate exclusion
 paths**: even excluding health enables TLS renegotiation and imposes a fixed 100 KB upload limit.
