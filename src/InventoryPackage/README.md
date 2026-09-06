@@ -1,6 +1,6 @@
 # Custom Inventory - pacchetto Windows universale
 
-Versione **1.2.3**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
+Versione **1.3.4**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
 La cartella generata e autosufficiente: non richiede la repository, OneDrive,
 PowerShell Gallery, Workspace ID/Primary Key o Function key sul dispositivo.
 Codice, nomi dei task e percorsi di installazione non dipendono da un cliente.
@@ -77,13 +77,22 @@ se il comando viene lanciato dall'agent a 32 bit:
 
 Da un host gia a 64 bit usare System32 al posto di Sysnative.
 Per disinstallare usare il comando equivalente con `-File .\Uninstall.ps1`.
-Caricare `Detect.ps1` come regola di detection, con esecuzione a 32 bit su
+Caricare `Detect.ps1` GENERATO insieme al pacchetto come regola di detection, con esecuzione a 32 bit su
 client a 64 bit impostata a **No**.
+
+La detection contiene lo SHA256 del Config.psd1 finale e controlla anche azione,
+principal SYSTEM e abilitazione dei task. Per applicare una nuova configurazione
+senza disinstallare, aggiornare nella stessa app Intune sia il contenuto .intunewin
+sia il relativo Detect.ps1, con assegnazione Required. La configurazione precedente
+non soddisfa la nuova detection: Intune riesegue l'installer. Non usare il template
+Detect.ps1 della repository e non modificare Config.psd1 dopo la generazione.
+Per una variante configurata, passare -ConfigurationPath al builder: viene rigenerata
+anche la detection. Versione del codice e hash della configurazione sono distinti.
 
 L'installer copia tutti i componenti in:
 
 ```text
-C:\Program Files\LogCollector\CustomInventory\1.2.3
+C:\Program Files\LogCollector\CustomInventory\1.3.4
 ```
 
 Il percorso viene protetto per SYSTEM/amministratori; percorsi preesistenti non
@@ -121,7 +130,8 @@ Entrambi richiedono identita Entra valida e configurazione endpoint esplicita.
 Non stampare payload, firme o credenziali nei log di distribuzione.
 
 Dopo la preparazione delle destinazioni Azure impostare SubmissionEnabled=true
-nel Config.psd1 della distribuzione e rieseguire Install.ps1.
+in una copia di Config.psd1, rigenerare il pacchetto con -ConfigurationPath e
+aggiornare contenuto e detection nell'app Intune. L'installer riabilita i task.
 Per una prova immediata, senza attendere il trigger con ritardo casuale:
 
 ```powershell

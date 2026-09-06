@@ -1,5 +1,5 @@
 @{
-    PackageVersion = '1.2.3'
+    PackageVersion = '1.3.4'
     Environment = ''
     FrontendUrl = ''
     DeviceTableName = 'DeviceInventory_CL'

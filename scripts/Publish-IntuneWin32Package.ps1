@@ -3,7 +3,7 @@
 .SYNOPSIS
 Builds a complete inventory Win32 package using Microsoft's local content prep tool.
 .NOTES
-Version 1.2.3. Does not install tasks, collect inventory, upload content or change Azure.
+Version 1.3.4. Does not install tasks, collect inventory, upload content or change Azure.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
 param(
@@ -26,22 +26,21 @@ if ($PSCmdlet.ParameterSetName -eq 'Configuration') {
     $configurationFile = (Get-Item -LiteralPath $ConfigurationPath -ErrorAction Stop).FullName
     $configuration = Import-PowerShellDataFile -LiteralPath $configurationFile
     if ($configuration.PackageVersion -ne $version) { throw "Configuration must use package version $version." }
-    $FrontendUrl = [Uri]$configuration.FrontendUrl
-    $Environment = $configuration.Environment
 }
 $release = [IO.Path]::GetFullPath((Join-Path $OutputRoot $version))
 if ($release.Contains('"')) { throw 'Output paths must not contain double quotes.' }
 if (Test-Path -LiteralPath $release) { throw "Output already exists: $release. Choose a new OutputRoot; releases are never overwritten." }
 if (-not $PSCmdlet.ShouldProcess($release, 'Build the complete inventory .intunewin package')) { return }
 
-$package = & (Join-Path $PSScriptRoot 'Publish-InventoryPackage.ps1') `
-    -FrontendUrl $FrontendUrl -Environment $Environment -OutputRoot (Join-Path $release 'Source')
+$buildParameters = @{ OutputRoot = Join-Path $release 'Source' }
 if ($configurationFile) {
-    Copy-Item -LiteralPath $configurationFile -Destination (Join-Path $package.PackagePath 'Config.psd1') -ErrorAction Stop
+    $buildParameters.ConfigurationPath = $configurationFile
 }
-# Validate with the same runtime used by the installer, without collection or network calls.
-$runtime = Import-Module (Join-Path $package.PackagePath 'Inventory.Runtime.psm1') -PassThru -ErrorAction Stop
-$config = & $runtime { param($Path) Get-InventoryConfiguration -Path $Path } (Join-Path $package.PackagePath 'Config.psd1')
+else {
+    $buildParameters.FrontendUrl = $FrontendUrl
+    $buildParameters.Environment = $Environment
+}
+$package = & (Join-Path $PSScriptRoot 'Publish-InventoryPackage.ps1') @buildParameters
 $output = Join-Path $release 'Output'
 $null = New-Item -ItemType Directory -Path $output -ErrorAction Stop
 $arguments = @('-c', ('"{0}"' -f $package.PackagePath), '-s', 'Install.ps1',
@@ -61,5 +60,6 @@ Copy-Item -LiteralPath (Join-Path $repo 'docs\intune-win32-deployment.md') -Dest
     SourcePath = $package.PackagePath
     DetectionScript = Join-Path $release 'Detect.ps1'
     DeploymentGuide = Join-Path $release 'Intune-Deployment.md'
-    SubmissionEnabled = $config.SubmissionEnabled
+    SubmissionEnabled = $package.SubmissionEnabled
+    ConfigurationSha256 = $package.ConfigurationSha256
 }

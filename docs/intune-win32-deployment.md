@@ -1,10 +1,10 @@
-# Custom Inventory 1.2.3 - distribuzione Intune Win32
+# Custom Inventory 1.3.4 - distribuzione Intune Win32
 
 Il pacchetto installa il collector hardware/software e tutti i moduli comuni.
 Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 Gli script originali cliente non vengono letti o modificati. Il modulo condiviso
 rimane alla versione 1.1.1; la nuova funzionalita di packaging porta il pacchetto
-inventory a **1.2.3** (Major.Minor.Build).
+inventory a **1.3.4** (Major.Minor.Build).
 
 ## 1. Preparazione del computer di packaging
 
@@ -32,12 +32,12 @@ Output predefiniti:
 
 | File/cartella | Utilizzo |
 |---|---|
-| `out\IntuneWin32\1.2.3\Output\Install.intunewin` | File da caricare nell'app Win32 |
-| `out\IntuneWin32\1.2.3\Detect.ps1` | Script da caricare nella detection rule |
-| `out\IntuneWin32\1.2.3\Intune-Deployment.md` | Copia di questa guida |
-| `out\IntuneWin32\1.2.3\Source\1.2.3` | Tutti i 15 file inclusi nel payload, configurazione compresa |
+| `out\IntuneWin32\1.3.4\Output\Install.intunewin` | File da caricare nell'app Win32 |
+| `out\IntuneWin32\1.3.4\Detect.ps1` | Script da caricare nella detection rule |
+| `out\IntuneWin32\1.3.4\Intune-Deployment.md` | Copia di questa guida |
+| `out\IntuneWin32\1.3.4\Source\1.3.4` | Tutti i 15 file inclusi nel payload, configurazione compresa |
 
-Il comando restituisce anche SHA256 e stato SubmissionEnabled. Source e Output
+Il comando restituisce SHA256 del pacchetto, ConfigurationSha256 e stato SubmissionEnabled. Source e Output
 sono separati: il tool non ingloba il proprio eseguibile o il file .intunewin.
 Output gia esistenti sono rifiutati, anche dopo un tentativo fallito. Per un'altra
 build usare un nuovo `-OutputRoot`, ad esempio `out\IntuneWin32-Pilot02`.
@@ -62,18 +62,18 @@ Per personalizzare endpoint, selezione certificato, CA, tabelle o attivazione:
     -FrontendUrl 'https://logcollector-intake.azurewebsites.net/api/inventory' `
     -Environment 'MSLabs' -OutputRoot '.\out\Inventory-PilotConfig'
 
-# Modificare out\Inventory-PilotConfig\1.2.3\Config.psd1 con un editor.
+# Modificare out\Inventory-PilotConfig\1.3.4\Config.psd1 con un editor.
 # Impostare SubmissionEnabled = $true SOLO dopo la preparazione lato Azure.
 
 .\scripts\Publish-IntuneWin32Package.ps1 `
     -IntuneWinAppUtilPath 'C:\Tools\IntuneWinAppUtil.exe' `
-    -ConfigurationPath '.\out\Inventory-PilotConfig\1.2.3\Config.psd1' `
+    -ConfigurationPath '.\out\Inventory-PilotConfig\1.3.4\Config.psd1' `
     -OutputRoot '.\out\IntuneWin32-Pilot02'
 ```
 
 ConfigurationPath importa solo dati PSD1, non gli script di quella cartella:
 il payload viene sempre costruito dai sorgenti correnti della repository.
-La versione della configurazione deve coincidere con 1.2.3. La configurazione
+La versione della configurazione deve coincidere con 1.3.4. La configurazione
 viene validata dallo stesso runtime dell'installer prima di chiamare il tool.
 Non inserire chiavi private o credenziali. I certificati non vengono esportati.
 Per PKI vedere `docs\pki-ca-policy.md`: filtri Root/SubCA e trust server sono distinti.
@@ -82,15 +82,51 @@ Per PKI vedere `docs\pki-ca-policy.md`: filtri Root/SubCA e trust server sono di
 Ricreare il pacchetto e aggiornare il contenuto dell'app in Intune. Cambiare
 soltanto Config.psd1 sul client non riabilita task disabilitati: rieseguire
 l'installer dalla distribuzione aggiornata, non dalla cartella installata.
-Una modifica alla sola configurazione non rende negativa la detection di versione:
-non aspettarsi che Intune reinstalli automaticamente sui dispositivi gia rilevati.
-Per un rollout successivo usare una nuova release versionata o una reinstallazione
-controllata del pilot.
+La detection generata incorpora lo SHA256 dei byte del Config.psd1 finale:
+una modifica alla configurazione rende negativa la detection del NUOVO pacchetto
+sui dispositivi che hanno ancora quella precedente, anche a parita di versione.
+Non e necessario incrementare la versione degli script per una variante di configurazione:
+la versione identifica il codice, ConfigurationSha256 identifica la configurazione.
+Anche commenti, encoding e spazi modificano l'hash; non modificare manualmente
+Config.psd1 dopo la generazione o sul dispositivo gestito.
+
+### Aggiornamento della configurazione senza disinstallazione
+
+1. Modificare una copia di Config.psd1 e generare un nuovo output con ConfigurationPath.
+2. Nella STESSA app Win32, aggiornare il contenuto con il nuovo Install.intunewin e
+   attendere il completamento dell'upload/elaborazione.
+3. Sostituire anche la custom detection rule con il Detect.ps1 dello STESSO output.
+   Non usare quello della repository: e un template senza hash.
+4. Mantenere l'assegnazione **Required** al gruppo pilot e avviare una sincronizzazione
+   del dispositivo, oppure attendere il normale ciclo di rivalutazione IME.
+
+Nel passaggio da 1.2.3 a 1.3.4 aggiornare anche la command line di uninstall al
+percorso 1.3.4 indicato sotto. Per successive varianti di sola configurazione della
+stessa versione le command line restano invariate.
+
+La vecchia configurazione non soddisfa la nuova detection; Intune esegue di nuovo
+Install.ps1, che aggiorna i file nello stesso percorso e registra i due task con
+lo stato desiderato. La detection torna positiva quando configurazione e task
+corrispondono. Non serve una disinstallazione preventiva e lo spool resta invariato.
+Questo vale anche per true -> false, endpoint, filtri CA e altri parametri.
+Se un task e in esecuzione l'installer segnala errore: attendere la fine e il retry,
+senza interrompere una raccolta in corso.
+
+Caricare SOLO il .intunewin lasciando la vecchia detection non attiva questo
+meccanismo. Caricare SOLO Detect.ps1 puo invece provocare tentativi di reinstallare
+il vecchio contenuto: mantenere la coppia allineata. Non assegnare contemporaneamente
+due app con configurazioni diverse che gestiscono gli stessi task.
+Con assegnazione solo Available non presumere enforcement automatico: usare Required
+per applicare centralmente questi aggiornamenti.
+La reinstallazione non e necessariamente immediata: Microsoft indica che un'app
+Required non rilevata viene riproposta entro circa 24 ore. Una sincronizzazione
+non garantisce di anticipare tutti i cicli IME. Riferimento:
+[Intune Win32 - Detection rules](https://learn.microsoft.com/en-us/intune/app-management/deployment/add-win32#step-4-detection-rules).
 
 ## 3. Creazione dell'app
 
 Intune admin center > Apps > Windows > Add > **Windows app (Win32)**.
-Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inventory 1.2.3**.
+Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inventory 1.3.4**.
 
 | Impostazione Program | Valore |
 |---|---|
@@ -109,7 +145,7 @@ Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inven
 **Uninstall command** (una sola riga, usa la copia installata, non la cache IME):
 
 ```text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.2.3\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.3.4\Uninstall.ps1"
 ```
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
@@ -129,13 +165,21 @@ Caricare **Detect.ps1 della stessa release**, disponibile accanto alla guida.
 | Enforce script signature check | No per i sorgenti non firmati del laboratorio |
 | Esecuzione | Contesto System, coerente con Install behavior |
 
-Lo script controlla Config.psd1, PackageVersion, presenza dei file necessari e
-dei due task sotto `\LogCollector\`. Restituisce **exit 0 e stdout non vuoto** se
+Lo script controlla l'hash atteso di Config.psd1, PackageVersion, presenza dei file
+necessari e dei due task sotto `\LogCollector\`. Per ciascun task controlla
+abilitazione coerente con SubmissionEnabled, principal SYSTEM con privilegi elevati
+e l'unica azione PowerShell a 64 bit verso lo script della versione attesa.
+Restituisce **exit 0 e stdout non vuoto** se
 installato; exit 1 se non rilevato. Non usare la sola esistenza della cartella:
 la disinstallazione conserva file e spool ma rimuove i task.
-La detection puo essere positiva con task disabilitati e non certifica l'ingestione.
+La detection puo essere positiva con task disabilitati SOLO se la configurazione
+attesa ha SubmissionEnabled=false; non certifica l'ingestione. L'hash e un controllo
+di corrispondenza per il deployment, non una firma o un nuovo sistema di autenticazione.
 Per produzione, se si impone la firma, firmare gli script con il proprio processo
-di code signing prima della creazione del pacchetto e distribuire la relativa fiducia.
+di code signing dopo la generazione dei file finali e prima del wrapping .intunewin,
+e distribuire la relativa fiducia. Detect.ps1 va firmato dopo l'inserimento dell'hash,
+non nella sua forma di template. Il wrapper di laboratorio non implementa una pipeline
+di firma: non abilitare la verifica firma Intune sui suoi output non firmati.
 
 ## 5. Requirements
 
@@ -160,7 +204,7 @@ SYSTEM, non soltanto come utente interattivo.
 
 ## 6. Comportamento installato e prova
 
-Percorso: `C:\Program Files\LogCollector\CustomInventory\1.2.3`
+Percorso: `C:\Program Files\LogCollector\CustomInventory\1.3.4`
 (il codice usa il percorso Program Files del sistema, senza presupporre il disco C).
 
 | Task SYSTEM in `\LogCollector\` | Azione |
@@ -177,8 +221,9 @@ Assegnare inizialmente a un piccolo gruppo di dispositivi laboratorio, senza
 assegnazioni contemporanee di vecchie versioni o collector equivalenti.
 Le versioni condividono i nomi dei task: non sono installazioni affiancate.
 Non disinstallare una vecchia versione dopo aver installato la nuova, perche
-rimuoverebbe gli stessi task. Per questo pilot preferire dispositivi puliti o
-disinstallare la versione precedente prima della nuova.
+rimuoverebbe gli stessi task. Per aggiornamenti usare la stessa app e la procedura
+contenuto + detection sopra descritta, non due app concorrenti. La nuova detection
+rileva anche task che puntano ancora al percorso di una versione precedente.
 
 Da Windows PowerShell a 64 bit elevato, nella cartella installata:
 

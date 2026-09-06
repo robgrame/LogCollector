@@ -4,7 +4,7 @@
 .SYNOPSIS
 Installs the complete custom inventory package and its two SYSTEM tasks without touching legacy tasks.
 .NOTES
-Version 1.2.3. Tasks remain disabled while SubmissionEnabled is false.
+Version 1.3.4. Tasks remain disabled while SubmissionEnabled is false.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param()
@@ -13,8 +13,8 @@ Set-StrictMode -Version Latest
 if (-not [Environment]::Is64BitProcess) { throw 'Run this installer with 64-bit Windows PowerShell.' }
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
 $config = Get-InventoryConfiguration -Path (Join-Path $PSScriptRoot 'Config.psd1')
-if ($config.PackageVersion -ne '1.2.3') { throw 'Config.psd1 must match package version 1.2.3; do not mix files from older packages.' }
-$target = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'LogCollector\CustomInventory\1.2.3'
+if ($config.PackageVersion -ne '1.3.4') { throw 'Config.psd1 must match package version 1.3.4; do not mix files from older packages.' }
+$target = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'LogCollector\CustomInventory\1.3.4'
 $taskPath = '\LogCollector\'
 $names = @('LogCollector-CustomInventory', 'LogCollector-CustomInventory-Spool')
 $files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1',
@@ -74,6 +74,6 @@ if ($PSCmdlet.ShouldProcess($target, 'Install inventory package and register its
         $task = Get-ScheduledTask -TaskPath $taskPath -TaskName $name -ErrorAction Stop
         if ($task.Settings.Enabled -ne $config.SubmissionEnabled) { throw "Task enablement differs from configuration: $name" }
     }
-    Write-Output "Installed Custom Inventory 1.2.3 at $target; SubmissionEnabled=$($config.SubmissionEnabled)."
+    Write-Output "Installed Custom Inventory 1.3.4 at $target; SubmissionEnabled=$($config.SubmissionEnabled)."
     if (-not $config.SubmissionEnabled) { Write-Warning 'Tasks are disabled until the original Azure table schemas and DCR mappings are ready.' }
 }
