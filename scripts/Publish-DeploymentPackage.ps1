@@ -107,11 +107,19 @@ Azure region for a newly created resource group. Ignored if the resource group e
 Bicep parameter file. Defaults to the single .bicepparam file bundled under .\infra.
 .PARAMETER SkipInfra
 Skip the infrastructure (Bicep) deployment and only push the Function app packages.
-Requires the Function apps to already exist (e.g. from a previous run).
+Requires the Function apps to already exist (e.g. from a previous run). With -SkipInfra,
+pass -FrontendAppName/-WorkerAppName if the resource group could contain more than one
+LogCollector-like deployment; otherwise app names are auto-discovered and the script
+refuses to proceed if the discovery is ambiguous.
 .PARAMETER SkipApps
 Skip pushing the Function app packages and only deploy infrastructure.
+.PARAMETER FrontendAppName
+Explicit Frontend Function app name. Required with -SkipInfra when discovery is ambiguous.
+.PARAMETER WorkerAppName
+Explicit Worker Function app name. Required with -SkipInfra when discovery is ambiguous.
 .NOTES
-Version 1.0.0.
+Version 1.0.1. Never mutates the caller's persisted `az` default subscription; every
+command is scoped with --subscription instead of `az account set`.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -120,7 +128,9 @@ param(
     [string] $Location = 'italynorth',
     [string] $ParameterFile,
     [switch] $SkipInfra,
-    [switch] $SkipApps
+    [switch] $SkipApps,
+    [string] $FrontendAppName,
+    [string] $WorkerAppName
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -133,19 +143,19 @@ if (-not $PSBoundParameters.ContainsKey('ParameterFile')) {
 }
 if (-not (Test-Path -LiteralPath $ParameterFile -PathType Leaf)) { throw "Parameter file not found: $ParameterFile" }
 
-& az account set --subscription $SubscriptionId
-if ($LASTEXITCODE -ne 0) { throw "Could not select subscription $SubscriptionId (exit code $LASTEXITCODE)." }
+$subscriptionArgs = @('--subscription', $SubscriptionId)
 
-$groupExists = (& az group exists --name $ResourceGroup) -eq 'true'
+$groupExists = (& az group exists --name $ResourceGroup @subscriptionArgs) -eq 'true'
 if (-not $groupExists) {
     if ($PSCmdlet.ShouldProcess($ResourceGroup, "Create resource group in $Location")) {
-        & az group create --name $ResourceGroup --location $Location --only-show-errors | Out-Null
+        & az group create --name $ResourceGroup --location $Location --only-show-errors @subscriptionArgs | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Failed to create resource group $ResourceGroup (exit code $LASTEXITCODE)." }
     }
 }
 
-$frontendAppName = $null
-$workerAppName = $null
+$frontendAppNameResolved = $FrontendAppName
+$workerAppNameResolved = $WorkerAppName
+$infraDeployed = $false
 if (-not $SkipInfra) {
     if ($PSCmdlet.ShouldProcess($ResourceGroup, 'Deploy infrastructure (Bicep)')) {
         $deploymentName = 'LogCollector-' + (Get-Date -Format 'yyyyMMddHHmmss')
@@ -156,29 +166,40 @@ if (-not $SkipInfra) {
             --parameters $ParameterFile `
             --parameters location=$Location `
             --query properties.outputs `
-            --only-show-errors -o json
+            --only-show-errors -o json @subscriptionArgs
         if ($LASTEXITCODE -ne 0) { throw "Infrastructure deployment failed (exit code $LASTEXITCODE)." }
         $outputs = $outputsJson | ConvertFrom-Json
-        $frontendAppName = $outputs.frontendAppName.value
-        $workerAppName = $outputs.workerAppName.value
+        $frontendAppNameResolved = $outputs.frontendAppName.value
+        $workerAppNameResolved = $outputs.workerAppName.value
+        $infraDeployed = $true
         Write-Output "Frontend ingest URL: $($outputs.frontendIngestUrl.value)"
         Write-Output "Log Analytics workspace: $($outputs.logAnalyticsWorkspaceName.value)"
+    }
+    else {
+        # -WhatIf (or a declined ShouldProcess): nothing was actually deployed, so app
+        # names cannot be resolved from outputs. Do not fall through to app deployment.
+        Write-Output 'Infrastructure deployment skipped (WhatIf); app packages will not be previewed.'
+        $SkipApps = $true
     }
 }
 
 if (-not $SkipApps) {
-    if (-not $frontendAppName -or -not $workerAppName) {
-        # Infra was skipped: derive the app names from the deployed resources instead of assuming a naming convention.
-        $frontendAppName = & az functionapp list --resource-group $ResourceGroup --query "[?ends_with(name, '-intake')].name | [0]" -o tsv --only-show-errors
-        $workerAppName = & az functionapp list --resource-group $ResourceGroup --query "[?ends_with(name, '-worker')].name | [0]" -o tsv --only-show-errors
-        if (-not $frontendAppName -or -not $workerAppName) { throw 'Could not determine Function app names; deploy infrastructure first or pass -SkipInfra with an existing deployment.' }
+    if (-not $infraDeployed -and (-not $frontendAppNameResolved -or -not $workerAppNameResolved)) {
+        # Infra was skipped and no explicit names were given: discover by naming convention,
+        # but refuse if the resource group holds more than one candidate for either role.
+        $frontendMatches = @(& az functionapp list --resource-group $ResourceGroup --query "[?ends_with(name, '-intake')].name" -o tsv --only-show-errors @subscriptionArgs)
+        $workerMatches = @(& az functionapp list --resource-group $ResourceGroup --query "[?ends_with(name, '-worker')].name" -o tsv --only-show-errors @subscriptionArgs)
+        if ($frontendMatches.Count -ne 1) { throw "Found $($frontendMatches.Count) candidate Frontend app(s) in $ResourceGroup; pass -FrontendAppName explicitly." }
+        if ($workerMatches.Count -ne 1) { throw "Found $($workerMatches.Count) candidate Worker app(s) in $ResourceGroup; pass -WorkerAppName explicitly." }
+        $frontendAppNameResolved = $frontendMatches[0]
+        $workerAppNameResolved = $workerMatches[0]
     }
-    if ($PSCmdlet.ShouldProcess($frontendAppName, 'Deploy Frontend package')) {
-        & az functionapp deployment source config-zip --resource-group $ResourceGroup --name $frontendAppName --src (Join-Path $root 'Functions\Frontend.zip') --only-show-errors
+    if ($PSCmdlet.ShouldProcess($frontendAppNameResolved, 'Deploy Frontend package')) {
+        & az functionapp deployment source config-zip --resource-group $ResourceGroup --name $frontendAppNameResolved --src (Join-Path $root 'Functions\Frontend.zip') --only-show-errors @subscriptionArgs
         if ($LASTEXITCODE -ne 0) { throw "Frontend deployment failed (exit code $LASTEXITCODE)." }
     }
-    if ($PSCmdlet.ShouldProcess($workerAppName, 'Deploy Worker package')) {
-        & az functionapp deployment source config-zip --resource-group $ResourceGroup --name $workerAppName --src (Join-Path $root 'Functions\Worker.zip') --only-show-errors
+    if ($PSCmdlet.ShouldProcess($workerAppNameResolved, 'Deploy Worker package')) {
+        & az functionapp deployment source config-zip --resource-group $ResourceGroup --name $workerAppNameResolved --src (Join-Path $root 'Functions\Worker.zip') --only-show-errors @subscriptionArgs
         if ($LASTEXITCODE -ne 0) { throw "Worker deployment failed (exit code $LASTEXITCODE)." }
     }
 }
