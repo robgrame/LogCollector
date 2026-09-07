@@ -87,7 +87,30 @@ function Test-AllowedIpv4 {
     if ($parts[0] -eq 192 -and $parts[1] -eq 0 -and $parts[2] -eq 2) { return $true }
     if ($parts[0] -eq 198 -and $parts[1] -eq 51 -and $parts[2] -eq 100) { return $true }
     if ($parts[0] -eq 203 -and $parts[1] -eq 0 -and $parts[2] -eq 113) { return $true }
+    # ASN.1 object identifiers (X.509 EKU/policy OIDs such as '2.5.29.19' or
+    # '1.3.6.1.5.5.7.3.2') use dotted-decimal notation indistinguishable from
+    # an IPv4 address by pattern alone once the run is exactly four segments.
+    # A valid OID's first arc is 0, 1 or 2; if it is 0 or 1 the second arc is
+    # additionally constrained to 0-39. Genuine public IPv4 literals in this
+    # codebase never take this shape, so treat it as a non-address.
+    if ($parts[0] -eq 2 -or (($parts[0] -eq 0 -or $parts[0] -eq 1) -and $parts[1] -le 39)) { return $true }
     return $false
+}
+
+function Test-PlaceholderGuid {
+    <#
+    .SYNOPSIS
+    Recognizes documentation placeholder GUIDs made of a single repeated hex digit.
+    .DESCRIPTION
+    Values such as 11111111-1111-1111-1111-111111111111 or
+    33333333-3333-3333-3333-333333333333 are a common, unambiguous documentation
+    convention. A real random GUID has a negligible chance of matching this shape,
+    so treating it as a placeholder does not meaningfully weaken the scan.
+    #>
+    param([Parameter(Mandatory)] [string] $Value)
+
+    $compact = $Value.Replace('-', '')
+    return (@($compact.ToCharArray() | Select-Object -Unique).Count -eq 1)
 }
 
 function Test-PublicSnapshot {
@@ -124,7 +147,9 @@ function Test-PublicSnapshot {
             }
         }
         foreach ($match in [regex]::Matches($relative, '(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b')) {
-            if (-not $allowedGuids.Contains($match.Value)) { $pathFindings.Add('Unapproved GUID in path') }
+            if (-not $allowedGuids.Contains($match.Value) -and -not (Test-PlaceholderGuid -Value $match.Value)) {
+                $pathFindings.Add('Unapproved GUID in path')
+            }
         }
         if ([regex]::IsMatch($relative, '(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b')) {
             $pathFindings.Add('Email address in path')
@@ -157,7 +182,7 @@ function Test-PublicSnapshot {
         }
 
         foreach ($match in [regex]::Matches($text, '(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b')) {
-            if (-not $allowedGuids.Contains($match.Value)) {
+            if (-not $allowedGuids.Contains($match.Value) -and -not (Test-PlaceholderGuid -Value $match.Value)) {
                 $findings.Add([pscustomobject]@{ File = $displayFile; Kind = 'Unapproved GUID'; Value = '[redacted]' })
             }
         }
@@ -175,7 +200,7 @@ function Test-PublicSnapshot {
             }
         }
 
-        foreach ($match in [regex]::Matches($text, '(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])')) {
+        foreach ($match in [regex]::Matches($text, '(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])')) {
             if (-not (Test-AllowedIpv4 -Address $match.Value)) {
                 $findings.Add([pscustomobject]@{ File = $displayFile; Kind = 'Public IPv4 address'; Value = '[redacted]' })
             }

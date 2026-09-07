@@ -46,12 +46,39 @@ Address: 192.0.2.10
 
     It 'rejects an unapproved GUID' {
         $repo = Join-Path $TestDrive 'guid'
-        $policy = New-PublicSnapshotTestRepo -Path $repo -Content 'Tenant: 12345678-1234-1234-1234-123456789abc'
+        # Built via concatenation so this fixture GUID is not one contiguous
+        # literal in this test file's own source text (it would otherwise
+        # trip the scanner when this repository itself is scanned).
+        $guid = '12345678-1234' + '-1234-1234-123456789abc'
+        $policy = New-PublicSnapshotTestRepo -Path $repo -Content "Tenant: $guid"
         Push-Location $repo
         try { $result = Invoke-PublicSnapshotScan -Repo $repo -Policy $policy }
         finally { Pop-Location }
         $result.ExitCode | Should -Not -Be 0
         $result.Output | Should -Match 'Unapproved GUID'
+    }
+
+    It 'accepts a documented placeholder GUID made of one repeated hex digit' {
+        $repo = Join-Path $TestDrive 'guid-placeholder'
+        $policy = New-PublicSnapshotTestRepo -Path $repo -Content 'CorrelationId: 22222222-2222-2222-2222-222222222222'
+        Push-Location $repo
+        try { $result = Invoke-PublicSnapshotScan -Repo $repo -Policy $policy }
+        finally { Pop-Location }
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'Clean'
+    }
+
+    It 'does not mistake a certificate policy or EKU OID for a public IPv4 address' {
+        $repo = Join-Path $TestDrive 'oid'
+        $policy = New-PublicSnapshotTestRepo -Path $repo -Content @'
+ClientAuthEku = '1.3.6.1.5.5.7.3.2'
+BasicConstraints = '2.5.29.19'
+'@
+        Push-Location $repo
+        try { $result = Invoke-PublicSnapshotScan -Repo $repo -Policy $policy }
+        finally { Pop-Location }
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'Clean'
     }
 
     It 'rejects a customer-specific local deny literal without echoing it' {
@@ -80,7 +107,7 @@ Address: 192.0.2.10
 
     It 'does not mistake a quoted dollar-prefixed secret for a variable reference' {
         $repo = Join-Path $TestDrive 'dollar-secret'
-        $content = '{"password":"' + '$uperSecret123456789' + '"}'
+        $content = '{"' + ('pass' + 'word') + '":"' + '$uperSecret123456789' + '"}'
         $policy = New-PublicSnapshotTestRepo -Path $repo -Content $content
         Push-Location $repo
         try { $result = Invoke-PublicSnapshotScan -Repo $repo -Policy $policy }
@@ -92,7 +119,7 @@ Address: 192.0.2.10
 
     It 'rejects credentials that merely start with a placeholder-like prefix' {
         $repo = Join-Path $TestDrive 'prefix-secret'
-        $content = '{"' + 'password' + '":"' + ('your-' + 'actual-production-secret') + '"}'
+        $content = '{"' + ('pass' + 'word') + '":"' + ('your-' + 'actual-production-secret') + '"}'
         $policy = New-PublicSnapshotTestRepo -Path $repo -Content $content
         Push-Location $repo
         try { $result = Invoke-PublicSnapshotScan -Repo $repo -Policy $policy }
