@@ -375,6 +375,28 @@ dead-lettered payloads before the configured lifecycle expiration.
 
 ---
 
+## Publish a sanitized public mirror
+
+Keep the development repository private and treat it as the source of truth. Publish only a
+history-free snapshot to a separate public repository:
+
+```powershell
+# Local-only file, ignored by Git: one customer-specific literal per line.
+@('CustomerName', 'customer.example.com') |
+    Set-Content .public-release-policy.local.txt
+
+.\scripts\Publish-PublicSnapshot.ps1 `
+    -Repository '<owner>/LogCollector-public'
+```
+
+The publisher exports only files tracked by the selected committed ref, scans them before any
+GitHub change, and blocks unknown GUIDs, concrete Azure endpoints, real email addresses, public
+IP addresses, common credential forms, customer OneDrive paths, and local deny-list matches.
+It never transfers private Git history. Run with `-ScanOnly` to validate without creating or
+updating the public repository. Do not merge from the private repository into the public mirror.
+
+---
+
 ## Deploy
 
 ### Prerequisites

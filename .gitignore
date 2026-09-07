@@ -44,3 +44,4 @@ Thumbs.db
 *.bak
 *.tmp
 .vs/
+.public-release-policy.local.txt
