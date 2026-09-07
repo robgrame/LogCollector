@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.4.6. Optional metadata-only diagnostics; no activity on import.
+# Version 1.5.0. Optional metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Collection.psm1') -ErrorAction Stop

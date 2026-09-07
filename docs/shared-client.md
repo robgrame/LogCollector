@@ -17,12 +17,9 @@ request already accepted by the server. Do not use a callback that dumps caller
 variables or arbitrary exceptions into a log.
 
 `src\Client\LogCollector.Client.psd1` is the public module entry point for independent
-inventory, diagnostic and remediation scripts. Version **1.3.3** supports Windows PowerShell
-5.1 and PowerShell 7 on Windows. Import does not discover certificates, access Azure, install
+inventory, diagnostic and remediation scripts. Version **1.5.0** supports Windows PowerShell
+5.1 and PowerShell 7 on Windows and can export representative schema samples without contacting Azure. Import does not discover certificates, access Azure, install
 tasks or run collection/remediation.
-
-The original scripts under the customer's ACI folder have **not** been changed. Their migration
-and the required backend schemas are tracked in [aci-migration-findings.md](aci-migration-findings.md).
 
 ## Package and distribute
 
@@ -33,7 +30,7 @@ $package = .\scripts\Publish-ClientModule.ps1
 $package | Format-List ModuleVersion, PackagePath, PackageSha256
 ```
 
-The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.3.3`.
+The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.5.0`.
 It contains no customer scripts, private keys, CA files, credentials or device inventory.
 The SHA-256 identifies the generated artifact; it is not a digital signature or proof of its source.
 
@@ -41,7 +38,7 @@ Distribute it through the customer's trusted management channel to an administra
 directory, for example:
 
 ```text
-C:\Program Files\LogCollector\Modules\LogCollector.Client\1.3.3\
+C:\Program Files\LogCollector\Modules\LogCollector.Client\1.5.0\
     LogCollector.Client.psd1
     LogCollector.Client.psm1
     DeviceIdentity.psm1
@@ -56,7 +53,7 @@ Keep the import path valid for scheduled tasks, self-copies and post-upgrade hoo
 the current working directory to locate it.
 
 ```powershell
-Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.3.3\LogCollector.Client.psd1' -ErrorAction Stop
+Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.5.0\LogCollector.Client.psd1' -ErrorAction Stop
 ```
 
 The high-level commands obtain their endpoint from an explicit parameter. No Function key,
@@ -71,11 +68,35 @@ workspace key, workspace ID or Graph token is distributed with the module.
 | `New-SignedInventoryRequest` | Returns the exact UTF-8 `BodyBytes` and signature headers for advanced integration |
 | `New-InventoryEnvelope` | Wraps existing records; legacy version by default, optional `-EnvelopeVersion 'LOGCOLLECTOR-TELEMETRY-V1'` |
 | `Get-LogCollectorSpoolPath` | Computes the endpoint-specific queue directory without creating it |
+| `Export-LogCollectorSchema` | Exports representative final rows for the Azure Monitor table/DCR wizard without network or certificate access |
 | `Send-LogCollectorData` | Discovers identity/certificate, wraps, signs and submits existing record objects |
 | `Sync-LogCollectorSpool` | Retries queued data without re-running the originating scripts |
 
 The first four commands reuse the existing modules. The high-level facade does not duplicate
 cryptography, certificate selection or retry logic.
+
+## Export a schema sample
+
+A new collector can expose an `-ExportSchema` switch and pass the same representative records to
+`Export-LogCollectorSchema`. The function writes the final row shape expected by Azure Monitor,
+including the platform-owned columns, without discovering identity, selecting certificates, using
+the spool or contacting the network.
+
+```powershell
+$records = @([pscustomobject]@{
+    SecureBootEnabled = $true
+    FirmwareType = 'UEFI'
+    Certificates = @([pscustomobject]@{ Subject = 'CN=Example' })
+})
+
+Export-LogCollectorSchema -TableName 'SecureBootInventory_CL' `
+    -Source 'SecureBootCollector' -Records $records `
+    -OutputPath '.\SecureBootInventory-schema.json' -Force
+```
+
+Upload the resulting JSON as sample data in the Azure Monitor custom-table/DCR wizard. It is not a
+DCR definition and does not modify Azure. Use representative non-null values, review the file for
+sensitive data, and keep each property type stable across records.
 
 ## Submit existing data
 
@@ -93,7 +114,7 @@ This example uses the **currently configured** `InventoryWindows_CL` destination
 collect additional data or modify device settings:
 
 ```powershell
-$endpoint = 'https://logcollector-intake.azurewebsites.net/api/submit'
+$endpoint = 'https://<your-intake>.azurewebsites.net/api/submit'
 $record = [pscustomobject]@{
     RecordType = 'Hardware'
     Model = 'Example model'
@@ -101,7 +122,7 @@ $record = [pscustomobject]@{
 
 $result = Send-LogCollectorData -FrontendUrl $endpoint `
     -TableName 'InventoryWindows_CL' -Records @($record) `
-    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.3.3' }
+    -Source 'ExistingInventoryScript' -Properties @{ CollectorVersion = '1.5.0' }
 
 $result | Select-Object Disposition, StatusCode, Attempts, Spooled, SpoolDirectory
 ```
@@ -115,8 +136,8 @@ double-encode the body. Dates should be explicit UTC/ISO values and nested field
 eventual DCR schema. The module preserves arrays, booleans, numbers and nested objects; it does not
 rename legacy fields, change JSON-string columns to dynamic columns or make their schema choices.
 
-**No client call creates or authorizes a table.** ACI destinations such as `DeviceInventory_CL`,
-`AppInventory_CL`, `DSK_SMBv1Status_CL` and the SecureBoot tables are not enabled in the current
+**No client call creates or authorizes a table.** Destinations such as `DeviceInventory_CL`,
+`AppInventory_CL` and any other custom table are not enabled by default in a new
 deployment. Create/map their schemas and DCR streams on the backend first, or intake returns 400.
 
 ## Outcomes and caller behavior

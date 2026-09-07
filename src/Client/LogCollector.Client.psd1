@@ -1,6 +1,6 @@
 @{
     RootModule = 'LogCollector.Client.psm1'
-    ModuleVersion = '1.3.3'
+    ModuleVersion = '1.5.0'
     GUID = '4ca10d53-456c-4ce0-a860-14d4b6644db9'
     Author = 'LogCollector'
     Description = 'Shared certificate-authenticated telemetry client for Windows PowerShell scripts.'
@@ -11,6 +11,7 @@
         'New-SignedInventoryRequest'
         'New-InventoryEnvelope'
         'Get-LogCollectorSpoolPath'
+        'Export-LogCollectorSchema'
         'Send-LogCollectorData'
         'Sync-LogCollectorSpool'
     )

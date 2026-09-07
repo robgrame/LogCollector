@@ -34,7 +34,7 @@ implementation. Confirm it matches the pilot device's chain before rollout:
 ## 1. Deploy infrastructure
 
 ```powershell
-$subscription = 'b45c5b53-d8f3-4a4c-9fe5-5537818a9886'
+$subscription = '00000000-0000-0000-0000-000000000000'
 az group create --subscription $subscription --name LOGCOLLECTOR-RG --location italynorth
 
 # Deployed settings: public Intune CAs; enterprise PKI anchors are not configured.
@@ -160,7 +160,7 @@ The default remains the original inventory example to preserve existing deployme
 Keep additional schemas in the environment's parameter file so later infrastructure deployments
 do not replace a manually extended DCR/map with the default example.
 
-Send existing record objects using shared client **1.3.3** or later:
+Send existing record objects using shared client **1.5.0** or later:
 
 ```powershell
 Send-LogCollectorData -FrontendUrl 'https://<frontend>.azurewebsites.net/api/submit' `
@@ -178,7 +178,7 @@ Verify the frontend using a TLS client certificate:
 
 ```powershell
 $certificate = Get-Item 'Cert:\LocalMachine\My\<client-certificate-thumbprint>'
-Invoke-RestMethod https://logcollector-intake.azurewebsites.net/api/health -Certificate $certificate
+Invoke-RestMethod https://<your-intake>.azurewebsites.net/api/health -Certificate $certificate
 # { status = ok; component = logcollector-frontend; configuredIngestionTargets = 1 }
 ```
 

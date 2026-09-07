@@ -3,7 +3,7 @@
 .SYNOPSIS
 Runs custom inventory using the destinations supplied in Config.psd1.
 .NOTES
-Version 1.4.6. Protected metadata-only diagnostics for each run.
+Version 1.5.0. Protected metadata-only diagnostics for each run.
 #>
 [CmdletBinding()]
 param([switch] $Preview, [switch] $QueueOnly)
@@ -15,7 +15,7 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     $log = New-InventoryLogContext -Component Inventory
     $mode = if ($Preview) { 'Preview' } elseif ($QueueOnly) { 'QueueOnly' } else { 'Live' }
-    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.4.6'; Mode = $mode }
+    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.5.0'; Mode = $mode }
     if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell so both registry views are collected.' }
     $stage = 'ImportRuntime'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop

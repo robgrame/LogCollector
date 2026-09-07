@@ -31,7 +31,7 @@
 
 .PARAMETER FrontendUrl
     Full https URL of the ingest endpoint, e.g.
-    https://logcollector-frontend.azurewebsites.net/api/inventory
+    https://<your-intake>.azurewebsites.net/api/inventory
 
 .PARAMETER TableName
     Target Log Analytics custom table. Must be mapped to a DCR stream server-side.
