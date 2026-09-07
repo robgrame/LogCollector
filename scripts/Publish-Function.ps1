@@ -3,7 +3,7 @@
 .SYNOPSIS
 Builds and packages one Function app, optionally deploying it with Azure CLI.
 .NOTES
-Version 1.0.1. No Azure resources are changed unless -Deploy is supplied.
+Version 1.1.0. No Azure resources are changed unless -Deploy is supplied.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -13,7 +13,10 @@ param(
     [switch] $Deploy,
     [string] $ResourceGroup,
     [string] $AppName,
-    [string] $SubscriptionId
+    [string] $SubscriptionId,
+    # Removes *.pdb from the publish output before zipping. Debug symbols are not
+    # required to run a Function app; exclude them for packages handed to customers.
+    [switch] $ExcludePdb
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,6 +33,10 @@ $zipPath = Join-Path $run ($Component + '.zip')
 $project = Join-Path $root ('src\Functions\' + $Component)
 & dotnet publish $project -c Release -o $publish --nologo
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+
+if ($ExcludePdb) {
+    Get-ChildItem -Path $publish -Filter '*.pdb' -Recurse -File | Remove-Item -Force
+}
 
 # Compress-Archive excludes hidden entries; .azurefunctions must be in the ZIP.
 Add-Type -AssemblyName System.IO.Compression.FileSystem

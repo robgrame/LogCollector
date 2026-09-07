@@ -437,6 +437,25 @@ Omit `-Deploy` to build packages locally without touching Azure. Packaging inclu
 `.azurefunctions` directory; `Compress-Archive` can omit it and produce an unusable deployment.
 B1 has no deployment slots: allow for a restart during frontend deployment.
 
+### Client deployment package (no source, no .NET SDK required on target)
+
+To hand off a self-contained package that deploys infrastructure and pre-built Function apps
+with **no .pdb files**, using only the Azure CLI on the target machine:
+
+```powershell
+.\scripts\Publish-DeploymentPackage.ps1
+```
+
+This builds Frontend and Worker in Release, strips debug symbols, and produces
+`out\Deploy\<version>\` containing `infra\` (Bicep template, parameter file, certificates),
+`Functions\Frontend.zip` / `Functions\Worker.zip`, a generated `Deploy-LogCollector.ps1`
+orchestrator, a `MANIFEST.json` with package hashes, and a `README.md` with usage instructions.
+Deploy it with:
+
+```powershell
+.\Deploy-LogCollector.ps1 -SubscriptionId <sub-id> -ResourceGroup LOGCOLLECTOR-RG -Location italynorth
+```
+
 ### 3. Devices
 
 ```powershell
