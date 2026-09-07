@@ -424,6 +424,12 @@ Record the outputs: `frontendIngestUrl`, `dataCollectionEndpoint`, `dataCollecti
 For Intune fallback, complete the administrator-operated Graph `Device.Read.All` grant in
 [the runbook](docs/operations.md#intune-fallback-grant-tenant-device-read-permission) before onboarding.
 
+**Naming and collisions:** the storage account and Function app names are globally unique
+across all of Azure. On a first-time deployment, set `customerPrefix` (e.g. `'aci'`) in the
+parameter file to a short customer/company code to avoid colliding with a name already taken
+by another tenant; leave it empty (default) only when redeploying an existing installation,
+since changing it later renames rather than migrates the affected resources.
+
 ### 2. Applications
 
 ```powershell
