@@ -272,6 +272,39 @@ migrates the resources.
 Use ``-SkipInfra`` to redeploy only the Function app code against an existing resource group,
 or ``-SkipApps`` to only (re)apply the infrastructure template. Run with ``-WhatIf`` first to
 preview the changes.
+
+### Worker deployment fails with a 403 on storage
+
+If the Worker deployment fails with
+``InaccessibleStorageException`` / ``BlobUploadFailedException: ... 403`` while the Frontend
+deploys fine, check the storage account's public network access:
+
+``````powershell
+az storage account show -g <rg-name> -n <storage-name> --query publicNetworkAccess -o tsv
+``````
+
+The Worker runs on Flex Consumption, which pulls its package from the ``worker-deploy`` blob
+container; the deployment service needs to reach the blob endpoint. The template requests
+``Enabled``, but an Azure Policy in the tenant may silently force it back to ``Disabled``.
+Grant a policy exemption for this storage account, then re-enable and redeploy the apps only:
+
+``````powershell
+az storage account update -g <rg-name> -n <storage-name> --public-network-access Enabled
+.\Deploy-LogCollector.ps1 -SubscriptionId <sub-id> -ResourceGroup <rg-name> -SkipInfra
+``````
+
+Data-plane access stays identity-only regardless: shared key auth is disabled and every
+caller must present an Entra identity with an explicit RBAC role.
+
+### Verifying the deployment
+
+``````powershell
+az functionapp list -g <rg-name> --query "[].{name:name,state:state}" -o table
+``````
+
+Both apps should report ``Running``. A plain HTTPS GET to ``/api/health`` returning
+**403 "Client Certificate Required"** is the expected result: the intake endpoint enforces
+mutual TLS and rejects any request without a client certificate.
 "@
 Set-Content -LiteralPath (Join-Path $target 'README.md') -Value $readme -Encoding utf8
 
