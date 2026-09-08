@@ -238,7 +238,7 @@ Describe 'inventory package installer' {
         $inventory.Triggers[0].DaysOfWeek | Should -Be 72
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory-Spool'].Triggers[0].Repetition.Interval | Should -Be 'PT1H'
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory-Spool'].Actions[0].Arguments | Should -Match 'Sync-Spool.ps1'
-        Should -Invoke Copy-Item -Times 17 -Exactly
+        Should -Invoke Copy-Item -Times 18 -Exactly
         Should -Invoke Write-InventoryLog -Times 2 -Exactly -ParameterFilter { $Event -eq 'TasksRegistered' -and -not $Data.Enabled }
     }
 
@@ -307,7 +307,7 @@ Describe 'inventory distribution builder' {
         $builder = Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1'
         $output = Join-Path $TestDrive 'Distribution'
         $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
-        $result.FileCount | Should -Be 17
+        $result.FileCount | Should -Be 18
         $result.PackageVersion | Should -BeExactly '1.5.0'
         $result.SubmissionEnabled | Should -BeFalse
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.PackagePath 'Config.psd1')).Hash
@@ -320,7 +320,7 @@ Describe 'inventory distribution builder' {
         $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
         @($copied.PkiRootCaThumbprints).Count | Should -Be 0
         (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
-            Should -BeExactly '1.6.0'
+            Should -BeExactly '1.7.0'
     }
 
     It 'escapes deployment configuration as data and supports alternative tables' {

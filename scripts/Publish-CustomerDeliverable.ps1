@@ -168,6 +168,9 @@ Enable upload to Azure. Omit for a pilot package that installs but keeps both
 scheduled tasks disabled, so nothing is transmitted.
 .PARAMETER Environment
 Free-text environment tag recorded with every record (e.g. Production, Pilot).
+.PARAMETER CustomerName
+Customer folder used by Write-CMTraceLog, so every script on the device logs to
+%ProgramData%\<CustomerName>\<ApplicationName>\Logs. Defaults to 'LogCollector'.
 .EXAMPLE
 .\New-IntunePackage.ps1 -FrontendUrl https://aci-logcollector-intake.azurewebsites.net/api/inventory
 Uses .\Tools\IntuneWinAppUtil.exe and builds a pilot package.
@@ -185,6 +188,7 @@ param(
     [Parameter(Mandatory)] [Uri] $FrontendUrl,
     [switch] $EnableSubmission,
     [string] $Environment = '',
+    [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')] [string] $CustomerName = 'LogCollector',
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $DeviceTableName = 'DeviceInventory_CL',
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $AppTableName = 'AppInventory_CL',
     [string[]] $PkiRootCaThumbprints = @(),
@@ -198,6 +202,14 @@ Set-StrictMode -Version Latest
 
 if ($FrontendUrl.Scheme -ne 'https') {
     throw "FrontendUrl must use https; '$($FrontendUrl.Scheme)' would send signed inventory in clear text."
+}
+# A reserved DOS device name is still reserved as a folder, so it would produce a package
+# that builds cleanly and then fails on every device the moment a script logs. Rejected
+# here, where the operator can still fix it, rather than at deployment time.
+if (($CustomerName -split '\.')[0].ToUpperInvariant() -in @('CON', 'PRN', 'AUX', 'NUL', 'CLOCK$',
+        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
+    throw "CustomerName '$CustomerName' is a reserved Windows device name and cannot be a log folder."
 }
 $source = Join-Path $PSScriptRoot 'ClientSource'
 if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "ClientSource folder not found next to this script: $source" }
@@ -213,7 +225,7 @@ if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path
 $payloadFiles = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
     'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
 $moduleFiles = @('LogCollector.Client.psd1', 'LogCollector.Client.psm1', 'EndpointConfiguration.psm1',
-    'DeviceIdentity.psm1', 'RequestSigning.psm1', 'InventoryClient.psm1', 'InventorySpool.psm1')
+    'CMTraceLogging.psm1', 'DeviceIdentity.psm1', 'RequestSigning.psm1', 'InventoryClient.psm1', 'InventorySpool.psm1')
 foreach ($file in $payloadFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file) -PathType Leaf)) { throw "Missing package source: $file" }
 }
@@ -359,6 +371,7 @@ $coreConfig = Import-PowerShellDataFile -LiteralPath (Join-Path $coreSource 'Con
 $coreVersion = $coreConfig.PackageVersion
 $coreConfig.FrontendUrl = $FrontendUrl.AbsoluteUri
 $coreConfig.Environment = $Environment
+$coreConfig.CustomerName = $CustomerName
 # The core module carries no collection schedule, so it may submit as soon as a script
 # calls it; -EnableSubmission gates the inventory task, not this shared dependency.
 $coreConfig.SubmissionEnabled = $true

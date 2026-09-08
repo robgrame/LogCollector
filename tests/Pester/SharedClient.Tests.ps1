@@ -43,12 +43,13 @@ Describe 'Shared client facade' {
     }
 
     It 'exports the documented public surface' {
-        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.6.0'
+        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.7.0'
         $commands = @(Get-Command -Module LogCollector.Client).Name | Sort-Object
         $expected = @('Get-DeviceIdentitySnapshot', 'Get-ClientCertificate', 'New-SignedInventoryRequest',
             'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Export-LogCollectorSchema',
             'Send-LogCollectorData', 'Sync-LogCollectorSpool', 'Send-LogAnalyticsData',
-            'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath') | Sort-Object
+            'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath',
+            'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName') | Sort-Object
         ($commands -join ',') | Should -BeExactly ($expected -join ',')
     }
 
@@ -456,12 +457,12 @@ Describe 'Shared module packaging' {
         $result.ModuleVersion | Should -BeExactly $expectedVersion
         $result.PackageSha256 | Should -Match '^[A-F0-9]{64}$'
         $manifest = Test-ModuleManifest (Join-Path $result.ModulePath 'LogCollector.Client.psd1')
-        $manifest.ExportedFunctions.Count | Should -Be 11
+        $manifest.ExportedFunctions.Count | Should -Be 14
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($result.PackagePath)
         try {
             $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-            $names.Count | Should -Be 7
+            $names.Count | Should -Be 8
             foreach ($file in $manifest.FileList) {
                 $names | Should -Contain ("LogCollector.Client/$expectedVersion/" + (Split-Path $file -Leaf))
             }

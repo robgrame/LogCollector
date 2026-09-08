@@ -134,6 +134,30 @@ Use `-Source` when several scripts share a table and you need to tell them apart
 Send-LogAnalyticsData -LogType 'W11Upgrade' -Body $events -Source 'PS-CopyW11FromWRK'
 ```
 
+## Replacing the script's own log file
+
+Scripts that migrate off the SharedKey usually also carry their own `Write-Log`, each with a
+different path, format and rotation. The core package replaces those too:
+
+```powershell
+Write-CMTraceLog -Message 'Copy completed' -Level Info
+Write-CMTraceLog -Message "Copy failed: $($_.Exception.Message)" -Level Error
+```
+
+The log lands in `%ProgramData%\<CustomerName>\<ApplicationName>\Logs` in the format CMTrace
+and OneTrace colour and filter natively. Neither name normally needs to be passed:
+`ApplicationName` defaults to the calling script's base name and `CustomerName` comes from
+the machine-wide configuration, so a script does not hard-code where it is deployed. See
+[the core package README](../src/CorePackage/README.md#local-cmtrace-logging) for the path
+convention, the level mapping and the rotation settings.
+
+Telemetry and the local log answer different questions and are both worth keeping: the
+former shows what happened across the fleet, the latter shows why a single device failed and
+survives an intake outage.
+
+Writing the log requires SYSTEM or elevation, exactly like submitting telemetry, because the
+log directory grants write access only to SYSTEM and Administrators.
+
 ## Testing a change
 
 Against a single machine, without installing the core package:
@@ -156,3 +180,6 @@ exercise serialisation and the spool without contacting the endpoint.
 | `Disposition = Deferred` on every call | The endpoint is unreachable, or `SubmissionEnabled` is `$false` in the machine configuration. Records are spooled, not lost. |
 | `401` from the intake | The device certificate failed chain, issuer or signature validation. |
 | `403` from the intake | The certificate is not bound to the submitted device, or the device is absent or disabled in the tenant. |
+| `Write-CMTraceLog` fails with `requires elevation` | The log directory grants write access only to SYSTEM and Administrators. Run the script from a SYSTEM scheduled task or elevated. |
+| `... is not trusted ...` from `Write-CMTraceLog` | Something under `%ProgramData%` was pre-created by a non-administrator, or is a junction. Delete the offending directory and let the module recreate it. |
+| Logs appear under `LogCollector\` instead of the customer name | The machine has no `CustomerName` configured. Rebuild the package with `-CustomerName`, or reinstall with `.\Install.ps1 -CustomerName '<Customer>'`. |

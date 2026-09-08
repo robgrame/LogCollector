@@ -6,7 +6,7 @@ Version 1.5.0. Import the manifest; no authentication, I/O or network calls occu
 #>
 Set-StrictMode -Version Latest
 
-foreach ($dependency in @('EndpointConfiguration', 'DeviceIdentity', 'RequestSigning', 'InventorySpool', 'InventoryClient')) {
+foreach ($dependency in @('EndpointConfiguration', 'CMTraceLogging', 'DeviceIdentity', 'RequestSigning', 'InventorySpool', 'InventoryClient')) {
     Import-Module (Join-Path $PSScriptRoot "$dependency.psm1") -Scope Local -DisableNameChecking
 }
 
@@ -657,4 +657,4 @@ function Send-LogAnalyticsData {
 Export-ModuleMember -Function Get-DeviceIdentitySnapshot, Get-ClientCertificate, New-SignedInventoryRequest, `
     New-InventoryEnvelope, Get-LogCollectorSpoolPath, Export-LogCollectorSchema, Send-LogCollectorData, `
     Sync-LogCollectorSpool, Send-LogAnalyticsData, Get-LogCollectorEndpointConfiguration, `
-    Get-LogCollectorConfigurationPath
+    Get-LogCollectorConfigurationPath, Write-CMTraceLog, Get-CMTraceLogPath, Get-CMTraceCustomerName

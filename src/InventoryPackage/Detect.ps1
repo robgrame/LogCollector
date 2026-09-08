@@ -29,7 +29,7 @@ for ($i = 0; $i -lt $names.Count; $i++) {
 }
 foreach ($file in @('Run-Inventory.ps1', 'Sync-Spool.ps1', 'Inventory.Collection.psm1',
     'Inventory.Runtime.psm1', 'Inventory.Logging.psm1', 'Modules\LogCollector.Client.psd1', 'Modules\LogCollector.Client.psm1',
-    'Modules\EndpointConfiguration.psm1', 'Modules\DeviceIdentity.psm1', 'Modules\RequestSigning.psm1',
+    'Modules\EndpointConfiguration.psm1', 'Modules\CMTraceLogging.psm1', 'Modules\DeviceIdentity.psm1', 'Modules\RequestSigning.psm1',
     'Modules\InventoryClient.psm1', 'Modules\InventorySpool.psm1')) {
     if (-not (Test-Path -LiteralPath (Join-Path $target $file) -PathType Leaf)) { exit 1 }
 }
