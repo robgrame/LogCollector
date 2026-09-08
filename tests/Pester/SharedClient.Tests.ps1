@@ -43,11 +43,109 @@ Describe 'Shared client facade' {
     }
 
     It 'exports the documented public surface' {
-        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.3.3'
+        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.5.0'
         $commands = @(Get-Command -Module LogCollector.Client).Name | Sort-Object
         $expected = @('Get-DeviceIdentitySnapshot', 'Get-ClientCertificate', 'New-SignedInventoryRequest',
-            'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Send-LogCollectorData', 'Sync-LogCollectorSpool') | Sort-Object
+            'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Export-LogCollectorSchema',
+            'Send-LogCollectorData', 'Sync-LogCollectorSpool') | Sort-Object
         ($commands -join ',') | Should -BeExactly ($expected -join ',')
+    }
+
+    It 'exports representative final rows without identity, certificate or network access' {
+        $path = Join-Path $TestDrive 'schema\SecureBootInventory-schema.json'
+        $records = @(
+            [ordered]@{
+                SecureBootEnabled = $true
+                Count = 7
+                Nested = @([pscustomobject]@{ Name = 'Example' })
+                TimeGenerated = 'attacker-value'
+                Source = 'attacker-value'
+            }
+        )
+
+        $result = Export-LogCollectorSchema -TableName 'SecureBootInventory_CL' `
+            -Source 'SecureBootCollector' -Records $records -Properties @{ CollectorVersion = '2.0' } `
+            -OutputPath $path
+
+        $result.TableName | Should -BeExactly 'SecureBootInventory_CL'
+        $result.StreamName | Should -BeExactly 'Custom-SecureBootInventory_CL'
+        $result.RecordCount | Should -Be 1
+        Test-Path -LiteralPath $path | Should -BeTrue
+        $bytes = [IO.File]::ReadAllBytes($path)
+        ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -BeFalse
+        $raw = [IO.File]::ReadAllText($path)
+        $raw.TrimStart()[0] | Should -BeExactly '['
+        [object[]]$sample = ConvertFrom-Json -InputObject $raw
+        $sample.Count | Should -Be 1
+        $sample[0].SecureBootEnabled | Should -BeOfType [bool]
+        $sample[0].Count | Should -Be 7
+        $sample[0].Nested[0].Name | Should -BeExactly 'Example'
+        $sample[0].CollectorVersion | Should -BeExactly '2.0'
+        $sample[0].Source | Should -BeExactly 'SecureBootCollector'
+        $sample[0].TimeGenerated | Should -Not -BeExactly 'attacker-value'
+        $sample[0].EntraDeviceId | Should -BeExactly '00000000-0000-0000-0000-000000000000'
+        $sample[0].RecordIndex | Should -Be 0
+        Should -Invoke -ModuleName LogCollector.Client Get-DeviceIdentitySnapshot -Times 0 -Exactly
+        Should -Invoke -ModuleName LogCollector.Client Get-ClientCertificate -Times 0 -Exactly
+        Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 0 -Exactly
+    }
+
+    It 'limits schema records and refuses accidental overwrite' {
+        $path = Join-Path $TestDrive 'sample.json'
+        $records = 1..3 | ForEach-Object { [pscustomobject]@{ Sequence = $_ } }
+        $result = Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records $records -OutputPath $path -MaxRecords 2
+        $result.RecordCount | Should -Be 2
+        [object[]]$exportedRows = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($path))
+        $exportedRows.Count | Should -Be 2
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records $records -OutputPath $path } | Should -Throw '*already exists*'
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records @('not-an-object') -OutputPath (Join-Path $TestDrive 'invalid.json') } |
+            Should -Throw '*must be an object or dictionary*'
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records @(@{ Type = 'reserved' }) -OutputPath (Join-Path $TestDrive 'reserved.json') } |
+            Should -Throw '*not valid for an Azure Monitor custom table*'
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records @(@{ A = 1 }) -OutputPath (Join-Path $TestDrive 'one-character.json') } |
+            Should -Throw '*not valid for an Azure Monitor custom table*'
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records @(@{ HostName = 'record' }) -Properties @{ hostname = 'property' } `
+            -OutputPath (Join-Path $TestDrive 'case-collision.json') } |
+            Should -Throw '*differ only by letter case*'
+        { Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'Example_CL' -Source 'Pester' `
+            -Records @(@{ HostName = 'record' }) -Properties @{ hostname = 'property' } `
+            -SpoolRoot $script:Root } | Should -Throw '*differ only by letter case*'
+        $conflictingTypes = @(@{ Value = 1 }, @{ Value = 'text' })
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records $conflictingTypes -OutputPath (Join-Path $TestDrive 'types.json') } |
+            Should -Throw '*incompatible JSON types*'
+        $enumCompatible = @(@{ Value = [System.IO.DriveType]::Fixed }, @{ Value = 3 })
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records $enumCompatible -OutputPath (Join-Path $TestDrive 'enum-types.json') } |
+            Should -Not -Throw
+        $caseVariantRecords = @(@{ HostName = 'first' }, @{ hostname = 'second' })
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records $caseVariantRecords -OutputPath (Join-Path $TestDrive 'batch-case.json') } |
+            Should -Throw '*differ only by letter case*'
+        { Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'Example_CL' -Source 'Pester' `
+            -Records $caseVariantRecords -SpoolRoot $script:Root } | Should -Throw '*differ only by letter case*'
+        Should -Invoke -ModuleName LogCollector.Client Get-DeviceIdentitySnapshot -Times 0 -Exactly
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records @(@{ A = 1 }) -OutputPath '\\attacker.invalid\share\sample.json' } |
+            Should -Throw '*local fixed drive*'
+
+        $whatIfDirectory = Join-Path $TestDrive 'what-if\nested'
+        $null = Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records @(@{ Sequence = 1 }) -OutputPath (Join-Path $whatIfDirectory 'sample.json') -WhatIf
+        Test-Path -LiteralPath $whatIfDirectory | Should -BeFalse
+
+        $target = New-Item -ItemType Directory -Path (Join-Path $TestDrive 'junction-target')
+        $junction = Join-Path $TestDrive 'junction'
+        $null = New-Item -ItemType Junction -Path $junction -Target $target.FullName
+        { Export-LogCollectorSchema -TableName 'Example_CL' -Source 'Pester' `
+            -Records @(@{ A = 1 }) -OutputPath (Join-Path $junction 'sample.json') } |
+            Should -Throw '*reparse point*'
     }
 
     It 'reports certificate transport and spool metadata without payload or response text' {
@@ -357,7 +455,7 @@ Describe 'Shared module packaging' {
         $result.ModuleVersion | Should -BeExactly $expectedVersion
         $result.PackageSha256 | Should -Match '^[A-F0-9]{64}$'
         $manifest = Test-ModuleManifest (Join-Path $result.ModulePath 'LogCollector.Client.psd1')
-        $manifest.ExportedFunctions.Count | Should -Be 7
+        $manifest.ExportedFunctions.Count | Should -Be 8
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($result.PackagePath)
         try {

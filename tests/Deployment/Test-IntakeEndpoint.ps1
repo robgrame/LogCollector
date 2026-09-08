@@ -7,7 +7,7 @@ Version 1.0.1. Creates and removes one short-lived certificate in CurrentUser\My
 No inventory is accepted and no trust configuration is changed.
 #>
 [CmdletBinding()]
-param([Uri] $Endpoint = 'https://logcollector-intake.azurewebsites.net/api/inventory')
+param([Parameter(Mandatory)] [Uri] $Endpoint)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent

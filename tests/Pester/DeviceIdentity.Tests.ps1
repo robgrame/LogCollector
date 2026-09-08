@@ -110,6 +110,15 @@ Describe 'ConvertTo-IssuerPatternList' {
         @(ConvertTo-IssuerPatternList -Value '').Count | Should -Be 0
         @(ConvertTo-IssuerPatternList -Value $null).Count | Should -Be 0
     }
+
+    It 'rejects issuer patterns that contain only wildcard operators' -TestCases @(
+        @{ Pattern = '*' }
+        @{ Pattern = '**' }
+        @{ Pattern = '?*?' }
+    ) {
+        param($Pattern)
+        { ConvertTo-IssuerPatternList -Value $Pattern } | Should -Throw '*no constraining literal character*'
+    }
 }
 
 Describe 'Test-IssuerMatch' {
@@ -313,14 +322,29 @@ Describe 'Get-ClientCertificate' {
             Should -Throw '*No usable client certificate found*'
     }
 
-    It 'prefers an enterprise PKI certificate that carries the device id' {
+    It 'prefers an enterprise PKI certificate that carries the device id when a PKI CA policy is configured' {
+        $pki = New-TestCertificate -Subject 'CN=pki-device' -SanUriDeviceId $script:DeviceId
+        $intune = New-TestCertificate -Subject 'CN=enrollment' -IntuneDeviceId $script:DeviceId
+
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($intune, $pki) }
+        Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { $true }
+
+        $selected = Get-ClientCertificate -EntraDeviceId $script:DeviceId -PkiRootCaSubjects @('CN=Enterprise Root')
+        $selected.Thumbprint | Should -BeExactly $pki.Thumbprint
+    }
+
+    It 'ignores an unauthenticated CN/SAN device-id match and uses the Intune certificate when no enterprise PKI trust signal is configured' {
+        # Without IssuerLike or a PKI CA role policy, a bare CN/SAN device-id match
+        # proves nothing - any certificate (including the Entra device-join
+        # certificate) can be issued with that name. This is the exact scenario
+        # that misdirected a real device's submission to the wrong certificate.
         $pki = New-TestCertificate -Subject 'CN=pki-device' -SanUriDeviceId $script:DeviceId
         $intune = New-TestCertificate -Subject 'CN=enrollment' -IntuneDeviceId $script:DeviceId
 
         Mock -ModuleName DeviceIdentity Get-ChildItem { @($intune, $pki) }
 
         $selected = Get-ClientCertificate -EntraDeviceId $script:DeviceId
-        $selected.Thumbprint | Should -BeExactly $pki.Thumbprint
+        $selected.Thumbprint | Should -BeExactly $intune.Thumbprint
     }
 
     It 'falls back to the Intune enrollment certificate when no PKI certificate matches' {
@@ -435,16 +459,17 @@ Describe 'Get-ClientCertificate' {
         $selected.Thumbprint | Should -BeExactly $older.Thumbprint
     }
 
-    It 'preserves selection behavior without a PKI CA policy' {
+    It 'never invokes the PKI CA policy check when no PKI CA policy is configured' {
         $pki = New-TestCertificate -Subject 'CN=pki-device' -SanUriDeviceId $script:DeviceId
-        Mock -ModuleName DeviceIdentity Get-ChildItem { @($pki) }
+        $intune = New-TestCertificate -Subject 'CN=enrollment' -IntuneDeviceId $script:DeviceId
+        Mock -ModuleName DeviceIdentity Get-ChildItem { @($pki, $intune) }
         Mock -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy { throw 'Policy should not run' }
 
         $selected = Get-ClientCertificate -EntraDeviceId $script:DeviceId `
             -PkiRootCaThumbprints @() -PkiRootCaSubjects @() `
             -PkiIntermediateCaThumbprints @() -PkiIntermediateCaSubjects @()
 
-        $selected.Thumbprint | Should -BeExactly $pki.Thumbprint
+        $selected.Thumbprint | Should -BeExactly $intune.Thumbprint
         Should -Invoke -ModuleName DeviceIdentity Test-CertificatePkiCaPolicy -Times 0 -Exactly
     }
 

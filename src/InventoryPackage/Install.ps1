@@ -4,7 +4,7 @@
 .SYNOPSIS
 Installs the complete custom inventory package and its two SYSTEM tasks without touching legacy tasks.
 .NOTES
-Version 1.4.6. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
+Version 1.5.0. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param()
@@ -17,21 +17,21 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     if (-not $WhatIfPreference) {
         $log = New-InventoryLogContext -Component Install
-        Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.4.6'; Mode = 'Install' }
+        Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.5.0'; Mode = 'Install' }
     }
     if (-not [Environment]::Is64BitProcess) { throw 'Run this installer with 64-bit Windows PowerShell.' }
     $stage = 'LoadConfiguration'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
     $configPath = Join-Path $PSScriptRoot 'Config.psd1'
     $config = Get-InventoryConfiguration -Path $configPath
-    if ($config.PackageVersion -ne '1.4.6') { throw 'Config.psd1 must match package version 1.4.6; do not mix files from older packages.' }
+    if ($config.PackageVersion -ne '1.5.0') { throw 'Config.psd1 must match package version 1.5.0; do not mix files from older packages.' }
     if ($log) {
         Write-InventoryLog -Context $log -Event ConfigurationLoaded -Data @{
             PackageVersion = $config.PackageVersion; ConfigurationSha256 = (Get-FileHash -LiteralPath $configPath).Hash
             SubmissionEnabled = $config.SubmissionEnabled; Endpoint = $config.FrontendUrl
         }
     }
-    $target = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'LogCollector\CustomInventory\1.4.6'
+    $target = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'LogCollector\CustomInventory\1.5.0'
     $taskPath = '\LogCollector\'
     $names = @('LogCollector-CustomInventory', 'LogCollector-CustomInventory-Spool')
     $files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
@@ -96,7 +96,7 @@ try {
             $task = Get-ScheduledTask -TaskPath $taskPath -TaskName $name -ErrorAction Stop
             if ($task.Settings.Enabled -ne $config.SubmissionEnabled) { throw "Task enablement differs from configuration: $name" }
         }
-        Write-Output "Installed Custom Inventory 1.4.6 at $target; SubmissionEnabled=$($config.SubmissionEnabled)."
+        Write-Output "Installed Custom Inventory 1.5.0 at $target; SubmissionEnabled=$($config.SubmissionEnabled)."
         if (-not $config.SubmissionEnabled) { Write-Warning 'Tasks are disabled until the original Azure table schemas and DCR mappings are ready.' }
     }
     if ($log) { Write-InventoryLog -Context $log -Event RunCompleted -Data @{ Mode = 'Install'; DurationMs = $timer.ElapsedMilliseconds } }

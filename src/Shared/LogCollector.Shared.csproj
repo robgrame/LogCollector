@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>LogCollector.Shared</RootNamespace>
     <AssemblyName>LogCollector.Shared</AssemblyName>
-    <Version>1.2.2</Version>
+    <Version>1.4.2</Version>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
   </PropertyGroup>

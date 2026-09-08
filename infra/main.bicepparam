@@ -12,6 +12,11 @@ using './main.bicep'
 param location = 'westeurope'
 param appName = 'logcollector'
 param environment = 'prod'
+// Set this to a short customer/company code (e.g. 'aci') on first deployment to avoid
+// colliding with an existing storage account / Function app name elsewhere in Azure.
+// Letters, digits, spaces, hyphens or underscores only (max 8 chars).
+// Leave empty ('') when redeploying an existing installation to keep its resource names.
+param customerPrefix = ''
 
 param frontendPlanSku = 'B1'
 param inventoryQueueName = 'inventory-ingestion'

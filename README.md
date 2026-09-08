@@ -17,7 +17,9 @@ uses a user-assigned managed identity.
 have no inventory schema or collection logic. `tableName` selects an operator-approved DCR stream;
 `source` labels the producing script. Both accept arbitrary record objects without requiring
 `RecordType`, hardware or software fields. A new purpose needs a table/schema and stream mapping,
-not another Function or a platform code change. See [Adding a purpose](docs/operations.md#adding-a-purpose).
+not another Function or a platform code change. See the
+[customer procedure for adding a telemetry collection](docs/customer-add-telemetry-collection.md)
+and [Adding a purpose](docs/operations.md#adding-a-purpose).
 
 Backend **1.2.2** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
 `LOGCOLLECTOR-INVENTORY-V1` wire format. `/api/inventory` is an explicit compatibility alias through
@@ -241,15 +243,13 @@ explicitly; a missing Entra identity or unexpected local error is not silently b
 
 Package the six-file, versioned module with **`scripts\Publish-ClientModule.ps1`**.
 See **[shared-client.md](docs/shared-client.md)** for installation, examples, return values,
-endpoint-isolated spool and limits. **[aci-migration-findings.md](docs/aci-migration-findings.md)**
-preserves the detailed analysis of the original ACI scripts and their 13 legacy destinations.
-Those scripts and their Azure schemas have not been migrated by adding this module.
+endpoint-isolated spool and limits.
 
 **Universal inventory package.** Build a self-contained folder for any deployment:
 
 ```powershell
 .\scripts\Publish-InventoryPackage.ps1 `
-    -FrontendUrl 'https://logcollector-intake.azurewebsites.net/api/inventory' `
+    -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
     -Environment 'MSLabs'
 ```
 
@@ -265,9 +265,9 @@ Package **1.4.5** also writes protected, bounded JSONL lifecycle, inventory and
 spool logs under `C:\ProgramData\LogCollector\Logs\CustomInventory`, using selected
 metadata rather than a transcript of payloads or HTTP response bodies.
 
-The current package source is **1.4.6**, a build bump for the shared client **1.3.3** dependency.
-Existing installed **1.4.5** packages remain compatible and are not changed by the backend upgrade.
-The folder-only builder creates `out\Inventory\1.4.6`, ready for Intune Win32 packaging with `Install.ps1`
+The current package source is **1.5.0** and includes shared client **1.5.0**, including schema-sample export.
+Existing installed packages remain compatible with their configured inventory endpoints and tables.
+The folder-only builder creates `out\Inventory\1.5.0`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
 environment and table names are supplied as configuration; `-DeviceTableName` and
 `-AppTableName` default to **DeviceInventory_CL** and **AppInventory_CL** to retain existing
@@ -375,6 +375,28 @@ dead-lettered payloads before the configured lifecycle expiration.
 
 ---
 
+## Publish a sanitized public mirror
+
+Keep the development repository private and treat it as the source of truth. Publish only a
+history-free snapshot to a separate public repository:
+
+```powershell
+# Local-only file, ignored by Git: one customer-specific literal per line.
+@('CustomerName', 'customer.example.com') |
+    Set-Content .public-release-policy.local.txt
+
+.\scripts\Publish-PublicSnapshot.ps1 `
+    -Repository '<owner>/LogCollector-public'
+```
+
+The publisher exports only files tracked by the selected committed ref, scans them before any
+GitHub change, and blocks unknown GUIDs, concrete Azure endpoints, real email addresses, public
+IP addresses, common credential forms, customer OneDrive paths, and local deny-list matches.
+It never transfers private Git history. Run with `-ScanOnly` to validate without creating or
+updating the public repository. Do not merge from the private repository into the public mirror.
+
+---
+
 ## Deploy
 
 ### Prerequisites
@@ -386,7 +408,7 @@ dead-lettered payloads before the configured lifecycle expiration.
 ### 1. Infrastructure
 
 ```powershell
-$subscription = 'b45c5b53-d8f3-4a4c-9fe5-5537818a9886'
+$subscription = '00000000-0000-0000-0000-000000000000'
 az group create --subscription $subscription --name LOGCOLLECTOR-RG --location italynorth
 
 # Export a CA certificate to base64 DER:
@@ -402,6 +424,12 @@ Record the outputs: `frontendIngestUrl`, `dataCollectionEndpoint`, `dataCollecti
 For Intune fallback, complete the administrator-operated Graph `Device.Read.All` grant in
 [the runbook](docs/operations.md#intune-fallback-grant-tenant-device-read-permission) before onboarding.
 
+**Naming and collisions:** the storage account and Function app names are globally unique
+across all of Azure. On a first-time deployment, set `customerPrefix` (e.g. `'aci'`) in the
+parameter file to a short customer/company code to avoid colliding with a name already taken
+by another tenant; leave it empty (default) only when redeploying an existing installation,
+since changing it later renames rather than migrates the affected resources.
+
 ### 2. Applications
 
 ```powershell
@@ -415,11 +443,30 @@ Omit `-Deploy` to build packages locally without touching Azure. Packaging inclu
 `.azurefunctions` directory; `Compress-Archive` can omit it and produce an unusable deployment.
 B1 has no deployment slots: allow for a restart during frontend deployment.
 
+### Client deployment package (no source, no .NET SDK required on target)
+
+To hand off a self-contained package that deploys infrastructure and pre-built Function apps
+with **no .pdb files**, using only the Azure CLI on the target machine:
+
+```powershell
+.\scripts\Publish-DeploymentPackage.ps1
+```
+
+This builds Frontend and Worker in Release, strips debug symbols, and produces
+`out\Deploy\<version>\` containing `infra\` (Bicep template, parameter file, certificates),
+`Functions\Frontend.zip` / `Functions\Worker.zip`, a generated `Deploy-LogCollector.ps1`
+orchestrator, a `MANIFEST.json` with package hashes, and a `README.md` with usage instructions.
+Deploy it with:
+
+```powershell
+.\Deploy-LogCollector.ps1 -SubscriptionId <sub-id> -ResourceGroup LOGCOLLECTOR-RG -Location italynorth
+```
+
 ### 3. Devices
 
 ```powershell
 .\scripts\Register-InventoryScheduledTask.ps1 `
-    -FrontendUrl 'https://logcollector-intake.azurewebsites.net/api/inventory' `
+    -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
     -TableName 'InventoryWindows_CL' `
     -CertificateIssuerLike '*CONTOSO-ISSUING-CA*'
 ```
@@ -513,14 +560,14 @@ Coverage focuses on the security and reliability surface rather than plumbing:
 ## Rollout boundary
 
 The environment is deployed in **LOGCOLLECTOR-RG**, **Italy North**, subscription
-`b45c5b53-d8f3-4a4c-9fe5-5537818a9886`: **LogCollector-intake (B1)**,
+`00000000-0000-0000-0000-000000000000`: **LogCollector-intake (B1)**,
 **LogCollector-worker (Flex Consumption)**, **LogCollector-servicebus**, **LogCollector-law**,
 **LogCollector-dce**, **LogCollector-dcr**, **LogCollector-appi**, and **logcollectordata**.
 Resource names have no random suffixes; Azure-generated service DNS names can have managed suffixes.
 The storage name uses only lowercase letters because Azure requires it; `logcollectorstorage`
 was unavailable globally.
 
-The intake endpoint is **https://logcollector-intake.azurewebsites.net/api/inventory**.
+The intake endpoint is **https://<your-intake>.azurewebsites.net/api/inventory**.
 Azure RBAC and Graph **Device.Read.All** are assigned to the appropriate managed identities.
 `infra\logcollector.bicepparam` contains the deployed settings and public Intune CA chain;
 enterprise PKI anchors are still empty until the customer's public CA certificates are supplied.

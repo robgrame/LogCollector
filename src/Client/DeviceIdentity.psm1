@@ -28,7 +28,11 @@
     mock, so selection logic is unit-testable off-box.
 
 .NOTES
-    Version 1.1.3 - PKI CA-role constraints with independent explicit Intune selection.
+    Version 1.2.0 - Without an enterprise PKI trust signal (IssuerLike / PkiRootCa* /
+    PkiIntermediateCa* all unset), no longer accept an unauthenticated CN/SAN
+    device-id match as the "enterprise PKI" candidate (any certificate, including
+    the Entra device-join certificate, can carry that name) - go straight to the
+    Intune enrollment certificate instead.
     Windows PowerShell 5.1 compatible. No external dependencies.
 #>
 
@@ -123,7 +127,13 @@ function ConvertTo-IssuerPatternList {
     param([string]$Value)
 
     if ([string]::IsNullOrWhiteSpace($Value)) { return @() }
-    return @($Value -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $patterns = @($Value -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($pattern in $patterns) {
+        if ($pattern -notmatch '[\p{L}\p{Nd}]') {
+            throw "IssuerLike pattern '$pattern' has no constraining literal character."
+        }
+    }
+    return $patterns
 }
 
 function Test-IssuerMatch {
@@ -502,20 +512,35 @@ function Get-ClientCertificate {
         elseif ($EntraDeviceId) {
             $expected = ([guid]$EntraDeviceId).ToString()
 
-            $candidates = @($pkiCerts |
-                Where-Object { (Get-CertificatePkiDeviceId -Certificate $_) -eq $expected })
-            if ($hasPkiCaPolicy) {
-                $candidates = @(Get-PkiPolicyEligibleCertificates -Certificates $candidates `
-                    -RootThumbprints $normalizedRootThumbprints -RootSubjects $normalizedRootSubjects `
-                    -IntermediateThumbprints $normalizedIntermediateThumbprints `
-                    -IntermediateSubjects $normalizedIntermediateSubjects)
-            }
-            $selected = $candidates | Sort-Object NotAfter -Descending | Select-Object -First 1
+            # A bare CN/SAN device-id match is not a trust signal by itself - any
+            # certificate can be issued with that name (e.g. the Entra device-join
+            # certificate). It is only meaningful as an "enterprise PKI" candidate
+            # when the caller actually configured an enterprise trust boundary
+            # (IssuerLike and/or a PKI CA role policy). Without one, skip the
+            # unauthenticated match entirely and go straight to the Intune
+            # enrollment certificate, which is bound by the OID payload instead.
+            $hasEnterprisePkiSignal = ($issuerPatterns.Count -gt 0 -or $hasPkiCaPolicy)
 
-            if ($selected) {
-                Write-Verbose ("Get-ClientCertificate: enterprise PKI certificate carries device id {0} (thumb={1})" -f $expected, $selected.Thumbprint)
+            if ($hasEnterprisePkiSignal) {
+                $candidates = @($pkiCerts |
+                    Where-Object { (Get-CertificatePkiDeviceId -Certificate $_) -eq $expected })
+                if ($hasPkiCaPolicy) {
+                    $candidates = @(Get-PkiPolicyEligibleCertificates -Certificates $candidates `
+                        -RootThumbprints $normalizedRootThumbprints -RootSubjects $normalizedRootSubjects `
+                        -IntermediateThumbprints $normalizedIntermediateThumbprints `
+                        -IntermediateSubjects $normalizedIntermediateSubjects)
+                }
+                $selected = $candidates | Sort-Object NotAfter -Descending | Select-Object -First 1
+
+                if ($selected) {
+                    Write-Verbose ("Get-ClientCertificate: enterprise PKI certificate carries device id {0} (thumb={1})" -f $expected, $selected.Thumbprint)
+                }
             }
             else {
+                Write-Verbose 'Get-ClientCertificate: no enterprise PKI trust signal configured (IssuerLike/PkiRootCa*/PkiIntermediateCa* all empty); skipping the unauthenticated CN/SAN match and using the Intune enrollment certificate only.'
+            }
+
+            if (-not $selected) {
                 Write-Verbose ("Get-ClientCertificate: no PKI certificate carries device id {0}; trying the Intune enrollment certificate" -f $expected)
                 $selected = $all |
                             Where-Object { (Get-IntuneEnrollmentDeviceId -Certificate $_) -eq $expected } |

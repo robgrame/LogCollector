@@ -36,6 +36,11 @@ param environment string = 'prod'
 @allowed(['B1', 'B2', 'B3', 'S1', 'S2', 'S3', 'P1v3', 'P2v3', 'P3v3'])
 param frontendPlanSku string = 'B1'
 
+@description('Optional customer/company short code (e.g. "ACI") prepended to every resource name to reduce the risk of a name collision with another deployment of this template and to make resources easy to identify; the caller is still responsible for choosing a value that is unique to this customer. Use letters, digits, spaces, hyphens or underscores only (spaces/underscores are normalized to hyphens; other characters are not supported). Leave empty to preserve the exact names from an earlier deployment in this resource group; only set this on a first-time deployment, since changing it later renames (does not migrate) the affected resources.')
+@minLength(0)
+@maxLength(8)
+param customerPrefix string = ''
+
 @description('Shared Service Bus queue carrying pointers for all telemetry purposes. Legacy parameter name retained for deployed resources.')
 param inventoryQueueName string = 'inventory-ingestion'
 
@@ -144,9 +149,17 @@ param tags object = {
 // Names
 // ---------------------------------------------------------------------------
 
-var namePrefix = appName
+// customerPrefix (e.g. a company short code) is prepended to every resource name so the
+// same template can be deployed for multiple customers without a name collision, and so
+// resources are easy to attribute at a glance. Empty by default: preserves the exact
+// names produced by earlier deployments that did not set it. Spaces/underscores are
+// normalized to hyphens (valid in every affected resource type here except storage,
+// where hyphens are stripped too since storage account names are alphanumeric-only).
+var customerPrefixSafe = toLower(replace(replace(customerPrefix, '_', '-'), ' ', '-'))
+var namePrefix = empty(customerPrefixSafe) ? appName : '${customerPrefixSafe}-${appName}'
+var namePrefixAlnum = empty(customerPrefixSafe) ? toLower(appName) : '${replace(customerPrefixSafe, '-', '')}${toLower(appName)}'
 
-var storageAccountName = '${toLower(appName)}data'
+var storageAccountName = '${namePrefixAlnum}data'
 var serviceBusNamespaceName = '${namePrefix}-servicebus'
 var workspaceName = '${namePrefix}-law'
 var appInsightsName = '${namePrefix}-appi'

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.4.6. Protected, bounded metadata-only diagnostics; no activity on import.
+# Version 1.5.0. Protected, bounded metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 
 $script:LogGuard = $null

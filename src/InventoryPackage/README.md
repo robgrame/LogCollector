@@ -1,6 +1,6 @@
 # Custom Inventory - pacchetto Windows universale
 
-Versione **1.4.6**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
+Versione **1.5.0**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
 La cartella generata e autosufficiente: non richiede la repository, OneDrive,
 PowerShell Gallery, Workspace ID/Primary Key o Function key sul dispositivo.
 Codice, nomi dei task e percorsi di installazione non dipendono da un cliente.
@@ -61,7 +61,7 @@ solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake sia nel
 - `Run-Inventory.ps1`: raccolta e invio separato alle destinazioni configurate.
 - `Sync-Spool.ps1`: ritrasmissione senza nuova raccolta.
 - `Inventory.Collection.psm1` / `Inventory.Runtime.psm1`: raccolta e integrazione.
-- `Modules`: tutti i sei file di LogCollector.Client 1.3.3.
+- `Modules`: tutti i sei file di LogCollector.Client 1.5.0.
 - `Inventory.Logging.psm1`: logger locale protetto, condiviso dalle entry point.
 - `Install.ps1`, `Uninstall.ps1`, `Detect.ps1`: gestione Intune Win32.
 - `Config.psd1`: configurazione del deployment.
@@ -93,7 +93,7 @@ anche la detection. Versione del codice e hash della configurazione sono distint
 L'installer copia tutti i componenti in:
 
 ```text
-C:\Program Files\LogCollector\CustomInventory\1.4.6
+C:\Program Files\LogCollector\CustomInventory\1.5.0
 ```
 
 Il percorso viene protetto per SYSTEM/amministratori; percorsi preesistenti non
