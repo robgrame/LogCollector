@@ -1,6 +1,10 @@
 @{
-    PackageVersion = '1.6.0'
+    PackageVersion = '1.7.0'
     Environment = ''
+    # Names the %ProgramData%\<CustomerName>\<ApplicationName>\Logs tree that Write-CMTraceLog
+    # writes to, so every script on the device logs under one predictable folder. Empty falls
+    # back to 'LogCollector'.
+    CustomerName = ''
     # The package builder supplies the endpoint; an empty value fails the install by design,
     # so a package can never ship pointing nowhere.
     FrontendUrl = ''

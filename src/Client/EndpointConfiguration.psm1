@@ -83,7 +83,9 @@ function Assert-LogCollectorConfigurationTrust {
                     "'$Path' cannot be trusted. Reinstall the LogCollector core package.")
             }
         }
-        if ($trusted -notcontains $acl.Owner.Translate([Security.Principal.SecurityIdentifier]).Value) {
+        # GetOwner, not $acl.Owner: the latter is already a localised account-name string,
+        # so Translate on it throws and no configuration would ever be readable.
+        if ($trusted -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) {
             throw "'$subject' is owned by '$($acl.Owner)', not by SYSTEM or Administrators, so '$Path' cannot be trusted."
         }
     }
@@ -134,6 +136,7 @@ function Get-LogCollectorEndpointConfiguration {
         PkiIntermediateCaSubjects    = @()
         SubmissionEnabled            = $true
         Environment                  = ''
+        CustomerName                 = ''
     }
     foreach ($key in $defaults.Keys) {
         if (-not $data.ContainsKey($key)) { $data[$key] = $defaults[$key] }

@@ -1,6 +1,6 @@
 @{
     RootModule = 'LogCollector.Client.psm1'
-    ModuleVersion = '1.6.0'
+    ModuleVersion = '1.7.0'
     GUID = '4ca10d53-456c-4ce0-a860-14d4b6644db9'
     Author = 'LogCollector'
     Description = 'Shared certificate-authenticated telemetry client for Windows PowerShell scripts.'
@@ -17,6 +17,9 @@
         'Send-LogAnalyticsData'
         'Get-LogCollectorEndpointConfiguration'
         'Get-LogCollectorConfigurationPath'
+        'Write-CMTraceLog'
+        'Get-CMTraceLogPath'
+        'Get-CMTraceCustomerName'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
@@ -25,6 +28,7 @@
         'LogCollector.Client.psd1'
         'LogCollector.Client.psm1'
         'EndpointConfiguration.psm1'
+        'CMTraceLogging.psm1'
         'DeviceIdentity.psm1'
         'RequestSigning.psm1'
         'InventoryClient.psm1'
@@ -32,7 +36,7 @@
     )
     PrivateData = @{
         PSData = @{
-            Tags = @('Windows', 'Inventory', 'mTLS', 'LogAnalytics')
+            Tags = @('Windows', 'Inventory', 'mTLS', 'LogAnalytics', 'CMTrace')
         }
     }
 }

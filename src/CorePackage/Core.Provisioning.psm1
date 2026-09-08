@@ -123,8 +123,9 @@ function Assert-LogCollectorMachineAcl {
             throw "'$Path' still grants write access to '$($rule.IdentityReference)' after hardening."
         }
     }
-    $owner = try { $acl.Owner.Translate([Security.Principal.SecurityIdentifier]).Value }
-    catch { [string] $acl.Owner }
+    # GetOwner, not $acl.Owner: the latter is already a localised account-name string, so
+    # calling Translate on it fails and would leave the check comparing a name against SIDs.
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     if ($allowed -notcontains $owner) {
         throw "'$Path' is owned by '$($acl.Owner)', who can rewrite its permissions at will."
     }

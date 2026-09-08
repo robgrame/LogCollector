@@ -10,7 +10,7 @@ Detection deliberately imports the module rather than only checking that files e
 package's promise is that `Import-Module LogCollector.Client` works for any script, and a
 present-but-unimportable module would otherwise be reported as a healthy install.
 .NOTES
-Version 1.6.0.
+Version 1.7.0.
 #>
 [CmdletBinding()]
 param()
@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 try {
-    $version = '1.6.0'
+    $version = '1.7.0'
     $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "WindowsPowerShell\Modules\LogCollector.Client\$version"
     if (-not (Test-Path -LiteralPath $root -PathType Container)) { exit 1 }
 
@@ -42,8 +42,9 @@ try {
             catch { $rule.IdentityReference.Value }
             if ($allowed -notcontains $sid) { return $false }
         }
-        $owner = try { $acl.Owner.Translate([Security.Principal.SecurityIdentifier]).Value }
-        catch { [string] $acl.Owner }
+        # GetOwner, not $acl.Owner: the latter is already a localised account-name string,
+        # so Translate on it fails and the check would compare a name against SIDs.
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
         return ($allowed -contains $owner)
     }
     # The parent is included: create/delete-child rights there allow the whole version
@@ -69,7 +70,8 @@ try {
     if (-not (Test-Path -LiteralPath $configuration -PathType Leaf)) { exit 1 }
 
     Import-Module $manifestPath -Force -ErrorAction Stop
-    foreach ($command in @('Send-LogAnalyticsData', 'Send-LogCollectorData', 'Get-LogCollectorEndpointConfiguration')) {
+    foreach ($command in @('Send-LogAnalyticsData', 'Send-LogCollectorData', 'Get-LogCollectorEndpointConfiguration',
+            'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName')) {
         if (-not (Get-Command $command -Module LogCollector.Client -ErrorAction SilentlyContinue)) { exit 1 }
     }
     # Reads through the ACL check, so a configuration a user could have rewritten is not

@@ -1,6 +1,6 @@
 # LogCollector Core — shared telemetry dependency
 
-Version 1.6.0
+Version 1.7.0
 
 This package installs **LogCollector.Client** machine-wide. It is a *dependency*: it
 registers no scheduled task and collects nothing by itself. Install it on every device that
@@ -17,9 +17,61 @@ No workspace ID, no workspace key, no endpoint URL and no install path in the sc
 device authenticates with its own Intune certificate; the endpoint comes from the
 machine-wide configuration written by this installer.
 
+It also gives every script a **local CMTrace log** without each script inventing its own
+path, format and rotation:
+
+```powershell
+Write-CMTraceLog -Message 'Copy completed' -Level Info
+Write-CMTraceLog -Message "Copy failed: $($_.Exception.Message)" -Level Error
+```
+
 The calling script must run **as SYSTEM or elevated**: the shared spool is writable only by
 SYSTEM and Administrators, so that no unprivileged user can forge records attributed to the
 device. Run such scripts from a scheduled task under `NT AUTHORITY\SYSTEM`, or from Intune.
+
+## Local CMTrace logging
+
+Telemetry answers *what happened across the fleet*; a local log answers *why this device
+failed*, and is available even when the intake is unreachable. `Write-CMTraceLog` writes the
+format CMTrace and OneTrace colour and filter natively.
+
+```text
+%ProgramData%\<CustomerName>\<ApplicationName>\Logs\<ApplicationName>.log
+```
+
+Only `<ApplicationName>` distinguishes one script's log from another's, so support finds
+every log for a customer under one root. Both parts default so that the common case needs
+no arguments:
+
+* `-ApplicationName` defaults to the **calling script's base name**, so each script gets its
+  own log without being told its own name.
+* `-CustomerName` defaults to the `CustomerName` in the machine-wide configuration, set once
+  at install time (`.\Install.ps1 -CustomerName 'Contoso'`). It falls back to `LogCollector`
+  when the machine is not configured, because a missing customer name must never stop a
+  script from logging.
+* `-Component` defaults to the calling function and `file=` records the calling script and
+  line, so an entry points at the code that wrote it.
+
+Levels map to the CMTrace type column: `Verbose`, `Debug` and `Info` render as informational,
+`Warning` as yellow, `Error` as red.
+
+The log rotates in place at `-MaxFileBytes` (5 MB by default) into fixed `.1`…`.N` slots,
+keeping `-MaxArchives` of them (5 by default). Rotation only ever touches those numbered
+slots, so nothing else in the directory can be deleted by it. Rotation and the append run as
+one transaction under an exclusive lock file, so two scheduled tasks writing at the same
+moment cannot corrupt each other's archives.
+
+The log directory is created with the same posture as everything else this package installs:
+SYSTEM and Administrators write, **Users read**. Reading is deliberately left open so that
+support can collect a log without elevation; writing is not, because an unprivileged writer
+could forge or destroy the record of what ran on the device. The lock file beside the log is
+the one exception — it grants Users nothing, because anyone able to open it could hold it and
+stop the whole device from logging. Every directory in the chain is verified before use — not
+a reparse point, protected DACL, no untrusted write access, owned by an administrator — since
+`%ProgramData%` itself is world-writable and the customer folder would otherwise be trivial
+to pre-create and squat.
+
+Writing therefore **requires elevation or SYSTEM**, exactly like submitting telemetry.
 
 ## What it replaces
 
@@ -58,7 +110,7 @@ for data that is not in Log Analytics yet would be a false success.
 
 Requires elevation and 64-bit Windows PowerShell. It:
 
-1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.6.0`,
+1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.7.0`,
    which is on `PSModulePath` for both Windows PowerShell 5.1 and PowerShell 7;
 2. writes `%ProgramData%\LogCollector\Config\Endpoint.psd1`;
 3. restricts write access on both — **and on their parent directories** — to SYSTEM and

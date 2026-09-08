@@ -17,17 +17,22 @@ This package registers no scheduled task and collects nothing by itself. It is a
 dependency: install it before any package or script that submits telemetry.
 .PARAMETER FrontendUrl
 Overrides the endpoint in Config.psd1. Intended for a single-machine test install.
+.PARAMETER CustomerName
+Overrides the customer folder in Config.psd1. This is the <CustomerName> in
+%ProgramData%\<CustomerName>\<ApplicationName>\Logs, where Write-CMTraceLog writes.
+Intended for a single-machine test install.
 .NOTES
-Version 1.6.0.
+Version 1.7.0.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Uri] $FrontendUrl
+    [Uri] $FrontendUrl,
+    [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')] [string] $CustomerName
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.6.0'
+$packageVersion = '1.7.0'
 
 if (-not [Environment]::Is64BitProcess) { throw 'Run this installer with 64-bit Windows PowerShell.' }
 
@@ -37,8 +42,24 @@ if ($config.PackageVersion -ne $packageVersion) {
     throw "Config.psd1 declares version '$($config.PackageVersion)' but this installer is $packageVersion; do not mix files from different packages."
 }
 if ($FrontendUrl) { $config['FrontendUrl'] = $FrontendUrl.OriginalString }
+if ($CustomerName) { $config['CustomerName'] = $CustomerName }
 if (-not $config.FrontendUrl) {
     throw 'Config.psd1 does not set FrontendUrl. Rebuild the package with the customer endpoint, or pass -FrontendUrl for a test install.'
+}
+# Validated here, not only on the -CustomerName parameter: a name that comes straight from
+# Config.psd1 must meet the same rules, or the package installs cleanly and then every
+# default Write-CMTraceLog call on the device fails on an unusable folder name.
+if ($config.Contains('CustomerName') -and $config.CustomerName) {
+    $reserved = @('CON', 'PRN', 'AUX', 'NUL', 'CLOCK$',
+        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9')
+    $name = [string] $config.CustomerName
+    if ($name -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\z' -or $name -cmatch '[. ]\z' -or
+        ($name -split '\.')[0].ToUpperInvariant() -in $reserved) {
+        throw ("CustomerName '$name' is not usable as a folder name under %ProgramData%: use 1-64 " +
+            'characters, starting with a letter or digit, containing only letters, digits, space, dot, ' +
+            'underscore or hyphen, not ending in a dot or space, and not a reserved Windows device name.')
+    }
 }
 
 $manifestPath = Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1'
@@ -116,7 +137,7 @@ if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machi
                 Environment       = [string] $config.Environment
                 PackageVersion    = $packageVersion
             }
-            foreach ($key in @('CertificateThumbprint', 'CertificateSubjectLike', 'CertificateIssuerLike',
+            foreach ($key in @('CustomerName', 'CertificateThumbprint', 'CertificateSubjectLike', 'CertificateIssuerLike',
                     'PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
                 if ($config.Contains($key) -and $config[$key]) { $settings[$key] = $config[$key] }
             }
