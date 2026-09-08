@@ -99,6 +99,41 @@ Describe 'Send-LogAnalyticsData' {
         $response.ToString() | Should -BeLike '200 : Upload payload size is * Kb (Delivered)'
     }
 
+    It 'binds the legacy SecureBoot call site, which named the same values WorkspaceId/WorkspaceKey' {
+        $body = @([pscustomobject]@{ Phase = 'Enforce' }) | ConvertTo-Json -Depth 8
+        $response = Send-LogAnalyticsData -WorkspaceId 'ws-id' -WorkspaceKey 'key' `
+            -Body $body -LogType 'RegistrySecureBootEnforcement' `
+            -FrontendUrl $script:Endpoint -WarningAction SilentlyContinue
+        $response.TableName | Should -Be 'RegistrySecureBootEnforcement_CL'
+        $response.RecordCount | Should -Be 1
+    }
+
+    It 'still warns about an ignored key when it arrives under the -WorkspaceKey name' {
+        $warnings = @()
+        $null = Send-LogAnalyticsData -LogType 'T' -Body ([pscustomobject]@{ A = 1 }) `
+            -WorkspaceKey 'SUPERSECRETKEY==' -FrontendUrl $script:Endpoint `
+            -WarningVariable warnings -WarningAction SilentlyContinue
+        ($warnings -join ' ') | Should -Not -BeLike '*SUPERSECRET*'
+        ($warnings -join ' ') | Should -BeLike '*-SharedKey is ignored*'
+    }
+
+    It 'exposes Delivered so a script that returned $true/$false does not silently invert' {
+        # `if ($response)` is always true for an object, so a boolean-returning call site
+        # migrating to this function needs a property that means what its boolean meant.
+        $response = Send-LogAnalyticsData -LogType 'T' -Body ([pscustomobject]@{ A = 1 }) `
+            -FrontendUrl $script:Endpoint
+        $response.Delivered | Should -BeTrue
+
+        Mock -ModuleName LogCollector.Client Send-LogCollectorData {
+            [pscustomobject]@{ Disposition = 'Deferred'; StatusCode = 0; Attempts = 1; Message = 'queued' }
+        }
+        $deferred = Send-LogAnalyticsData -LogType 'T' -Body ([pscustomobject]@{ A = 1 }) `
+            -FrontendUrl $script:Endpoint
+        $deferred.Delivered | Should -BeFalse
+        # The trap the property exists to avoid.
+        [bool] $deferred | Should -BeTrue
+    }
+
     It 'reports 202 rather than a false 200 when the batch could only be spooled' {
         Mock -ModuleName LogCollector.Client Send-LogCollectorData {
             [pscustomobject]@{ Disposition = 'Deferred'; StatusCode = 0; Attempts = 1; Message = 'queued' }

@@ -22,7 +22,7 @@ Overrides the customer folder in Config.psd1. This is the <CustomerName> in
 %ProgramData%\<CustomerName>\<ApplicationName>\Logs, where Write-CMTraceLog writes.
 Intended for a single-machine test install.
 .NOTES
-Version 1.7.0.
+Version 1.7.1.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -32,7 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.7.0'
+$packageVersion = '1.7.1'
 
 if (-not [Environment]::Is64BitProcess) { throw 'Run this installer with 64-bit Windows PowerShell.' }
 

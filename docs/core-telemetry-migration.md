@@ -88,6 +88,8 @@ $response = Send-LogAnalyticsData -customerId $CustomerId -sharedKey $SharedKey 
 * `-customerId` and `-sharedKey` are **accepted and ignored**. Nothing is sent to
   `*.ods.opinsights.azure.com`. The key is never transmitted, never written to a log and
   never echoed in the warning that asks you to remove it.
+* `-WorkspaceId` and `-WorkspaceKey` bind to the same two parameters, because some scripts
+  named those values that way. They are ignored identically.
 * `-body` accepts a JSON string, the UTF-8 bytes of a JSON string, or plain objects.
 * `-logType` accepts the bare legacy name; `_CL` is appended exactly as the old API appended
   it server-side. `'DeviceInventory'` and `'DeviceInventory_CL'` both reach
@@ -106,6 +108,7 @@ but it also carries:
 | Property | Meaning |
 | --- | --- |
 | `StatusCode` | `200` when the intake accepted the batch, `202` otherwise |
+| `Delivered` | `$true` only when the intake accepted the batch |
 | `Disposition` | `Delivered`, or `Deferred` when the batch is held in the local spool |
 | `TableName` | Resolved destination, e.g. `W11Upgrade_CL` |
 | `RecordCount` | Records extracted from `-Body` |
@@ -118,6 +121,30 @@ Analytics yet would turn a delivery failure into a silent one.
 
 Records are not lost when submission fails. They are written to the shared spool under
 `%ProgramData%\LogCollector\SharedSpool` and drained by a later run.
+
+### If your inline sender returned `$true` / `$false`
+
+Some scripts wrote their own sender that returned a boolean, and tested it like this:
+
+```powershell
+$sent = Send-LogAnalyticsData -WorkspaceId $id -WorkspaceKey $key -Body $body -LogType $t
+if ($sent) { Write-Log 'Telemetry sent' }
+```
+
+**That test must change.** `Send-LogAnalyticsData` returns an object, and *every* object is
+truthy in PowerShell, so `if ($sent)` would be true even for a batch that only reached the
+spool — turning a delivery failure into a log line claiming success. Use the property that
+carries the same meaning the boolean did:
+
+```powershell
+if ($sent.Delivered) { Write-CMTraceLog -Message 'Telemetry sent' -Level Info }
+```
+
+Replacing the function without also replacing this test is the one migration mistake that
+fails silently, so grep each script for `if ($sent)` and similar before you finish.
+
+Note that `-WhatIf` returns nothing at all: the batch is not submitted, so there is no
+transport result to report and `.Delivered` must not be read from such a run.
 
 ## Sending several kinds of record
 

@@ -10,7 +10,7 @@ Detection deliberately imports the module rather than only checking that files e
 package's promise is that `Import-Module LogCollector.Client` works for any script, and a
 present-but-unimportable module would otherwise be reported as a healthy install.
 .NOTES
-Version 1.7.0.
+Version 1.7.1.
 #>
 [CmdletBinding()]
 param()
@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 try {
-    $version = '1.7.0'
+    $version = '1.7.1'
     $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "WindowsPowerShell\Modules\LogCollector.Client\$version"
     if (-not (Test-Path -LiteralPath $root -PathType Container)) { exit 1 }
 
