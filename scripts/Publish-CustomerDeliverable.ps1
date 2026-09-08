@@ -45,6 +45,8 @@ $solutionVersion = Get-ProjectVersion (Join-Path $repo 'src\Functions\Frontend\L
 $clientSource = Join-Path $repo 'src\InventoryPackage'
 $clientModules = Join-Path $repo 'src\Client'
 $clientVersion = (Import-PowerShellDataFile -LiteralPath (Join-Path $clientSource 'Config.psd1')).PackageVersion
+$coreSource = Join-Path $repo 'src\CorePackage'
+$coreFiles = @('Config.psd1', 'Core.Provisioning.psm1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
 
 $target = Join-Path $OutputRoot $solutionVersion
 if (Test-Path -LiteralPath $target) { throw "Output already exists: $target. Use a new OutputRoot; deliverables are never overwritten." }
@@ -96,11 +98,21 @@ $packageFiles = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime
 foreach ($file in $packageFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $clientSource $file) -PathType Leaf)) { throw "Missing client source: $file" }
 }
+foreach ($file in $coreFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $coreSource $file) -PathType Leaf)) { throw "Missing core package source: $file" }
+}
 $detectionTemplate = [IO.File]::ReadAllText((Join-Path $clientSource 'Detect.ps1'))
 if (-not $detectionTemplate.Contains('__LOGCOLLECTOR_CONFIGURATION_SHA256__')) {
     throw 'Detection template is missing its configuration hash marker.'
 }
 $moduleManifest = Test-ModuleManifest -Path (Join-Path $clientModules 'LogCollector.Client.psd1') -ErrorAction Stop
+# The core installer refuses a module whose version differs from its own, so a mismatch must
+# fail while building the deliverable rather than on every device at install time.
+$coreVersion = (Import-PowerShellDataFile -LiteralPath (Join-Path $coreSource 'Config.psd1')).PackageVersion
+if ($coreVersion -ne $moduleManifest.Version.ToString()) {
+    throw ("Core package version '$coreVersion' does not match the shared module version " +
+        "'$($moduleManifest.Version)'. They ship together and must be bumped together.")
+}
 
 if (-not $PSCmdlet.ShouldProcess($target, 'Create customer deliverable (Azure deployment package + Intune package generator)')) { return }
 
@@ -121,6 +133,16 @@ foreach ($file in $packageFiles) { Copy-Item -LiteralPath (Join-Path $clientSour
 foreach ($file in $moduleManifest.FileList) {
     $name = Split-Path $file -Leaf
     Copy-Item -LiteralPath (Join-Path $clientModules $name) -Destination (Join-Path $payload "Modules\$name")
+}
+
+# The core dependency package ships beside the inventory payload and reuses the same module
+# files, so the two can never disagree about which client version is on a device.
+$corePayload = Join-Path $intune 'CoreSource'
+$null = New-Item -ItemType Directory -Path (Join-Path $corePayload 'Modules') -Force
+foreach ($file in $coreFiles) { Copy-Item -LiteralPath (Join-Path $coreSource $file) -Destination (Join-Path $corePayload $file) }
+foreach ($file in $moduleManifest.FileList) {
+    $name = Split-Path $file -Leaf
+    Copy-Item -LiteralPath (Join-Path $clientModules $name) -Destination (Join-Path $corePayload "Modules\$name")
 }
 
 $intuneGenerator = @'
@@ -179,19 +201,30 @@ if ($FrontendUrl.Scheme -ne 'https') {
 }
 $source = Join-Path $PSScriptRoot 'ClientSource'
 if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "ClientSource folder not found next to this script: $source" }
+$coreSource = Join-Path $PSScriptRoot 'CoreSource'
+if (-not (Test-Path -LiteralPath $coreSource -PathType Container)) {
+    throw "CoreSource folder not found next to this script: $coreSource. The core dependency package is required; copy the whole 2-Intune folder, not just this script."
+}
+$coreFiles = @('Config.psd1', 'Core.Provisioning.psm1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
 if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $PSScriptRoot 'Output' }
 
 # Only these files are ever packaged; a stray file next to them must not reach the endpoints,
 # and a missing one must fail here rather than during installation on a device.
 $payloadFiles = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
     'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
-$moduleFiles = @('LogCollector.Client.psd1', 'LogCollector.Client.psm1', 'DeviceIdentity.psm1',
-    'RequestSigning.psm1', 'InventoryClient.psm1', 'InventorySpool.psm1')
+$moduleFiles = @('LogCollector.Client.psd1', 'LogCollector.Client.psm1', 'EndpointConfiguration.psm1',
+    'DeviceIdentity.psm1', 'RequestSigning.psm1', 'InventoryClient.psm1', 'InventorySpool.psm1')
 foreach ($file in $payloadFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file) -PathType Leaf)) { throw "Missing package source: $file" }
 }
 foreach ($file in $moduleFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $source "Modules\$file") -PathType Leaf)) { throw "Missing package source: Modules\$file" }
+}
+foreach ($file in $coreFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $coreSource $file) -PathType Leaf)) { throw "Missing core package source: $file" }
+}
+foreach ($file in $moduleFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $coreSource "Modules\$file") -PathType Leaf)) { throw "Missing core package source: Modules\$file" }
 }
 
 if ($PSBoundParameters.ContainsKey('IntuneWinAppUtilPath') -and $IntuneWinAppUtilPath) {
@@ -270,25 +303,29 @@ foreach ($file in $payloadFiles) { Copy-Item -LiteralPath (Join-Path $source $fi
 foreach ($file in $moduleFiles) { Copy-Item -LiteralPath (Join-Path $source "Modules\$file") -Destination (Join-Path $staging "Modules\$file") -ErrorAction Stop }
 
 # Rewrite Config.psd1 deterministically so its hash matches what Detect.ps1 will look for.
-$lines = @('@{')
-foreach ($key in @($config.Keys | Sort-Object)) {
-    $value = $config[$key]
-    if ($value -is [bool]) { $literal = '$' + $value.ToString().ToLowerInvariant() }
-    elseif ($value -is [int]) { $literal = $value.ToString([Globalization.CultureInfo]::InvariantCulture) }
-    elseif ($value -is [string]) { $literal = "'" + $value.Replace("'", "''") + "'" }
-    elseif ($value -is [array]) {
-        $items = @($value | ForEach-Object {
-            if ($_ -isnot [string]) { throw "Only strings are supported in configuration array $key." }
-            "'" + $_.Replace("'", "''") + "'"
-        })
-        $literal = '@(' + ($items -join ', ') + ')'
+function ConvertTo-ConfigurationText {
+    param([Parameter(Mandatory)] [hashtable] $Configuration)
+    $lines = @('@{')
+    foreach ($key in @($Configuration.Keys | Sort-Object)) {
+        $value = $Configuration[$key]
+        if ($value -is [bool]) { $literal = '$' + $value.ToString().ToLowerInvariant() }
+        elseif ($value -is [int]) { $literal = $value.ToString([Globalization.CultureInfo]::InvariantCulture) }
+        elseif ($value -is [string]) { $literal = "'" + $value.Replace("'", "''") + "'" }
+        elseif ($value -is [array]) {
+            $items = @($value | ForEach-Object {
+                if ($_ -isnot [string]) { throw "Only strings are supported in configuration array $key." }
+                "'" + $_.Replace("'", "''") + "'"
+            })
+            $literal = '@(' + ($items -join ', ') + ')'
+        }
+        else { throw "Unsupported configuration value type for $key." }
+        $lines += "    $key = $literal"
     }
-    else { throw "Unsupported configuration value type for $key." }
-    $lines += "    $key = $literal"
+    $lines += '}'
+    return ($lines -join "`r`n")
 }
-$lines += '}'
 $configPath = Join-Path $staging 'Config.psd1'
-[IO.File]::WriteAllText($configPath, ($lines -join "`r`n"), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($configPath, (ConvertTo-ConfigurationText -Configuration $config), [Text.UTF8Encoding]::new($false))
 $configurationSha256 = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
 
 # Validate through the runtime that will run on the endpoints, so an endpoint the client
@@ -314,6 +351,52 @@ if (-not (Test-Path -LiteralPath $artifact -PathType Leaf) -or (Get-Item -Litera
 }
 Copy-Item -LiteralPath (Join-Path $staging 'Detect.ps1') -Destination (Join-Path $release 'Detect.ps1')
 
+# --- Core dependency package ---------------------------------------------------------
+# Shipped as its own Win32 app so it can be a declared Intune dependency of the inventory
+# app and of any other script package. It installs the shared module machine-wide and
+# registers no task, so it is safe to assign more broadly than the inventory app.
+$coreConfig = Import-PowerShellDataFile -LiteralPath (Join-Path $coreSource 'Config.psd1')
+$coreVersion = $coreConfig.PackageVersion
+$coreConfig.FrontendUrl = $FrontendUrl.AbsoluteUri
+$coreConfig.Environment = $Environment
+# The core module carries no collection schedule, so it may submit as soon as a script
+# calls it; -EnableSubmission gates the inventory task, not this shared dependency.
+$coreConfig.SubmissionEnabled = $true
+$coreConfig.PkiRootCaThumbprints = $PkiRootCaThumbprints
+$coreConfig.PkiRootCaSubjects = $PkiRootCaSubjects
+$coreConfig.PkiIntermediateCaThumbprints = $PkiIntermediateCaThumbprints
+$coreConfig.PkiIntermediateCaSubjects = $PkiIntermediateCaSubjects
+
+$coreStaging = Join-Path $release 'Core\Source'
+$null = New-Item -ItemType Directory -Path (Join-Path $coreStaging 'Modules') -Force
+foreach ($file in $coreFiles) {
+    Copy-Item -LiteralPath (Join-Path $coreSource $file) -Destination (Join-Path $coreStaging $file) -ErrorAction Stop
+}
+foreach ($file in $moduleFiles) {
+    Copy-Item -LiteralPath (Join-Path $coreSource "Modules\$file") -Destination (Join-Path $coreStaging "Modules\$file") -ErrorAction Stop
+}
+[IO.File]::WriteAllText((Join-Path $coreStaging 'Config.psd1'), (ConvertTo-ConfigurationText -Configuration $coreConfig), [Text.UTF8Encoding]::new($false))
+$null = Test-ModuleManifest -Path (Join-Path $coreStaging 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
+
+$coreOutput = Join-Path $release 'Core\Package'
+$null = New-Item -ItemType Directory -Path $coreOutput -Force
+$coreArguments = @('-c', ('"{0}"' -f $coreStaging), '-s', 'Install.ps1', '-o', ('"{0}"' -f $coreOutput), '-qq')
+$coreProcess = Start-Process -FilePath $tool.FullName -ArgumentList $coreArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
+if ($coreProcess.ExitCode -ne 0) { throw "IntuneWinAppUtil failed for the core package with exit code $($coreProcess.ExitCode). Output retained at $release." }
+$coreArtifact = Join-Path $coreOutput 'Install.intunewin'
+if (-not (Test-Path -LiteralPath $coreArtifact -PathType Leaf) -or (Get-Item -LiteralPath $coreArtifact).Length -eq 0) {
+    throw "IntuneWinAppUtil produced no nonempty core Install.intunewin. Output retained at $release."
+}
+Copy-Item -LiteralPath (Join-Path $coreStaging 'Detect.ps1') -Destination (Join-Path $release 'Core\Detect.ps1')
+$coreResult = [pscustomobject]@{
+    PackageVersion   = $coreVersion
+    IntuneWinPackage = $coreArtifact
+    PackageSha256    = (Get-FileHash -LiteralPath $coreArtifact -Algorithm SHA256).Hash
+    DetectionScript  = Join-Path $release 'Core\Detect.ps1'
+    InstallCommand   = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"'
+    UninstallCommand = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Uninstall.ps1"'
+}
+
 [pscustomobject]@{
     PackageVersion = $version
     IntuneWinPackage = $artifact
@@ -323,6 +406,7 @@ Copy-Item -LiteralPath (Join-Path $staging 'Detect.ps1') -Destination (Join-Path
     UninstallCommand = ('"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\{0}\Uninstall.ps1"' -f $version)
     SubmissionEnabled = $config.SubmissionEnabled
     ConfigurationSha256 = $configurationSha256
+    CorePackage = $coreResult
     ContentPrepTool = $tool.FullName
 }
 '@
@@ -565,7 +649,8 @@ tree, the .NET SDK and Bicep CLI are **not** required.
 | Folder | Purpose |
 | --- | --- |
 | ``1-Azure`` | Deploys infrastructure and the pre-built Function apps |
-| ``2-Intune`` | Builds the ``.intunewin`` client package |
+| ``2-Intune`` | Builds the ``.intunewin`` client packages |
+| ``2-Intune\CoreSource`` | Payload of the shared **core dependency** package |
 | ``2-Intune\Tools`` | Drop ``IntuneWinAppUtil.exe`` here; it is found automatically |
 
 ## Prerequisites
@@ -620,6 +705,29 @@ The script prints the paths to use in Intune:
 | App package file | ``Output\$clientVersion\Package\Install.intunewin`` |
 | Detection rule | Custom script -> ``Output\$clientVersion\Detect.ps1`` (do NOT tick "run as 32-bit") |
 | Install behaviour | System |
+
+### Two apps, not one
+
+The same command also builds a second, smaller package under ``Output\$clientVersion\Core``.
+Create **two** Win32 apps in Intune:
+
+| App | Package file | Detection script | What it does |
+| --- | --- | --- | --- |
+| LogCollector Core | ``Core\Package\Install.intunewin`` | ``Core\Detect.ps1`` | Installs the shared PowerShell module machine-wide. No scheduled task, collects nothing. |
+| LogCollector Inventory | ``Package\Install.intunewin`` | ``Detect.ps1`` | The inventory collection package and its two SYSTEM tasks. |
+
+Add **LogCollector Core** as a *dependency* of **LogCollector Inventory** so Intune enforces
+the order rather than leaving it to assignment timing.
+
+Assign the core app to every device that runs any script which writes to Log Analytics, not
+only to the inventory pilot. It is what lets an arbitrary script do:
+
+``````powershell
+Import-Module LogCollector.Client
+Send-LogAnalyticsData -LogType 'W11Upgrade' -Body (`$events | ConvertTo-Json)
+``````
+
+with no workspace key and no endpoint URL of its own. See ``2-Intune\CoreSource\README.md``.
 
 Install and uninstall command lines (they must use ``Sysnative``, the installer refuses
 32-bit PowerShell) are given in full in ``2-Intune\Intune-Deployment.md``, together with the
