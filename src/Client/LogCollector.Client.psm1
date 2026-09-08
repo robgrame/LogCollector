@@ -537,6 +537,10 @@ function Send-LogAnalyticsData {
     checks such as `if ($response -match "200 :")` keep working, while `.Disposition`,
     `.StatusCode` and `.SubmissionId` are available for new code.
 
+    A script whose own inline sender returned $true/$false must NOT keep testing
+    `if ($response)`: an object is always truthy, so a failed batch would be reported as
+    sent. Use `if ($response.Delivered)` instead, which carries the same meaning.
+
     Delivered means the intake accepted the batch, not that Log Analytics ingestion has
     completed. When the endpoint cannot be reached the batch is retained in the shared
     spool and reported as Deferred, not silently dropped.
@@ -549,9 +553,11 @@ function Send-LogAnalyticsData {
     .PARAMETER Source
     Identifies the producing script in the emitted records. Defaults to the caller's file name.
     .PARAMETER CustomerId
-    Ignored. Accepted so existing call sites bind unchanged.
+    Ignored. Accepted so existing call sites bind unchanged. Also accepts the name
+    -WorkspaceId, which some scripts used for the same value.
     .PARAMETER SharedKey
     Ignored, never logged, and no longer required. Remove it from the calling script.
+    Also accepts the name -WorkspaceKey.
     .EXAMPLE
     Send-LogAnalyticsData -LogType 'W11Upgrade' -Body ($events | ConvertTo-Json)
     .EXAMPLE
@@ -562,8 +568,10 @@ function Send-LogAnalyticsData {
     param(
         [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $LogType,
         [Parameter(Mandatory)] [object] $Body,
-        [string] $CustomerId,
-        [string] $SharedKey,
+        # WorkspaceId/WorkspaceKey are the names the SecureBoot family of scripts used for the
+        # same two values, so accepting them keeps those call sites binding unchanged too.
+        [Alias('WorkspaceId')] [string] $CustomerId,
+        [Alias('WorkspaceKey')] [string] $SharedKey,
         [Uri] $FrontendUrl,
         [string] $Source,
         [hashtable] $Properties,
@@ -638,6 +646,10 @@ function Send-LogAnalyticsData {
 
     $response = [pscustomobject] @{
         StatusCode         = $statusCode
+        # The scripts that used a boolean-returning inline sender test `if ($sent)`. A
+        # PSCustomObject is always truthy, so that test would silently report a failed
+        # batch as sent. This gives those call sites an exact replacement: `$sent.Delivered`.
+        Delivered          = ($result.Disposition -eq 'Delivered')
         Disposition        = $result.Disposition
         TableName          = $tableName
         RecordCount        = $records.Count

@@ -13,7 +13,7 @@ from the device entirely.
 .PARAMETER RemoveSpool
 Also remove the shared spool, discarding any records not yet delivered.
 .NOTES
-Version 1.7.0.
+Version 1.7.1.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -23,7 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.7.0'
+$packageVersion = '1.7.1'
 Import-Module (Join-Path $PSScriptRoot 'Core.Provisioning.psm1') -Force -ErrorAction Stop
 $target = Get-LogCollectorModuleRoot -Version $packageVersion
 

@@ -35,7 +35,7 @@ Design rules that make this safe rather than a liability:
     logging at the same moment can neither interleave half-written lines nor
     rotate the same numbered slots on top of each other.
 .NOTES
-Version 1.7.0. No network call and no state change on import.
+Version 1.7.1. No network call and no state change on import.
 Windows PowerShell 5.1 compatible.
 #>
 Set-StrictMode -Version Latest

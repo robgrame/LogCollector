@@ -1,6 +1,6 @@
 # LogCollector Core — shared telemetry dependency
 
-Version 1.7.0
+Version 1.7.1
 
 This package installs **LogCollector.Client** machine-wide. It is a *dependency*: it
 registers no scheduled task and collects nothing by itself. Install it on every device that
@@ -91,6 +91,7 @@ if ($response -match "200 :") { 'delivered' }
 
 * `-customerId` and `-sharedKey` are **accepted and ignored**. The key is never sent,
   never logged and never echoed in the warning that tells you to delete it.
+  `-WorkspaceId` and `-WorkspaceKey` bind to the same two parameters and are ignored too.
 * `-body` accepts what the old API accepted: a JSON string, the UTF-8 bytes of a JSON
   string, or objects.
 * `-logType` accepts the bare legacy name; `_CL` is appended as the old API did server-side.
@@ -102,6 +103,17 @@ if ($response -match "200 :") { 'delivered' }
 `202`, including a batch retained in the shared spool for a later retry — reporting `200`
 for data that is not in Log Analytics yet would be a false success.
 
+> **If your old sender returned `$true`/`$false`, do not keep testing `if ($response)`.**
+> An object is always truthy in PowerShell, so a batch that only reached the spool would
+> still be logged as sent. Test the property that means what the boolean meant:
+>
+> ```powershell
+> if ($response.Delivered) { 'delivered' }
+> ```
+>
+> Under `-WhatIf` nothing is submitted and no response object is returned at all, so do
+> not read `.Delivered` from a `-WhatIf` run.
+
 ## Install
 
 ```powershell
@@ -110,7 +122,7 @@ for data that is not in Log Analytics yet would be a false success.
 
 Requires elevation and 64-bit Windows PowerShell. It:
 
-1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.7.0`,
+1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.7.1`,
    which is on `PSModulePath` for both Windows PowerShell 5.1 and PowerShell 7;
 2. writes `%ProgramData%\LogCollector\Config\Endpoint.psd1`;
 3. restricts write access on both — **and on their parent directories** — to SYSTEM and
