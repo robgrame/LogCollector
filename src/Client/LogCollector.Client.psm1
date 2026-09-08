@@ -6,20 +6,8 @@ Version 1.5.0. Import the manifest; no authentication, I/O or network calls occu
 #>
 Set-StrictMode -Version Latest
 
-foreach ($dependency in @('DeviceIdentity', 'RequestSigning', 'InventorySpool', 'InventoryClient')) {
+foreach ($dependency in @('EndpointConfiguration', 'DeviceIdentity', 'RequestSigning', 'InventorySpool', 'InventoryClient')) {
     Import-Module (Join-Path $PSScriptRoot "$dependency.psm1") -Scope Local -DisableNameChecking
-}
-
-function Assert-LogCollectorEndpoint {
-    param([Uri] $FrontendUrl)
-
-    if ($null -eq $FrontendUrl -or -not $FrontendUrl.IsAbsoluteUri -or
-        $FrontendUrl.Scheme -ne 'https' -or $FrontendUrl.UserInfo -or
-        $FrontendUrl.Query -or $FrontendUrl.Fragment -or
-        @('/api/submit', '/api/inventory') -cnotcontains $FrontendUrl.AbsolutePath -or
-        $FrontendUrl.OriginalString -cnotmatch '\A(?i:https)://[^/\\?#]+/api/(?:submit|inventory)\z') {
-        throw 'FrontendUrl must be an absolute HTTPS /api/submit or /api/inventory URL without credentials, query or fragment.'
-    }
 }
 
 function Get-LogCollectorSpoolPath {
@@ -482,6 +470,191 @@ function Sync-LogCollectorSpool {
     }
 }
 
+function ConvertTo-LogCollectorRecords {
+    <#
+    .SYNOPSIS
+    Normalises a legacy Data Collector API body into record objects.
+    .DESCRIPTION
+    Call sites pass whatever the old API accepted: a JSON string, the UTF-8 bytes of a
+    JSON string, or objects. All three must keep working, so each is reduced to an array
+    of records here rather than at every call site.
+    #>
+    param([Parameter(Mandatory)] [object] $Body)
+
+    $value = $Body
+    if ($value -is [byte[]]) {
+        # The old API took the UTF-8 bytes of the JSON document, not the objects.
+        $value = [Text.Encoding]::UTF8.GetString($value)
+    }
+    if ($value -is [string]) {
+        if ([string]::IsNullOrWhiteSpace($value)) { throw 'Body is empty; there is nothing to send.' }
+        try { $value = ConvertFrom-Json -InputObject $value -ErrorAction Stop }
+        catch { throw "Body is not valid JSON: $($_.Exception.Message)" }
+    }
+    $records = @($value)
+    if ($records.Count -eq 0) { throw 'Body contains no records; there is nothing to send.' }
+    # Emitted bare: the pipeline unrolls it, and the caller re-wraps with @() so a
+    # single-record body is still an array. Do not add a unary comma here as well.
+    return $records
+}
+
+function Resolve-LogCollectorTableName {
+    <#
+    .SYNOPSIS
+    Turns a legacy Log-Type into a Log Analytics custom table name.
+    .DESCRIPTION
+    The Data Collector API appended '_CL' server-side, so existing scripts pass a bare
+    name such as 'DeviceInventory'. Accept both spellings rather than making every
+    caller change a string that already works.
+    #>
+    param([Parameter(Mandatory)] [string] $LogType)
+
+    $name = $LogType.Trim()
+    if (-not $name) { throw 'LogType is empty.' }
+    if ($name -notmatch '_CL$') { $name = $name + '_CL' }
+    if ($name -notmatch '^[A-Za-z][A-Za-z0-9_]{0,96}_CL$') {
+        throw ("LogType '$LogType' does not map to a valid custom table name. Use letters, " +
+            'digits and underscores, starting with a letter.')
+    }
+    return $name
+}
+
+function Send-LogAnalyticsData {
+    <#
+    .SYNOPSIS
+    Sends records to Log Analytics from any script, with no workspace key on the device.
+    .DESCRIPTION
+    Drop-in replacement for the Send-LogAnalyticsData function that scripts used to carry
+    inline against the HTTP Data Collector API. The original signature still binds, so an
+    existing call site keeps working unchanged, but delivery now goes through the
+    LogCollector intake authenticated by this device's own certificate.
+
+    The -customerId and -sharedKey parameters are accepted and IGNORED. Nothing is sent to
+    *.ods.opinsights.azure.com, so a workspace key is no longer needed on the device and
+    should be deleted from the calling script. The key is never logged or echoed.
+
+    The returned object stringifies to the legacy '<status> : <detail>' form, so existing
+    checks such as `if ($response -match "200 :")` keep working, while `.Disposition`,
+    `.StatusCode` and `.SubmissionId` are available for new code.
+
+    Delivered means the intake accepted the batch, not that Log Analytics ingestion has
+    completed. When the endpoint cannot be reached the batch is retained in the shared
+    spool and reported as Deferred, not silently dropped.
+    .PARAMETER LogType
+    Destination table. '_CL' is appended when absent, matching the old API's behaviour.
+    .PARAMETER Body
+    Records to send: a JSON string, the UTF-8 bytes of a JSON string, or objects.
+    .PARAMETER FrontendUrl
+    Intake endpoint. Defaults to the machine-wide configuration written by the core package.
+    .PARAMETER Source
+    Identifies the producing script in the emitted records. Defaults to the caller's file name.
+    .PARAMETER CustomerId
+    Ignored. Accepted so existing call sites bind unchanged.
+    .PARAMETER SharedKey
+    Ignored, never logged, and no longer required. Remove it from the calling script.
+    .EXAMPLE
+    Send-LogAnalyticsData -LogType 'W11Upgrade' -Body ($events | ConvertTo-Json)
+    .EXAMPLE
+    $r = Send-LogAnalyticsData -customerId $id -sharedKey $key -body $json -logType 'DeviceInventory'
+    if ($r -match '200 :') { 'ok' }
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $LogType,
+        [Parameter(Mandatory)] [object] $Body,
+        [string] $CustomerId,
+        [string] $SharedKey,
+        [Uri] $FrontendUrl,
+        [string] $Source,
+        [hashtable] $Properties,
+        [switch] $QueueOnly,
+        [scriptblock] $DiagnosticSink
+    )
+
+    # Gated on presence alone, not on the value: an unmigrated caller passing an empty or
+    # null key is still an unmigrated caller and must be surfaced.
+    if ($PSBoundParameters.ContainsKey('SharedKey')) {
+        Write-Warning ('Send-LogAnalyticsData: -SharedKey is ignored. This device authenticates ' +
+            'with its own certificate. Remove the workspace key from the calling script.')
+    }
+    if ($PSBoundParameters.ContainsKey('CustomerId') -and $CustomerId) {
+        Write-Verbose 'Send-LogAnalyticsData: -CustomerId is ignored; the destination workspace is fixed by the data collection rule.'
+    }
+
+    $tableName = Resolve-LogCollectorTableName -LogType $LogType
+    $records = @(ConvertTo-LogCollectorRecords -Body $Body)
+
+    $configuration = $null
+    if (-not $FrontendUrl) {
+        $configuration = Get-LogCollectorEndpointConfiguration
+        $FrontendUrl = [Uri] $configuration.FrontendUrl
+    }
+    Assert-LogCollectorEndpoint -FrontendUrl $FrontendUrl
+
+    # A fleet can be staged before the server-side table mappings exist. Retaining the batch
+    # in the spool keeps those records for later delivery instead of discarding them.
+    $queueOnly = [bool] $QueueOnly
+    if ($configuration -and $configuration.PSObject.Properties['SubmissionEnabled'] -and
+        -not $configuration.SubmissionEnabled) {
+        $queueOnly = $true
+        Write-Verbose 'Send-LogAnalyticsData: SubmissionEnabled is false; the batch is spooled for later delivery.'
+    }
+
+    if (-not $Source) {
+        # Identify the producing script, so one table can carry several scripts' records.
+        $caller = @(Get-PSCallStack)[1]
+        $Source = if ($caller -and $caller.ScriptName) { Split-Path $caller.ScriptName -Leaf } else { 'PowerShell' }
+    }
+
+    $arguments = @{
+        FrontendUrl = $FrontendUrl
+        TableName   = $tableName
+        Records     = $records
+        Source      = $Source
+    }
+    if ($Properties) { $arguments['Properties'] = $Properties }
+    if ($queueOnly) { $arguments['QueueOnly'] = $true }
+    if ($DiagnosticSink) { $arguments['DiagnosticSink'] = $DiagnosticSink }
+    foreach ($setting in @('CertificateThumbprint', 'CertificateSubjectLike', 'CertificateIssuerLike',
+            'PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
+        if ($configuration -and $configuration.PSObject.Properties[$setting] -and $configuration.$setting) {
+            $arguments[$setting] = $configuration.$setting
+        }
+    }
+
+    if (-not $PSCmdlet.ShouldProcess("$FrontendUrl -> $tableName", "Send $($records.Count) record(s)")) { return }
+
+    # Measured before the call so the reported size is the caller's payload, independent of
+    # whatever framing the transport adds.
+    $payloadBytes = [Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $records -Depth 10 -Compress))
+
+    $result = Send-LogCollectorData @arguments
+
+    # The legacy contract is a string tested with -match "200 :". Returning an object whose
+    # ToString() reproduces that keeps those tests working while exposing real detail.
+    $statusCode = if ($result.Disposition -eq 'Delivered') { 200 } else { 202 }
+    $kilobytes = [math]::Round($payloadBytes / 1KB, 1)
+    $detail = "Upload payload size is $kilobytes Kb ($($result.Disposition))"
+
+    $response = [pscustomobject] @{
+        StatusCode         = $statusCode
+        Disposition        = $result.Disposition
+        TableName          = $tableName
+        RecordCount        = $records.Count
+        PayloadBytes       = $payloadBytes
+        Source             = $Source
+        Message            = $result.Message
+        IntakeStatusCode   = $result.StatusCode
+        Detail             = $detail
+        Result             = $result
+    }
+    $response | Add-Member -MemberType ScriptMethod -Name ToString -Force -Value {
+        '{0} : {1}' -f $this.StatusCode, $this.Detail
+    }
+    return $response
+}
+
 Export-ModuleMember -Function Get-DeviceIdentitySnapshot, Get-ClientCertificate, New-SignedInventoryRequest, `
     New-InventoryEnvelope, Get-LogCollectorSpoolPath, Export-LogCollectorSchema, Send-LogCollectorData, `
-    Sync-LogCollectorSpool
+    Sync-LogCollectorSpool, Send-LogAnalyticsData, Get-LogCollectorEndpointConfiguration, `
+    Get-LogCollectorConfigurationPath
