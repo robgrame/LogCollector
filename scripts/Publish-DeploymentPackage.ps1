@@ -117,8 +117,15 @@ Skip pushing the Function app packages and only deploy infrastructure.
 Explicit Frontend Function app name. Required with -SkipInfra when discovery is ambiguous.
 .PARAMETER WorkerAppName
 Explicit Worker Function app name. Required with -SkipInfra when discovery is ambiguous.
+.PARAMETER CustomerPrefix
+Short customer/company code (e.g. 'ACI') prepended to every resource name. 1-8 alphanumeric
+characters, optionally separated by hyphens, starting and ending with an alphanumeric.
+Required when this subscription already hosts another LogCollector deployment, because the
+storage account, Service Bus namespace and Function app names are globally unique. Overrides
+the value in the parameter file. The template lowercases it, so 'ACI' yields 'aci-...'.
+Set it on the first deployment: changing it later renames rather than migrates the resources.
 .NOTES
-Version 1.0.1. Never mutates the caller's persisted `az` default subscription; every
+Version 1.1.0. Never mutates the caller's persisted `az` default subscription; every
 command is scoped with --subscription instead of `az account set`.
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -130,7 +137,9 @@ param(
     [switch] $SkipInfra,
     [switch] $SkipApps,
     [string] $FrontendAppName,
-    [string] $WorkerAppName
+    [string] $WorkerAppName,
+    [ValidatePattern('^$|^[A-Za-z0-9]([A-Za-z0-9-]{0,6}[A-Za-z0-9])?$')]
+    [string] $CustomerPrefix = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -144,6 +153,10 @@ if (-not $PSBoundParameters.ContainsKey('ParameterFile')) {
 if (-not (Test-Path -LiteralPath $ParameterFile -PathType Leaf)) { throw "Parameter file not found: $ParameterFile" }
 
 $subscriptionArgs = @('--subscription', $SubscriptionId)
+# Only override the parameter file's customerPrefix when one was supplied, so an existing
+# installation redeployed without -CustomerPrefix keeps its current resource names.
+$prefixArgs = @()
+if ($CustomerPrefix) { $prefixArgs = @('--parameters', "customerPrefix=$CustomerPrefix") }
 
 $groupExists = (& az group exists --name $ResourceGroup @subscriptionArgs) -eq 'true'
 if (-not $groupExists) {
@@ -166,7 +179,7 @@ if (-not $SkipInfra) {
             --parameters $ParameterFile `
             --parameters location=$Location `
             --query properties.outputs `
-            --only-show-errors -o json @subscriptionArgs
+            --only-show-errors -o json @prefixArgs @subscriptionArgs
         if ($LASTEXITCODE -ne 0) { throw "Infrastructure deployment failed (exit code $LASTEXITCODE)." }
         $outputs = $outputsJson | ConvertFrom-Json
         $frontendAppNameResolved = $outputs.frontendAppName.value
@@ -239,6 +252,22 @@ Self-contained package to deploy LogCollector to Azure. Requires only the Azure 
 ``````powershell
 .\Deploy-LogCollector.ps1 -SubscriptionId <sub-id> -ResourceGroup <rg-name> -Location italynorth
 ``````
+
+### Resource name collisions
+
+The storage account, Service Bus namespace and Function app names are globally unique across
+Azure. If the deployment fails with ``StorageAccountAlreadyTaken`` or
+``StorageAccountInAnotherResourceGroup`` — for example because this subscription already
+hosts another LogCollector installation — redeploy with a short customer/company code:
+
+``````powershell
+.\Deploy-LogCollector.ps1 -SubscriptionId <sub-id> -ResourceGroup <rg-name> ``
+  -Location italynorth -CustomerPrefix ACI
+``````
+
+That produces ``aci-LogCollector-intake``, ``acilogcollectordata`` and so on (the template
+lowercases the prefix). Set it on the first deployment: changing it later renames rather than
+migrates the resources.
 
 Use ``-SkipInfra`` to redeploy only the Function app code against an existing resource group,
 or ``-SkipApps`` to only (re)apply the infrastructure template. Run with ``-WhatIf`` first to
