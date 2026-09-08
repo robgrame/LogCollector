@@ -133,7 +133,11 @@ Self-contained: uses only the ClientSource folder shipped next to this script, s
 this repository nor the .NET SDK is required. Supply Microsoft's IntuneWinAppUtil.exe and
 the intake endpoint of your LogCollector deployment.
 .PARAMETER IntuneWinAppUtilPath
-Path to Microsoft's IntuneWinAppUtil.exe (Microsoft Win32 Content Prep Tool).
+Path to Microsoft's IntuneWinAppUtil.exe (Microsoft Win32 Content Prep Tool). Optional: if
+omitted, the script looks for it in the 'Tools' folder next to this script (recursively),
+then on PATH. Simply dropping IntuneWinAppUtil.exe into '.\Tools\' is enough.
+The executable must carry a valid Authenticode signature issued to Microsoft Corporation.
+Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
 .PARAMETER FrontendUrl
 Intake endpoint, e.g. https://<prefix>-logcollector-intake.azurewebsites.net/api/inventory.
 Printed by Deploy-LogCollector.ps1 as 'frontendIngestUrl'.
@@ -142,6 +146,9 @@ Enable upload to Azure. Omit for a pilot package that installs but keeps both
 scheduled tasks disabled, so nothing is transmitted.
 .PARAMETER Environment
 Free-text environment tag recorded with every record (e.g. Production, Pilot).
+.EXAMPLE
+.\New-IntunePackage.ps1 -FrontendUrl https://aci-logcollector-intake.azurewebsites.net/api/inventory
+Uses .\Tools\IntuneWinAppUtil.exe and builds a pilot package.
 .EXAMPLE
 .\New-IntunePackage.ps1 -IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe `
   -FrontendUrl https://aci-logcollector-intake.azurewebsites.net/api/inventory `
@@ -152,7 +159,7 @@ Existing output folders are never overwritten.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory)] [string] $IntuneWinAppUtilPath,
+    [string] $IntuneWinAppUtilPath,
     [Parameter(Mandatory)] [Uri] $FrontendUrl,
     [switch] $EnableSubmission,
     [string] $Environment = '',
@@ -187,8 +194,50 @@ foreach ($file in $moduleFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $source "Modules\$file") -PathType Leaf)) { throw "Missing package source: Modules\$file" }
 }
 
-$tool = Get-Item -LiteralPath $IntuneWinAppUtilPath -ErrorAction Stop
+if ($PSBoundParameters.ContainsKey('IntuneWinAppUtilPath') -and $IntuneWinAppUtilPath) {
+    $tool = Get-Item -LiteralPath $IntuneWinAppUtilPath -ErrorAction Stop
+}
+else {
+    # Convention over configuration: dropping the tool into .\Tools\ is enough. Searched
+    # recursively so an unzipped release folder works as-is. Ambiguity is never resolved by
+    # guessing: "v1.9" would sort above "v1.10", so two candidates are an error, not a choice.
+    $toolsRoot = Join-Path $PSScriptRoot 'Tools'
+    $tool = $null
+    if (Test-Path -LiteralPath $toolsRoot -PathType Container) {
+        $found = @(Get-ChildItem -LiteralPath $toolsRoot -Filter 'IntuneWinAppUtil.exe' -Recurse -File -ErrorAction SilentlyContinue)
+        if ($found.Count -gt 1) {
+            throw ("Found $($found.Count) copies of IntuneWinAppUtil.exe under '$toolsRoot'; " +
+                'keep only one or pass -IntuneWinAppUtilPath explicitly. Candidates: ' +
+                (($found | ForEach-Object { $_.FullName }) -join '; '))
+        }
+        if ($found.Count -eq 1) { $tool = $found[0] }
+    }
+    if (-not $tool) {
+        $onPath = Get-Command 'IntuneWinAppUtil.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($onPath) { $tool = Get-Item -LiteralPath $onPath.Source }
+    }
+    if (-not $tool) {
+        throw ("IntuneWinAppUtil.exe was not found. Place it in '$toolsRoot' (any subfolder), " +
+            'add it to PATH, or pass -IntuneWinAppUtilPath. Download it from ' +
+            'https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool')
+    }
+    Write-Verbose "Using content prep tool: $($tool.FullName)"
+}
 if ($tool.PSIsContainer -or $tool.Extension -ne '.exe') { throw 'Supply the official IntuneWinAppUtil.exe file.' }
+
+# This executable is about to be run, and with discovery it may not have been chosen by hand,
+# so an .exe extension is not evidence of anything. Require a valid Microsoft signature.
+$signature = Get-AuthenticodeSignature -LiteralPath $tool.FullName -ErrorAction Stop
+if ($signature.Status -ne 'Valid') {
+    throw ("'$($tool.FullName)' does not carry a valid Authenticode signature (status: " +
+        "$($signature.Status)). Download the official tool from " +
+        'https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool')
+}
+$signer = $signature.SignerCertificate.Subject
+if ($signer -notmatch '(?i)O=Microsoft Corporation') {
+    throw "'$($tool.FullName)' is signed by '$signer', not by Microsoft Corporation; refusing to run it."
+}
+Write-Verbose "Content prep tool signature verified: $signer"
 
 $config = Import-PowerShellDataFile -LiteralPath (Join-Path $source 'Config.psd1')
 $version = $config.PackageVersion
@@ -274,9 +323,33 @@ Copy-Item -LiteralPath (Join-Path $staging 'Detect.ps1') -Destination (Join-Path
     UninstallCommand = ('"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\{0}\Uninstall.ps1"' -f $version)
     SubmissionEnabled = $config.SubmissionEnabled
     ConfigurationSha256 = $configurationSha256
+    ContentPrepTool = $tool.FullName
 }
 '@
 [IO.File]::WriteAllText((Join-Path $intune 'New-IntunePackage.ps1'), $intuneGenerator, [Text.UTF8Encoding]::new($false))
+
+# Microsoft's content prep tool cannot be redistributed, so ship the drop location and the
+# instructions instead: New-IntunePackage.ps1 searches this folder recursively.
+$toolsDir = Join-Path $intune 'Tools'
+$null = New-Item -ItemType Directory -Path $toolsDir -Force
+$toolsReadme = @"
+# Tools
+
+Place Microsoft's **IntuneWinAppUtil.exe** (Win32 Content Prep Tool) in this folder.
+``New-IntunePackage.ps1`` searches here recursively, so either the bare executable or the
+whole unzipped release folder works, and no ``-IntuneWinAppUtilPath`` argument is needed.
+Keep only **one** copy here: if several are found the generator stops and lists them rather
+than guessing which one you meant.
+
+Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
+
+The executable is verified before it is run: it must carry a valid Authenticode signature
+issued to **Microsoft Corporation**. Download it only from the official repository above.
+
+The tool is Microsoft's and is not redistributed with this delivery. If it is absent, the
+generator also looks on ``PATH``, and otherwise fails with a message pointing back here.
+"@
+[IO.File]::WriteAllText((Join-Path $toolsDir 'README.md'), $toolsReadme, [Text.UTF8Encoding]::new($false))
 
 $intuneGuide = @"
 # Deploying the LogCollector client with Intune
@@ -288,6 +361,12 @@ folder; the LogCollector source tree is not required.
 
 * **IntuneWinAppUtil.exe** - Microsoft Win32 Content Prep Tool.
   Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
+  Microsoft's licence does not allow us to redistribute it, so it is **not** included here.
+  Drop the downloaded ``IntuneWinAppUtil.exe`` (or the whole unzipped release folder) into
+  ``2-Intune\Tools\`` and the generator finds it by itself - no path parameter needed.
+  Alternatively pass ``-IntuneWinAppUtilPath`` or put it on ``PATH``.
+  Whatever the source, the generator refuses to run it unless it carries a valid Authenticode
+  signature issued to Microsoft Corporation, so download it only from the official repository.
 * Windows PowerShell 5.1 or PowerShell 7 to run the generator.
 * The intake endpoint of your deployment, printed by ``1-Azure\Deploy-LogCollector.ps1`` as
   **``frontendIngestUrl``**.
@@ -302,24 +381,25 @@ on demand with the manual command in section 4.
 
 ``````powershell
 .\New-IntunePackage.ps1 ``
-  -IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe ``
   -FrontendUrl  https://<prefix>-logcollector-intake.azurewebsites.net/api/inventory ``
   -Environment  Pilot
 ``````
+
+(With ``IntuneWinAppUtil.exe`` in ``.\Tools\`` no tool path is needed; otherwise add
+``-IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe``.)
 
 Once the pilot is validated, build the production package by adding ``-EnableSubmission``.
 Because output folders are never overwritten, send it to a different location:
 
 ``````powershell
 .\New-IntunePackage.ps1 ``
-  -IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe ``
   -FrontendUrl  https://<prefix>-logcollector-intake.azurewebsites.net/api/inventory ``
   -Environment  Production -EnableSubmission ``
   -OutputRoot   .\Output-Production
 ``````
 
-The command prints ``PackageSha256``, ``ConfigurationSha256`` and the effective
-``SubmissionEnabled``. It produces:
+The command prints ``ContentPrepTool`` (the exe it actually used), ``PackageSha256``,
+``ConfigurationSha256`` and the effective ``SubmissionEnabled``. It produces:
 
 | Path | Contents |
 | --- | --- |
@@ -486,6 +566,7 @@ tree, the .NET SDK and Bicep CLI are **not** required.
 | --- | --- |
 | ``1-Azure`` | Deploys infrastructure and the pre-built Function apps |
 | ``2-Intune`` | Builds the ``.intunewin`` client package |
+| ``2-Intune\Tools`` | Drop ``IntuneWinAppUtil.exe`` here; it is found automatically |
 
 ## Prerequisites
 
@@ -493,6 +574,8 @@ tree, the .NET SDK and Bicep CLI are **not** required.
   target resource group, plus User Access Administrator (the template creates role assignments).
 * **IntuneWinAppUtil.exe** - Microsoft Win32 Content Prep Tool, for step 2 only.
   Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
+  We cannot redistribute it; copy it into ``2-Intune\Tools\`` and it is picked up
+  automatically (see ``2-Intune\Tools\README.md``).
 * Windows PowerShell 5.1 or PowerShell 7.
 
 ## Step 1 - deploy to Azure
@@ -521,7 +604,6 @@ When it finishes the script prints **``frontendIngestUrl``**. Copy it: step 2 ne
 ``````powershell
 cd 2-Intune
 .\New-IntunePackage.ps1 ``
-  -IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe ``
   -FrontendUrl  <frontendIngestUrl from step 1> ``
   -Environment  Production ``
   -EnableSubmission
