@@ -9,10 +9,12 @@ namespace LogCollector.Frontend.Functions;
 /// Liveness probe for App Service Always On and deployment gates.
 /// </summary>
 /// <remarks>
-/// This route is listed in <c>clientCertExclusionPaths</c> so the platform's own
-/// warm-up pings — which carry no client certificate — do not fail. It therefore
-/// must never disclose anything an unauthenticated caller should not see: only a
-/// static status and the count of configured ingestion targets.
+/// The route is anonymous at the function level, but the platform still enforces
+/// mTLS in front of it: <c>clientCertExclusionPaths</c> is empty in infra/main.bicep,
+/// so a caller with no client certificate is rejected by App Service with 403
+/// "Client Certificate Required" and never reaches this code. It must nevertheless
+/// never disclose anything an unauthenticated caller should not see: only a static
+/// status and the count of configured ingestion targets.
 /// </remarks>
 public sealed class HealthFunction
 {
