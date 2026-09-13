@@ -17,6 +17,50 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$expectedConfigurationBase64 = '__LOGCOLLECTOR_CORE_EXPECTED_CONFIGURATION_BASE64__'
+
+function Test-ExpectedLogCollectorConfiguration {
+    param(
+        [Parameter(Mandatory)] [object] $Actual,
+        [Parameter(Mandatory)] [object] $Expected
+    )
+
+    foreach ($key in @('FrontendUrl', 'Environment', 'CustomerName', 'PackageVersion',
+            'CertificateThumbprint', 'CertificateSubjectLike', 'CertificateIssuerLike')) {
+        $actualProperty = $Actual.PSObject.Properties[$key]
+        $expectedProperty = $Expected.PSObject.Properties[$key]
+        if (-not $actualProperty -or -not $expectedProperty) { return $false }
+        if ([string] $actualProperty.Value -cne [string] $expectedProperty.Value) { return $false }
+    }
+
+    $actualSubmission = $Actual.PSObject.Properties['SubmissionEnabled']
+    $expectedSubmission = $Expected.PSObject.Properties['SubmissionEnabled']
+    if (-not $actualSubmission -or -not $expectedSubmission) { return $false }
+    if ([bool] $actualSubmission.Value -ne [bool] $expectedSubmission.Value) { return $false }
+
+    foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects',
+            'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
+        $actualProperty = $Actual.PSObject.Properties[$key]
+        $expectedProperty = $Expected.PSObject.Properties[$key]
+        if (-not $actualProperty -or -not $expectedProperty) { return $false }
+
+        $isThumbprint = $key -like '*Thumbprints'
+        $actualValues = @($actualProperty.Value | ForEach-Object {
+                $value = [string] $_
+                if ($isThumbprint) { ($value -replace '[\s:]', '').ToUpperInvariant() }
+                else { $value.Trim() }
+            } | Sort-Object)
+        $expectedValues = @($expectedProperty.Value | ForEach-Object {
+                $value = [string] $_
+                if ($isThumbprint) { ($value -replace '[\s:]', '').ToUpperInvariant() }
+                else { $value.Trim() }
+            } | Sort-Object)
+        if (($actualValues -join "`0") -cne ($expectedValues -join "`0")) { return $false }
+    }
+
+    return $true
+}
+
 try {
     $version = '1.7.1'
     $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "WindowsPowerShell\Modules\LogCollector.Client\$version"
@@ -76,7 +120,18 @@ try {
     }
     # Reads through the ACL check, so a configuration a user could have rewritten is not
     # reported as installed and Intune remediates it.
-    $endpoint = (Get-LogCollectorEndpointConfiguration).FrontendUrl
+    $installedConfiguration = Get-LogCollectorEndpointConfiguration
+    if ($expectedConfigurationBase64 -notlike '__LOGCOLLECTOR_*__') {
+        $expectedJson = [Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String($expectedConfigurationBase64))
+        $expectedConfiguration = $expectedJson | ConvertFrom-Json -ErrorAction Stop
+        if (-not (Test-ExpectedLogCollectorConfiguration -Actual $installedConfiguration `
+                    -Expected $expectedConfiguration)) {
+            exit 1
+        }
+    }
+
+    $endpoint = $installedConfiguration.FrontendUrl
     if (-not $endpoint) { exit 1 }
 
     Write-Output "LogCollector core $version installed; endpoint $endpoint."

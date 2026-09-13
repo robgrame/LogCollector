@@ -183,6 +183,23 @@ e distribuire la relativa fiducia. Detect.ps1 va firmato dopo l'inserimento dell
 non nella sua forma di template. Il wrapper di laboratorio non implementa una pipeline
 di firma: non abilitare la verifica firma Intune sui suoi output non firmati.
 
+La Win32 App del **Core Package** usa lo stesso principio: `New-IntunePackage.ps1`
+genera `Output\<versione>\Detect.ps1` legato semanticamente alla configurazione richiesta, includendo
+endpoint, ambiente, nome cliente, stato di submission e criteri PKI. Rigenerare il
+deliverable con una configurazione diversa rende quindi negativa la nuova detection sui
+device che hanno ancora la configurazione precedente e forza la reinstallazione del Core.
+
+Un cambio di sola configurazione non richiede il bump della versione del modulo. Sostituire
+nella Win32 App Core sia `Output\<versione>\Package\Install.intunewin` sia
+`Output\<versione>\Detect.ps1`; mantenere
+la versione software invariata finche non cambia il codice. Incrementare invece la versione
+quando cambiano modulo, installer o contratto pubblico.
+
+`New-IntunePackage.ps1` genera esclusivamente **LogCollector Core**. Non rigenera Custom
+Inventory e non crea Scheduled Task. Inventory e gli altri script migrati restano Win32 App
+distinte, ciascuna con il proprio `.intunewin`, installer e script di detection; in Intune
+devono dichiarare LogCollector Core come dipendenza.
+
 ## 5. Requirements
 
 | Requisito | Impostazione/nota |

@@ -146,7 +146,7 @@ permissions have drifted is reported as not installed and remediated by Intune.
 For a single-machine test, override the endpoint without rebuilding:
 
 ```powershell
-.\Install.ps1 -FrontendUrl 'https://<intake-host>/api/inventory'
+.\Install.ps1 -FrontendUrl 'https://<intake-host>/api/submit'
 ```
 
 ## Detection (Intune Win32 app)
@@ -154,6 +154,17 @@ For a single-machine test, override the endpoint without rebuilding:
 Use `Detect.ps1` as a custom detection script. It exits `0` with one line of output only
 when this exact version is installed, importable by name and configured; otherwise it exits
 `1` with no output.
+
+The source template accepts any trusted non-empty configuration for direct development use.
+`New-IntunePackage.ps1` replaces its marker with a Base64-encoded expected configuration, so
+the generated `Output\<version>\Detect.ps1` also verifies the exact endpoint, environment, customer name,
+submission state and PKI criteria selected for that build. Changing configuration therefore
+requires replacing both the Core `.intunewin` and its generated detection script, but not
+changing the module version when the code is unchanged.
+
+The generator builds only LogCollector Core. Inventory and other application scripts remain
+separate Win32 apps with their own packages and detection rules, and declare Core as an Intune
+dependency.
 
 ## Uninstall
 
