@@ -222,6 +222,92 @@ Describe 'Send-LogAnalyticsData' {
     }
 }
 
+Describe 'Send-LogCollectorOperationalEvent' {
+    BeforeEach {
+        Mock -ModuleName LogCollector.Client Send-LogAnalyticsData {
+            [pscustomobject]@{
+                Delivered = $true
+                TableName = 'LogCollectorOperations_CL'
+                Disposition = 'Delivered'
+            }
+        }
+    }
+
+    It 'sends the uniform operational schema to the common table' {
+        $executionId = [guid]'11111111-2222-3333-4444-555555555555'
+        $result = Send-LogCollectorOperationalEvent `
+            -PackageName 'W11 Upgrade' `
+            -PackageVersion '1.0.0' `
+            -ScriptName 'STEP1di2.ps1' `
+            -EventName 'StageCompleted' `
+            -Level Info `
+            -Message 'Windows setup staged.' `
+            -ExecutionId $executionId `
+            -FrontendUrl $script:Endpoint
+
+        $result.Delivered | Should -BeTrue
+        Should -Invoke -ModuleName LogCollector.Client Send-LogAnalyticsData -Times 1 -Exactly -ParameterFilter {
+            $LogType -eq 'LogCollectorOperations' -and
+            $Source -eq 'STEP1di2.ps1' -and
+            $Body.PackageName -eq 'W11 Upgrade' -and
+            $Body.PackageVersion -eq '1.0.0' -and
+            $Body.ScriptName -eq 'STEP1di2.ps1' -and
+            $Body.EventName -eq 'StageCompleted' -and
+            $Body.Level -eq 'Info' -and
+            $Body.Message -eq 'Windows setup staged.' -and
+            $Body.ExecutionId -eq $executionId.ToString('D') -and
+            $FrontendUrl.AbsoluteUri -eq $script:Endpoint
+        }
+    }
+
+    It 'generates an execution id when the caller does not provide one' {
+        $null = Send-LogCollectorOperationalEvent `
+            -PackageName 'CPU package' -PackageVersion '1.0.0' `
+            -ScriptName 'cpu.ps1' -EventName 'Completed' -Level Info -Message 'Done' `
+            -FrontendUrl $script:Endpoint
+
+        Should -Invoke -ModuleName LogCollector.Client Send-LogAnalyticsData -Times 1 -ParameterFilter {
+            [guid]::Parse($Body.ExecutionId) -ne [guid]::Empty
+        }
+    }
+
+    It 'does not let clients supply server-owned device identity columns' {
+        $null = Send-LogCollectorOperationalEvent `
+            -PackageName 'Package' -PackageVersion '1.0.0' `
+            -ScriptName 'script.ps1' -EventName 'Started' -Level Info -Message 'Starting' `
+            -FrontendUrl $script:Endpoint
+
+        Should -Invoke -ModuleName LogCollector.Client Send-LogAnalyticsData -Times 1 -ParameterFilter {
+            -not $Body.PSObject.Properties['DeviceName'] -and
+            -not $Body.PSObject.Properties['EntraDeviceId'] -and
+            -not $Body.PSObject.Properties['IntuneDeviceId']
+        }
+    }
+
+    It 'rejects whitespace-only or control-character fields' {
+        { Send-LogCollectorOperationalEvent `
+                -PackageName ' ' -PackageVersion '1.0.0' `
+                -ScriptName 'script.ps1' -EventName 'Started' -Level Info -Message 'Starting' `
+                -FrontendUrl $script:Endpoint } |
+            Should -Throw '*non-empty*'
+
+        { Send-LogCollectorOperationalEvent `
+                -PackageName 'Package' -PackageVersion '1.0.0' `
+                -ScriptName 'script.ps1' -EventName 'Started' -Level Info -Message "Bad$([char]1)" `
+                -FrontendUrl $script:Endpoint } |
+            Should -Throw '*control characters*'
+    }
+
+    It 'does not submit under WhatIf' {
+        Send-LogCollectorOperationalEvent `
+            -PackageName 'Package' -PackageVersion '1.0.0' `
+            -ScriptName 'script.ps1' -EventName 'Started' -Level Info -Message 'Starting' `
+            -FrontendUrl $script:Endpoint -WhatIf
+
+        Should -Invoke -ModuleName LogCollector.Client Send-LogAnalyticsData -Times 0
+    }
+}
+
 Describe 'Get-LogCollectorEndpointConfiguration' {    It 'names the expected path when the core package is not installed' {
         $missing = Join-Path $TestDrive 'absent\Endpoint.psd1'
         { Get-LogCollectorEndpointConfiguration -Path $missing -SkipTrustCheck } |

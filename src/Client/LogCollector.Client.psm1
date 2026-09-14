@@ -666,7 +666,61 @@ function Send-LogAnalyticsData {
     return $response
 }
 
+function Send-LogCollectorOperationalEvent {
+    <#
+    .SYNOPSIS
+    Sends one operational event to the shared LogCollectorOperations_CL table.
+    .DESCRIPTION
+    Standardizes centralized script logging without creating one Log Analytics table per
+    package. DeviceName, EntraDeviceId and IntuneDeviceId are asserted by the server-side
+    Worker and cannot be overridden by this record.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [ValidateLength(1, 128)] [string] $PackageName,
+        [Parameter(Mandatory)] [ValidateLength(1, 64)] [string] $PackageVersion,
+        [Parameter(Mandatory)] [ValidateLength(1, 128)] [string] $ScriptName,
+        [Parameter(Mandatory)] [ValidateLength(1, 128)] [string] $EventName,
+        [Parameter(Mandatory)] [ValidateSet('Verbose', 'Debug', 'Info', 'Warning', 'Error')] [string] $Level,
+        [Parameter(Mandatory)] [ValidateLength(1, 4096)] [string] $Message,
+        [guid] $ExecutionId = [guid]::NewGuid(),
+        [Uri] $FrontendUrl,
+        [switch] $QueueOnly,
+        [scriptblock] $DiagnosticSink
+    )
+
+    foreach ($value in @($PackageName, $PackageVersion, $ScriptName, $EventName, $Message)) {
+        if ([string]::IsNullOrWhiteSpace($value) -or $value -match '[\x00-\x08\x0B\x0C\x0E-\x1F]') {
+            throw 'Operational event text must be non-empty and cannot contain control characters.'
+        }
+    }
+
+    $record = [pscustomobject]@{
+        PackageName    = $PackageName.Trim()
+        PackageVersion = $PackageVersion.Trim()
+        ScriptName     = $ScriptName.Trim()
+        EventName      = $EventName.Trim()
+        Level          = $Level
+        Message        = $Message.Trim()
+        ExecutionId    = $ExecutionId.ToString('D')
+    }
+
+    if (-not $PSCmdlet.ShouldProcess('LogCollectorOperations_CL', "Send $EventName event for $PackageName")) {
+        return
+    }
+
+    $arguments = @{
+        LogType = 'LogCollectorOperations'
+        Body = $record
+        Source = $ScriptName.Trim()
+    }
+    if ($FrontendUrl) { $arguments.FrontendUrl = $FrontendUrl }
+    if ($QueueOnly) { $arguments.QueueOnly = $true }
+    if ($DiagnosticSink) { $arguments.DiagnosticSink = $DiagnosticSink }
+    return Send-LogAnalyticsData @arguments
+}
+
 Export-ModuleMember -Function Get-DeviceIdentitySnapshot, Get-ClientCertificate, New-SignedInventoryRequest, `
     New-InventoryEnvelope, Get-LogCollectorSpoolPath, Export-LogCollectorSchema, Send-LogCollectorData, `
-    Sync-LogCollectorSpool, Send-LogAnalyticsData, Get-LogCollectorEndpointConfiguration, `
+    Sync-LogCollectorSpool, Send-LogAnalyticsData, Send-LogCollectorOperationalEvent, Get-LogCollectorEndpointConfiguration, `
     Get-LogCollectorConfigurationPath, Write-CMTraceLog, Get-CMTraceLogPath, Get-CMTraceCustomerName
