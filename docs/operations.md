@@ -205,6 +205,24 @@ The probe creates and removes one untrusted, short-lived certificate in `Current
 It expects 403 without a certificate, application 401 for signed bodies up to 1 MB, and a healthy
 certificate-bearing liveness response. It does **not** establish positive end-to-end ingestion.
 
+For the positive path, run `Test-EndToEndSubmission.ps1` from a device with a usable
+certificate (enrolled or a configured PKI cert). It imports the real `LogCollector.Client`
+module and sends one real operational event to `LogCollectorOperations_CL` through
+`Send-LogCollectorData`, proving device identity, certificate selection, signing, transport
+and server-side authorization together:
+
+```powershell
+.\tests\Deployment\Test-EndToEndSubmission.ps1 -FrontendUrl 'https://<frontend>.azurewebsites.net/api/submit'
+
+# Also confirm the row reaches Log Analytics (polls up to -VerificationTimeoutMinutes, default 10):
+.\tests\Deployment\Test-EndToEndSubmission.ps1 -FrontendUrl 'https://<frontend>.azurewebsites.net/api/submit' `
+    -WorkspaceId '<log-analytics-workspace-id-guid>'
+```
+
+Omitting `-FrontendUrl` reuses the machine-wide configuration written by the core package.
+`-WorkspaceId` verification requires `az login` with at least Log Analytics Reader on the
+workspace; without it the script only proves the intake accepted the submission (HTTP 202).
+
 ## 3. Onboard devices
 
 Confirm the device has a usable certificate:
