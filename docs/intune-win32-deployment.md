@@ -102,9 +102,9 @@ Config.psd1 dopo la generazione o sul dispositivo gestito.
 4. Mantenere l'assegnazione **Required** al gruppo pilot e avviare una sincronizzazione
    del dispositivo, oppure attendere il normale ciclo di rivalutazione IME.
 
-Nel passaggio da una versione precedente a 1.5.0 aggiornare anche la command line di uninstall al
-percorso 1.5.0 indicato sotto. Per successive varianti di sola configurazione della
-stessa versione le command line restano invariate.
+Le command line di Install/Uninstall sopra sono generiche (usano `.\<Script>.ps1` dalla
+cache IME) e non cambiano tra una versione e l'altra del pacchetto: non serve
+aggiornarle nel passaggio a una nuova versione.
 
 La vecchia configurazione non soddisfa la nuova detection; Intune esegue di nuovo
 Install.ps1, che aggiorna i file nello stesso percorso e registra i due task con
@@ -144,10 +144,11 @@ Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inven
 "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"
 ```
 
-**Uninstall command** (una sola riga, usa la copia installata, non la cache IME):
+**Uninstall command** (una sola riga, dalla cache IME come l'install; `Uninstall.ps1` non
+dipende dal percorso di installazione, solo dai moduli accanto a se stesso):
 
 ```text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.5.0\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Uninstall.ps1"
 ```
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
