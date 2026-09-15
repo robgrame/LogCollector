@@ -345,7 +345,8 @@ Copy-Item -LiteralPath (Join-Path $coreStaging 'Detect.ps1') -Destination (Join-
     DetectionScript  = Join-Path $release 'Detect.ps1'
     ConfigurationSha256 = (Get-FileHash -LiteralPath $coreConfigPath -Algorithm SHA256).Hash
     InstallCommand   = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"'
-    UninstallCommand = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Uninstall.ps1"'
+    UninstallCommand = ('"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' +
+        '"%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\{0}\Uninstall.ps1"') -f $coreVersion
     ContentPrepTool = $tool.FullName
 }
 '@
@@ -445,10 +446,12 @@ Install command:
 "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"
 ``````
 
-Uninstall command:
+Uninstall command (pinned to the version actually installed, not whatever this Intune app's
+current package content contains after a later update; ``Uninstall.ps1`` is copied there by
+``Install.ps1`` for exactly this reason):
 
 ``````text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\$coreVersion\Uninstall.ps1"
 ``````
 
 ``Sysnative`` prevents Intune Management Extension from redirecting to 32-bit PowerShell,

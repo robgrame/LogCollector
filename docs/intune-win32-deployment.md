@@ -144,12 +144,19 @@ Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inven
 "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"
 ```
 
-**Uninstall command** (una sola riga, dalla cache IME come l'install; `Uninstall.ps1` non
-dipende dal percorso di installazione, solo dai moduli accanto a se stesso):
+**Uninstall command** (una sola riga, dal percorso di installazione del pacchetto, non
+dalla cache IME: `Install.ps1` copia li' anche `Uninstall.ps1`, i moduli e `Config.psd1`,
+cosi' una disinstallazione futura esegue sempre lo script della versione realmente
+installata anche se nel frattempo l'app in Intune e' stata aggiornata a un pacchetto
+piu' recente):
 
 ```text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.5.0\Uninstall.ps1"
 ```
+
+Aggiornare il numero di versione nel percorso a ogni release: l'Uninstall command deve
+puntare alla cartella versionata effettivamente installata (variabile `$target` in
+`Install.ps1`), non a `.\`.
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
 Per prove manuali da una console gia a 64 bit usare System32 al posto di Sysnative

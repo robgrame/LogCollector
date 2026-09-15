@@ -77,7 +77,10 @@ se il comando viene lanciato dall'agent a 32 bit:
 ```
 
 Da un host gia a 64 bit usare System32 al posto di Sysnative.
-Per disinstallare usare il comando equivalente con `-File .\Uninstall.ps1`.
+Per disinstallare usare il percorso di installazione, non la cache IME: l'uninstall
+command deve puntare a `Uninstall.ps1` nella cartella versionata copiata dall'installer
+(vedi sotto), cosi' la disinstallazione di una versione resta legata allo script con cui
+e' stata installata anche se il pacchetto Intune viene poi aggiornato.
 Caricare `Detect.ps1` GENERATO insieme al pacchetto come regola di detection, con esecuzione a 32 bit su
 client a 64 bit impostata a **No**.
 

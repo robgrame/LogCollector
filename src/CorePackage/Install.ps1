@@ -86,6 +86,17 @@ foreach ($file in $files) {
     }
 }
 
+# Uninstall.ps1 (and the Core.Provisioning.psm1 it imports) are pinned alongside the module
+# files so a later uninstall always runs the script that matches what is actually installed,
+# not whatever Uninstall.ps1 happens to ship in the Intune app's current package content
+# (which may since have been replaced by a newer version).
+$rootFiles = @('Uninstall.ps1', 'Core.Provisioning.psm1')
+foreach ($file in $rootFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $file) -PathType Leaf)) {
+        throw "Incomplete package: $file"
+    }
+}
+
 $target = Get-LogCollectorModuleRoot -Version $packageVersion
 if ([IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') -eq $target.TrimEnd('\')) {
     throw 'Run Install.ps1 from the distribution folder, not the installed directory.'
@@ -112,9 +123,12 @@ if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machi
         foreach ($file in $files) {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Modules\$file") -Destination (Join-Path $stage $file) -Force -ErrorAction Stop
         }
+        foreach ($file in $rootFiles) {
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stage $file) -Force -ErrorAction Stop
+        }
         Set-LogCollectorMachineAcl -Path $stage
         Assert-LogCollectorMachineAcl -Path $stage
-        foreach ($file in $files) {
+        foreach ($file in ($files + $rootFiles)) {
             Set-LogCollectorMachineAcl -Path (Join-Path $stage $file)
             Assert-LogCollectorMachineAcl -Path (Join-Path $stage $file)
         }
@@ -129,7 +143,7 @@ if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machi
             Move-Item -LiteralPath $stage -Destination $target -ErrorAction Stop
 
             Assert-LogCollectorMachineAcl -Path $target
-            foreach ($file in $files) { Assert-LogCollectorMachineAcl -Path (Join-Path $target $file) }
+            foreach ($file in ($files + $rootFiles)) { Assert-LogCollectorMachineAcl -Path (Join-Path $target $file) }
 
             $settings = [ordered] @{
                 FrontendUrl       = [string] $config.FrontendUrl
