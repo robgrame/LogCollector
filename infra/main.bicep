@@ -64,6 +64,9 @@ param additionalTelemetryTables array = []
 @maxValue(730)
 param retentionInDays int = 90
 
+@description('Resource ID of an existing Log Analytics workspace to reuse instead of creating a new one, e.g. "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>". The workspace may live in a different resource group or subscription (same tenant), as long as the deployment identity has Contributor rights on it. Leave empty to create a new workspace named "<prefix>-law" in this resource group.')
+param existingLogAnalyticsWorkspaceResourceId string = ''
+
 @description('Days a submitted payload blob is retained before lifecycle deletion.')
 @minValue(1)
 @maxValue(365)
@@ -181,6 +184,18 @@ var telemetryTableDefinitions = concat(includeInventoryExample ? [
 ] : [], additionalTelemetryTables)
 var ingestionStreamMap = join(map(telemetryTableDefinitions, table => '${table.name}=Custom-${table.name}'), ';')
 
+// When existingLogAnalyticsWorkspaceResourceId is set, resolve its subscription/resource
+// group/name from the resource ID instead of creating a new workspace in this group.
+var useExistingWorkspace = !empty(existingLogAnalyticsWorkspaceResourceId)
+var existingWorkspaceIdParts = split(existingLogAnalyticsWorkspaceResourceId, '/')
+var existingWorkspaceSubscriptionId = useExistingWorkspace ? existingWorkspaceIdParts[2] : subscription().subscriptionId
+var existingWorkspaceResourceGroupName = useExistingWorkspace ? existingWorkspaceIdParts[4] : resourceGroup().name
+
+// Guards against a malformed or wrong-type resource ID (wrong segment count, wrong provider,
+// wrong resource type, or an empty name) silently resolving to the wrong workspace.
+var existingWorkspaceIdPartsLower = map(existingWorkspaceIdParts, part => toLower(part))
+var isValidExistingWorkspaceId = !useExistingWorkspace || (length(existingWorkspaceIdParts) == 9 && existingWorkspaceIdPartsLower[1] == 'subscriptions' && existingWorkspaceIdPartsLower[3] == 'resourcegroups' && existingWorkspaceIdPartsLower[5] == 'providers' && existingWorkspaceIdPartsLower[6] == 'microsoft.operationalinsights' && existingWorkspaceIdPartsLower[7] == 'workspaces' && !empty(existingWorkspaceIdParts[8]))
+
 // Built-in role definition ids.
 var roleBlobDataOwner = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
 var roleQueueDataContributor = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
@@ -278,7 +293,7 @@ var inventoryColumns = [
 // Observability
 // ---------------------------------------------------------------------------
 
-resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (!useExistingWorkspace) {
   name: workspaceName
   location: location
   tags: tags
@@ -293,19 +308,31 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-resource telemetryTables 'Microsoft.OperationalInsights/workspaces/tables@2023-09-01' = [for table in telemetryTableDefinitions: {
-  parent: workspace
-  name: table.name
-  properties: {
-    plan: 'Analytics'
+// Reference to the caller-supplied workspace; may live in another resource group/subscription.
+resource existingWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = if (useExistingWorkspace) {
+  // Deliberate out-of-range index when the resource ID fails validation: fails the
+  // deployment immediately with a clear error instead of silently resolving to the
+  // wrong workspace (e.g. a malformed ID or one pointing at a different resource type).
+  name: isValidExistingWorkspaceId ? last(existingWorkspaceIdParts) : existingWorkspaceIdParts[999]
+  scope: resourceGroup(existingWorkspaceSubscriptionId, existingWorkspaceResourceGroupName)
+}
+
+var workspaceId = useExistingWorkspace ? existingWorkspace.id : workspace.id
+var workspaceNameResolved = useExistingWorkspace ? existingWorkspace.name : workspace.name
+
+// A child "workspaces/tables" resource cannot itself declare a cross-group scope, so the
+// tables are deployed through a module scoped to the target workspace's resource group —
+// this works whether that group is the one just created above or an existing one elsewhere.
+module telemetryTables 'modules/log-analytics-tables.bicep' = {
+  name: 'telemetryTables-${uniqueString(deployment().name)}'
+  scope: resourceGroup(existingWorkspaceSubscriptionId, existingWorkspaceResourceGroupName)
+  params: {
+    workspaceName: workspaceNameResolved
+    tableDefinitions: telemetryTableDefinitions
     retentionInDays: retentionInDays
-    totalRetentionInDays: retentionInDays
-    schema: {
-      name: table.name
-      columns: table.columns
-    }
   }
-}]
+  dependsOn: useExistingWorkspace ? [] : [workspace]
+}
 
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: appInsightsName
@@ -314,7 +341,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   kind: 'web'
   properties: {
     Application_Type: 'web'
-    WorkspaceResourceId: workspace.id
+    WorkspaceResourceId: workspaceId
     Flow_Type: 'Bluefield'
     Request_Source: 'rest'
     publicNetworkAccessForIngestion: 'Enabled'
@@ -350,7 +377,7 @@ resource dcr 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
     destinations: {
       logAnalytics: [
         {
-          workspaceResourceId: workspace.id
+          workspaceResourceId: workspaceId
           name: 'inventoryWorkspace'
         }
       ]
@@ -374,7 +401,7 @@ resource dcrDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
   name: 'ingestion-errors'
   scope: dcr
   properties: {
-    workspaceId: workspace.id
+    workspaceId: workspaceId
     logs: [
       {
         category: 'LogErrors'
@@ -897,8 +924,8 @@ output workerAppName string = workerApp.name
 output storageAccountName string = storage.name
 output serviceBusNamespace string = serviceBus.name
 output inventoryQueueName string = inventoryQueueName
-output logAnalyticsWorkspaceName string = workspace.name
-output logAnalyticsWorkspaceId string = workspace.id
+output logAnalyticsWorkspaceName string = workspaceNameResolved
+output logAnalyticsWorkspaceId string = workspaceId
 output dataCollectionEndpoint string = dce.properties.logsIngestion.endpoint
 output dataCollectionRuleImmutableId string = dcr.properties.immutableId
 output inventoryStream string = inventoryStreamName

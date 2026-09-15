@@ -52,7 +52,7 @@ $target = Join-Path $OutputRoot $version
 if (Test-Path -LiteralPath $target) { throw "Output already exists: $target. Use a new OutputRoot; existing packages are never overwritten." }
 
 $infraSource = Join-Path $repo 'infra'
-foreach ($required in @('main.bicep', 'certificates\intune-root.base64', 'certificates\intune-intermediate.base64')) {
+foreach ($required in @('main.bicep', 'modules\log-analytics-tables.bicep', 'certificates\intune-root.base64', 'certificates\intune-intermediate.base64')) {
     if (-not (Test-Path -LiteralPath (Join-Path $infraSource $required) -PathType Leaf)) { throw "Missing infra source: $required" }
 }
 
@@ -77,9 +77,11 @@ foreach ($zip in @($frontendZip, $workerZip)) {
 
 $null = New-Item -ItemType Directory -Path (Join-Path $target 'Functions') -Force
 $null = New-Item -ItemType Directory -Path (Join-Path $target 'infra\certificates') -Force
+$null = New-Item -ItemType Directory -Path (Join-Path $target 'infra\modules') -Force
 Copy-Item -LiteralPath $frontendZip -Destination (Join-Path $target 'Functions\Frontend.zip')
 Copy-Item -LiteralPath $workerZip -Destination (Join-Path $target 'Functions\Worker.zip')
 Copy-Item -LiteralPath (Join-Path $infraSource 'main.bicep') -Destination (Join-Path $target 'infra\main.bicep')
+Copy-Item -LiteralPath (Join-Path $infraSource 'modules\log-analytics-tables.bicep') -Destination (Join-Path $target 'infra\modules\log-analytics-tables.bicep')
 Copy-Item -LiteralPath (Join-Path $infraSource 'certificates\intune-root.base64') -Destination (Join-Path $target 'infra\certificates\intune-root.base64')
 Copy-Item -LiteralPath (Join-Path $infraSource 'certificates\intune-intermediate.base64') -Destination (Join-Path $target 'infra\certificates\intune-intermediate.base64')
 $parameterFileName = Split-Path $ParameterFile -Leaf
@@ -124,8 +126,14 @@ Required when this subscription already hosts another LogCollector deployment, b
 storage account, Service Bus namespace and Function app names are globally unique. Overrides
 the value in the parameter file. The template lowercases it, so 'ACI' yields 'aci-...'.
 Set it on the first deployment: changing it later renames rather than migrates the resources.
+.PARAMETER ExistingLogAnalyticsWorkspaceResourceId
+Resource ID of an existing Log Analytics workspace to reuse instead of creating a new one,
+e.g. '/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>'.
+The workspace may live in a different resource group or subscription (same tenant); the
+identity running this deployment needs Contributor (or equivalent) on that resource group too,
+since custom tables are created/updated there. Leave empty to create a new workspace.
 .NOTES
-Version 1.1.0. Never mutates the caller's persisted `az` default subscription; every
+Version 1.2.0. Never mutates the caller's persisted `az` default subscription; every
 command is scoped with --subscription instead of `az account set`.
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -139,7 +147,8 @@ param(
     [string] $FrontendAppName,
     [string] $WorkerAppName,
     [ValidatePattern('^$|^[A-Za-z0-9]([A-Za-z0-9-]{0,6}[A-Za-z0-9])?$')]
-    [string] $CustomerPrefix = ''
+    [string] $CustomerPrefix = '',
+    [string] $ExistingLogAnalyticsWorkspaceResourceId = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -157,6 +166,10 @@ $subscriptionArgs = @('--subscription', $SubscriptionId)
 # installation redeployed without -CustomerPrefix keeps its current resource names.
 $prefixArgs = @()
 if ($CustomerPrefix) { $prefixArgs = @('--parameters', "customerPrefix=$CustomerPrefix") }
+# Only override the parameter file's workspace setting when one was supplied, so a
+# redeploy without this switch keeps whatever workspace choice was already in effect.
+$workspaceArgs = @()
+if ($ExistingLogAnalyticsWorkspaceResourceId) { $workspaceArgs = @('--parameters', "existingLogAnalyticsWorkspaceResourceId=$ExistingLogAnalyticsWorkspaceResourceId") }
 
 $groupExists = (& az group exists --name $ResourceGroup @subscriptionArgs) -eq 'true'
 if (-not $groupExists) {
@@ -179,7 +192,7 @@ if (-not $SkipInfra) {
             --parameters $ParameterFile `
             --parameters location=$Location `
             --query properties.outputs `
-            --only-show-errors -o json @prefixArgs @subscriptionArgs
+            --only-show-errors -o json @prefixArgs @workspaceArgs @subscriptionArgs
         if ($LASTEXITCODE -ne 0) { throw "Infrastructure deployment failed (exit code $LASTEXITCODE)." }
         $outputs = $outputsJson | ConvertFrom-Json
         $frontendAppNameResolved = $outputs.frontendAppName.value
@@ -272,6 +285,22 @@ migrates the resources.
 Use ``-SkipInfra`` to redeploy only the Function app code against an existing resource group,
 or ``-SkipApps`` to only (re)apply the infrastructure template. Run with ``-WhatIf`` first to
 preview the changes.
+
+### Reusing an existing Log Analytics workspace
+
+By default a new workspace is created alongside the other resources. To send telemetry to a
+workspace you already have (in this resource group or another one, same tenant), pass its
+resource ID:
+
+``````powershell
+.\Deploy-LogCollector.ps1 -SubscriptionId <sub-id> -ResourceGroup <rg-name> -Location italynorth ``
+  -ExistingLogAnalyticsWorkspaceResourceId "/subscriptions/<sub-id>/resourceGroups/<law-rg>/providers/Microsoft.OperationalInsights/workspaces/<law-name>"
+``````
+
+The identity running the deployment needs Contributor (or an equivalent role that can write
+``Microsoft.OperationalInsights/workspaces/tables``) on the workspace's own resource group as
+well as on ``<rg-name>``, since the custom tables are created there. Set this on the first
+deployment: switching workspaces afterwards does not migrate previously ingested data.
 
 ### Worker deployment fails with a 403 on storage
 
