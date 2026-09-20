@@ -41,11 +41,11 @@ verification step failed. Ignored when -WorkspaceId is not supplied.
 .PARAMETER VerificationPollSeconds
 Delay between successive Log Analytics queries while polling.
 .EXAMPLE
-.\tests\Deployment\Test-EndToEndSubmission.ps1 -FrontendUrl 'https://contoso-logcollector-frontend.azurewebsites.net/api/submit'
+.\tests\Deployment\Test-EndToEndSubmission.ps1 -FrontendUrl 'https://example-logcollector-frontend.azurewebsites.net/api/submit'
 .EXAMPLE
 .\tests\Deployment\Test-EndToEndSubmission.ps1 -WorkspaceId '11111111-2222-3333-4444-555555555555'
 .NOTES
-Version 1.0.0. Sends one real, small record (PackageName 'LogCollector-E2E-Test') to
+Version 1.0.1. Sends one real, small record (PackageName 'LogCollector-E2E-Test') to
 LogCollectorOperations_CL. It does not create tasks, spool state or any local footprint.
 #>
 [CmdletBinding()]

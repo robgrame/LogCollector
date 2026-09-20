@@ -19,7 +19,7 @@ Folder under which a versioned deliverable folder is created. Defaults to '<repo
 Bicep parameter file bundled as the deployment default. Defaults to
 'infra\logcollector.bicepparam'.
 .NOTES
-Version 1.0.0. Builds via dotnet publish; makes no changes to Azure resources and never
+Version 1.0.1. Builds via dotnet publish; makes no changes to Azure resources and never
 overwrites an existing deliverable.
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -147,11 +147,11 @@ Free-text environment tag recorded with every record (e.g. Production, Pilot).
 Customer folder used by Write-CMTraceLog, so every script on the device logs to
 %ProgramData%\<CustomerName>\<ApplicationName>\Logs. Defaults to 'LogCollector'.
 .EXAMPLE
-.\New-IntunePackage.ps1 -FrontendUrl https://aci-logcollector-intake.azurewebsites.net/api/submit
+.\New-IntunePackage.ps1 -FrontendUrl https://example-logcollector-intake.azurewebsites.net/api/submit
 Uses .\Tools\IntuneWinAppUtil.exe and builds the Core package.
 .EXAMPLE
 .\New-IntunePackage.ps1 -IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe `
-  -FrontendUrl https://aci-logcollector-intake.azurewebsites.net/api/submit `
+  -FrontendUrl https://example-logcollector-intake.azurewebsites.net/api/submit `
   -CustomerName ACIInformatica -Environment Production
 .NOTES
 The generated package collects nothing and registers no scheduled task.

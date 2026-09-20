@@ -41,7 +41,7 @@ jobs:
           $path = Join-Path $env:GITHUB_WORKSPACE '.public-release-policy.local.txt'
           [IO.File]::WriteAllText(
               $path,
-              '__CI_BASELINE_PUBLIC_SNAPSHOT_POLICY__',
+              ([guid]::NewGuid().ToString('N')),
               [Text.UTF8Encoding]::new($false))
           "path=$path" >> $env:GITHUB_OUTPUT
 
