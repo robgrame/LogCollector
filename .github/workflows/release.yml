@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+env:
+  PESTER_VERSION: 5.7.1
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release candidate
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release ancestry
+        shell: pwsh
+        run: |
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release tags must point to a commit reachable from main.' }
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build and test .NET
+        run: |
+          dotnet build LogCollector.slnx -c Release --nologo
+          dotnet test LogCollector.slnx -c Release --no-build --nologo
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion $env:PESTER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run isolated Pester suites
+        shell: pwsh
+        run: .\.github\scripts\Invoke-PesterSuite.ps1 -PesterVersion $env:PESTER_VERSION
+
+  release:
+    name: Build and publish release
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 40
+    environment: release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release ancestry
+        shell: pwsh
+        run: |
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release tags must point to a commit reachable from main.' }
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Verify tag and build release assets
+        id: assets
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content .\src\Shared\LogCollector.Shared.csproj -Raw
+          $version = [string]($project.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1)
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+              throw "Tag '$env:GITHUB_REF_NAME' does not match project version '$version'."
+          }
+
+          $root = Join-Path $env:RUNNER_TEMP 'release'
+          $null = New-Item -ItemType Directory -Path $root -Force
+          $deployment = .\scripts\Publish-DeploymentPackage.ps1 -OutputRoot (Join-Path $root 'deployment') |
+              Select-Object -Last 1
+          $customer = .\scripts\Publish-CustomerDeliverable.ps1 -OutputRoot (Join-Path $root 'customer') |
+              Select-Object -Last 1
+          $deploymentZip = Join-Path $root "LogCollector-Deployment-$version.zip"
+          $customerZip = Join-Path $root "LogCollector-Customer-$version.zip"
+          Compress-Archive -LiteralPath $deployment.PackagePath -DestinationPath $deploymentZip
+          Compress-Archive -LiteralPath $customer.DeliverablePath -DestinationPath $customerZip
+          Get-FileHash $deploymentZip, $customerZip -Algorithm SHA256 |
+              ForEach-Object { "$($_.Hash)  $([IO.Path]::GetFileName($_.Path))" } |
+              Set-Content (Join-Path $root 'SHA256SUMS.txt')
+          "root=$root" >> $env:GITHUB_OUTPUT
+
+      - name: Create or update GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ROOT: ${{ steps.assets.outputs.root }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assets = Get-ChildItem $env:RELEASE_ROOT -File |
+              Where-Object Extension -In '.zip', '.txt' |
+              ForEach-Object FullName
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+              gh release create $tag --verify-tag --title "LogCollector $($tag.TrimStart('v'))" --generate-notes
+              if ($LASTEXITCODE -ne 0) { throw "Failed to create release $tag." }
+          }
+          gh release upload $tag @assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload release assets for $tag." }

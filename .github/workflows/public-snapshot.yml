@@ -1,0 +1,99 @@
+name: Public snapshot
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish after the safety scan
+        required: true
+        default: false
+        type: boolean
+      target_repository:
+        description: Public target repository in owner/name format
+        required: false
+        type: string
+permissions:
+  contents: read
+
+concurrency:
+  group: public-snapshot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan sanitized snapshot
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare private deny policy
+        id: policy
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE '.public-release-policy.local.txt'
+          [IO.File]::WriteAllText(
+              $path,
+              ([guid]::NewGuid().ToString('N')),
+              [Text.UTF8Encoding]::new($false))
+          "path=$path" >> $env:GITHUB_OUTPUT
+
+      - name: Scan snapshot
+        shell: pwsh
+        run: |
+          .\scripts\Publish-PublicSnapshot.ps1 -SourceRef HEAD `
+              -PolicyPath '${{ steps.policy.outputs.path }}' -ScanOnly
+
+  publish:
+    name: Publish sanitized snapshot
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: scan
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: public-release
+    steps:
+      - name: Validate target
+        shell: pwsh
+        env:
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        run: |
+          if ($env:TARGET_REPOSITORY -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+              throw 'target_repository must use owner/name format.'
+          }
+
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: refs/heads/main
+
+      - name: Prepare private deny policy
+        id: policy
+        shell: pwsh
+        env:
+          DENIED_LITERALS: ${{ secrets.PUBLIC_RELEASE_DENY_LITERALS }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DENIED_LITERALS)) {
+              throw 'PUBLIC_RELEASE_DENY_LITERALS must contain at least one active deny literal.'
+          }
+          $path = Join-Path $env:GITHUB_WORKSPACE '.public-release-policy.local.txt'
+          [IO.File]::WriteAllText($path, $env:DENIED_LITERALS, [Text.UTF8Encoding]::new($false))
+          "path=$path" >> $env:GITHUB_OUTPUT
+
+      - name: Publish snapshot
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_SNAPSHOT_TOKEN }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          .\scripts\Publish-PublicSnapshot.ps1 -Repository $env:TARGET_REPOSITORY `
+              -SourceRef HEAD -PolicyPath '${{ steps.policy.outputs.path }}'

@@ -272,6 +272,10 @@ Describe 'Write-CMTraceLog trust enforcement' {
     }
 
     It 'refuses a directory owned by a standard user, which is how ProgramData gets squatted' {
+        if (& $script:Logging { Test-CMTraceElevated }) {
+            Set-ItResult -Skipped -Because 'An elevated process creates directories owned by Administrators.'
+            return
+        }
         # Created unelevated, so this process's own account owns it: exactly the
         # state a squatter produces by pre-creating the customer folder.
         $directory = Join-Path $script:Root 'squatted'

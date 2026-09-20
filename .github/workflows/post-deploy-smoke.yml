@@ -1,0 +1,67 @@
+name: Post-deployment smoke test
+
+on:
+  repository_dispatch:
+    types:
+      - post-deploy-smoke
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: e2e-${{ github.event.client_payload.frontend_url }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Positive ingestion probe
+    runs-on:
+      - self-hosted
+      - windows
+      - x64
+      - logcollector-e2e
+    timeout-minutes: 25
+    environment: production
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+
+      - name: Sign in to Azure for workspace verification
+        if: github.event.client_payload.workspace_id != ''
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run end-to-end submission
+        shell: powershell
+        env:
+          FRONTEND_URL: ${{ github.event.client_payload.frontend_url }}
+          WORKSPACE_ID: ${{ github.event.client_payload.workspace_id }}
+          TIMEOUT_MINUTES: ${{ github.event.client_payload.timeout_minutes || '10' }}
+        run: |
+          $frontendUri = $null
+          if (-not [Uri]::TryCreate($env:FRONTEND_URL, [UriKind]::Absolute, [ref]$frontendUri) -or
+              $frontendUri.Scheme -ne 'https' -or
+              -not $frontendUri.DnsSafeHost.EndsWith('.azurewebsites.net', [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'frontend_url must be an HTTPS azurewebsites.net endpoint.'
+          }
+          $timeout = 0
+          if (-not [int]::TryParse($env:TIMEOUT_MINUTES, [ref]$timeout) -or $timeout -lt 1 -or $timeout -gt 60) {
+              throw 'timeout_minutes must be an integer from 1 through 60.'
+          }
+          if ($env:WORKSPACE_ID -and $env:WORKSPACE_ID -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+              throw 'workspace_id must be a GUID.'
+          }
+          $arguments = @{
+              FrontendUrl = $frontendUri
+              VerificationTimeoutMinutes = $timeout
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:WORKSPACE_ID)) {
+              $arguments.WorkspaceId = $env:WORKSPACE_ID
+          }
+          .\tests\Deployment\Test-EndToEndSubmission.ps1 @arguments

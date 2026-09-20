@@ -1,0 +1,206 @@
+name: Deploy to Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Component to deploy
+        required: true
+        type: choice
+        options:
+          - frontend
+          - worker
+          - infrastructure
+          - all
+      resource_group:
+        description: Target Azure resource group
+        required: true
+        type: string
+      location:
+        description: Azure region used if the resource group must be created
+        required: true
+        default: italynorth
+        type: string
+      frontend_app_name:
+        description: Existing Frontend Function name for a frontend-only deployment
+        required: false
+        type: string
+      worker_app_name:
+        description: Existing Worker Function name for a worker-only deployment
+        required: false
+        type: string
+      customer_prefix:
+        description: Optional customer prefix passed to Bicep
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: azure-${{ inputs.resource_group }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.target }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: production
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+
+      - name: Validate targeted deployment inputs
+        shell: pwsh
+        env:
+          TARGET: ${{ inputs.target }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          LOCATION: ${{ inputs.location }}
+          FRONTEND_APP_NAME: ${{ inputs.frontend_app_name }}
+          WORKER_APP_NAME: ${{ inputs.worker_app_name }}
+          CUSTOMER_PREFIX: ${{ inputs.customer_prefix }}
+        run: |
+          if ($env:RESOURCE_GROUP -notmatch '^[A-Za-z0-9._()-]{1,90}$') {
+              throw 'resource_group contains unsupported characters.'
+          }
+          if ($env:LOCATION -notmatch '^[a-z0-9]+$') {
+              throw 'location must be a lowercase Azure region name.'
+          }
+          if ($env:CUSTOMER_PREFIX -notmatch '^$|^[A-Za-z0-9]([A-Za-z0-9-]{0,6}[A-Za-z0-9])?$') {
+              throw 'customer_prefix must be 1-8 alphanumeric or hyphen characters.'
+          }
+          if ($env:FRONTEND_APP_NAME -and $env:FRONTEND_APP_NAME -notmatch '^[A-Za-z0-9-]{2,60}$') {
+              throw 'frontend_app_name contains unsupported characters.'
+          }
+          if ($env:WORKER_APP_NAME -and $env:WORKER_APP_NAME -notmatch '^[A-Za-z0-9-]{2,60}$') {
+              throw 'worker_app_name contains unsupported characters.'
+          }
+          if ($env:TARGET -eq 'frontend' -and -not $env:FRONTEND_APP_NAME) {
+              throw 'A valid frontend_app_name is required for a frontend-only deployment.'
+          }
+          if ($env:TARGET -eq 'worker' -and -not $env:WORKER_APP_NAME) {
+              throw 'A valid worker_app_name is required for a worker-only deployment.'
+          }
+          if ($env:TARGET -eq 'all' -and ($env:FRONTEND_APP_NAME -or $env:WORKER_APP_NAME)) {
+              throw 'App-name inputs must be empty for target all; infrastructure outputs are used.'
+          }
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Sign in to Azure
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy infrastructure
+        id: infrastructure
+        if: inputs.target == 'infrastructure' || inputs.target == 'all'
+        shell: pwsh
+        env:
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          LOCATION: ${{ inputs.location }}
+          CUSTOMER_PREFIX: ${{ inputs.customer_prefix }}
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if ((az group exists --name $env:RESOURCE_GROUP --subscription $env:SUBSCRIPTION_ID) -ne 'true') {
+              az group create --name $env:RESOURCE_GROUP --location $env:LOCATION `
+                  --subscription $env:SUBSCRIPTION_ID --only-show-errors | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Failed to create resource group $env:RESOURCE_GROUP." }
+          }
+
+          $compiled = az bicep build-params --file infra\logcollector.bicepparam --stdout | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to compile infra\logcollector.bicepparam.' }
+          $parameters = $compiled.parametersJson | ConvertFrom-Json
+          if (-not $parameters.parameters.PSObject.Properties['location']) {
+              $parameters.parameters | Add-Member -NotePropertyName location -NotePropertyValue ([pscustomobject]@{ value = $env:LOCATION })
+          }
+          else {
+              $parameters.parameters.location.value = $env:LOCATION
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:CUSTOMER_PREFIX)) {
+              if (-not $parameters.parameters.PSObject.Properties['customerPrefix']) {
+                  $parameters.parameters | Add-Member -NotePropertyName customerPrefix -NotePropertyValue ([pscustomobject]@{ value = $env:CUSTOMER_PREFIX })
+              }
+              else {
+                  $parameters.parameters.customerPrefix.value = $env:CUSTOMER_PREFIX
+              }
+          }
+          $parameterFile = Join-Path $env:RUNNER_TEMP 'deployment.parameters.json'
+          $parameters | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $parameterFile -Encoding utf8
+
+          az deployment group validate --resource-group $env:RESOURCE_GROUP `
+              --template-file infra\main.bicep --parameters $parameterFile `
+              --subscription $env:SUBSCRIPTION_ID --only-show-errors | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Infrastructure deployment validation failed.' }
+
+          $outputsJson = az deployment group create `
+              --resource-group $env:RESOURCE_GROUP `
+              --name "LogCollector-$env:GITHUB_RUN_ID" `
+              --template-file infra\main.bicep `
+              --parameters $parameterFile `
+              --subscription $env:SUBSCRIPTION_ID `
+              --query properties.outputs `
+              --only-show-errors `
+              -o json
+          if ($LASTEXITCODE -ne 0) { throw 'Infrastructure deployment failed.' }
+          $outputs = $outputsJson | ConvertFrom-Json
+          "frontend_app_name=$($outputs.frontendAppName.value)" >> $env:GITHUB_OUTPUT
+          "worker_app_name=$($outputs.workerAppName.value)" >> $env:GITHUB_OUTPUT
+
+      - name: Deploy Frontend
+        id: frontend
+        if: inputs.target == 'frontend' || inputs.target == 'all'
+        shell: pwsh
+        env:
+          FRONTEND_APP_NAME: ${{ inputs.target == 'all' && steps.infrastructure.outputs.frontend_app_name || inputs.frontend_app_name }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $zip = .\scripts\Publish-Function.ps1 -Component Frontend -ExcludePdb | Select-Object -Last 1
+          az functionapp update --resource-group $env:RESOURCE_GROUP --name $env:FRONTEND_APP_NAME `
+              --set clientCertEnabled=false --subscription $env:SUBSCRIPTION_ID --only-show-errors | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Failed to disable client certificate enforcement on $env:FRONTEND_APP_NAME." }
+          az functionapp deployment source config-zip --resource-group $env:RESOURCE_GROUP `
+              --name $env:FRONTEND_APP_NAME --src $zip --subscription $env:SUBSCRIPTION_ID --only-show-errors
+          if ($LASTEXITCODE -ne 0) { throw "Frontend deployment failed for $env:FRONTEND_APP_NAME." }
+
+      - name: Restore Frontend client certificate enforcement
+        if: always() && steps.frontend.conclusion != 'skipped'
+        shell: pwsh
+        env:
+          FRONTEND_APP_NAME: ${{ inputs.target == 'all' && steps.infrastructure.outputs.frontend_app_name || inputs.frontend_app_name }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          az functionapp update --resource-group $env:RESOURCE_GROUP --name $env:FRONTEND_APP_NAME `
+              --set clientCertEnabled=true --subscription $env:SUBSCRIPTION_ID --only-show-errors | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to restore client certificate enforcement on $env:FRONTEND_APP_NAME."
+          }
+          $enabled = az functionapp show --resource-group $env:RESOURCE_GROUP --name $env:FRONTEND_APP_NAME `
+              --subscription $env:SUBSCRIPTION_ID --query clientCertEnabled -o tsv --only-show-errors
+          if ($LASTEXITCODE -ne 0 -or $enabled -ne 'true') {
+              throw "Client certificate enforcement is not enabled on $env:FRONTEND_APP_NAME."
+          }
+
+      - name: Deploy Worker
+        if: inputs.target == 'worker' || inputs.target == 'all'
+        shell: pwsh
+        env:
+          WORKER_APP_NAME: ${{ inputs.target == 'all' && steps.infrastructure.outputs.worker_app_name || inputs.worker_app_name }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $zip = .\scripts\Publish-Function.ps1 -Component Worker -ExcludePdb | Select-Object -Last 1
+          az functionapp deployment source config-zip --resource-group $env:RESOURCE_GROUP `
+              --name $env:WORKER_APP_NAME --src $zip --subscription $env:SUBSCRIPTION_ID --only-show-errors
+          if ($LASTEXITCODE -ne 0) { throw "Worker deployment failed for $env:WORKER_APP_NAME." }

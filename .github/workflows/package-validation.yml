@@ -1,0 +1,61 @@
+name: Package validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'infra/**'
+      - 'scripts/Publish-*.ps1'
+      - '.github/workflows/package-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'infra/**'
+      - 'scripts/Publish-*.ps1'
+      - '.github/workflows/package-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packages:
+    name: Build customer artifacts
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build and verify packages
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'logcollector-packages'
+          $null = New-Item -ItemType Directory -Path $root -Force
+          $deployment = .\scripts\Publish-DeploymentPackage.ps1 -OutputRoot (Join-Path $root 'deployment') |
+              Select-Object -Last 1
+          $customer = .\scripts\Publish-CustomerDeliverable.ps1 -OutputRoot (Join-Path $root 'customer') |
+              Select-Object -Last 1
+          Compress-Archive -LiteralPath $deployment.PackagePath -DestinationPath (Join-Path $root "LogCollector-Deployment-$($deployment.Version).zip")
+          Compress-Archive -LiteralPath $customer.DeliverablePath -DestinationPath (Join-Path $root "LogCollector-Customer-$($customer.SolutionVersion).zip")
+
+      - name: Upload validated packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: validated-packages
+          path: ${{ runner.temp }}\logcollector-packages\*.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,72 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ed1a0fa18ac745d017ca370dd4ef08bba3b4f504 # v3
+        with:
+          languages: csharp
+          build-mode: manual
+
+      - name: Build
+        run: dotnet build LogCollector.slnx -c Release --nologo
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@ed1a0fa18ac745d017ca370dd4ef08bba3b4f504 # v3
+
+  dependency-audit:
+    name: NuGet vulnerability audit
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Audit NuGet dependencies
+        shell: pwsh
+        run: |
+          dotnet restore LogCollector.slnx --nologo
+          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed with exit code $LASTEXITCODE." }
+          $output = dotnet list LogCollector.slnx package --vulnerable --include-transitive 2>&1
+          $output | Write-Output
+          if ($LASTEXITCODE -ne 0) { throw "NuGet vulnerability audit failed with exit code $LASTEXITCODE." }
+          if (($output -join "`n") -match 'has the following vulnerable packages') {
+              throw 'NuGet reported one or more vulnerable packages.'
+          }

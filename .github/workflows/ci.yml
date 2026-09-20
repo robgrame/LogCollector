@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PESTER_VERSION: 5.7.1
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Restore
+        run: dotnet restore LogCollector.slnx --nologo
+
+      - name: Build
+        run: dotnet build LogCollector.slnx -c Release --no-restore --nologo
+
+      - name: Test
+        run: >-
+          dotnet test LogCollector.slnx -c Release --no-build --nologo
+          --logger "trx;LogFilePrefix=dotnet"
+          --results-directory TestResults\DotNet
+
+      - name: Upload .NET test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dotnet-test-results
+          path: TestResults\DotNet\*.trx
+          if-no-files-found: warn
+          retention-days: 14
+
+  pester:
+    name: PowerShell tests
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion $env:PESTER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run isolated Pester suites
+        shell: pwsh
+        run: .\.github\scripts\Invoke-PesterSuite.ps1 -PesterVersion $env:PESTER_VERSION
+
+      - name: Run non-privileged Windows PowerShell 5.1 smoke test
+        shell: powershell
+        run: .\tests\Pester\Invoke-Ps51SmokeTest.ps1 -SkipSpool
+
+      - name: Upload Pester test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pester-test-results
+          path: TestResults\Pester\*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  bicep:
+    name: Bicep validation
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build templates and parameter files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          az bicep install
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to install or update the Bicep CLI.' }
+          az bicep build --file infra\main.bicep --stdout | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Bicep template validation failed.' }
+          Get-ChildItem infra\*.bicepparam | ForEach-Object {
+              az bicep build-params --file $_.FullName --stdout | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Bicep parameter validation failed for $($_.Name)." }
+          }
+
+  workflow-lint:
+    name: Workflow lint
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run actionlint
+        shell: pwsh
+        run: |
+          $version = '1.7.7'
+          $expectedHash = '7F12F1801BCA3D480D67AAF7774F4C2A6359A3CA8EEBE382C95C10C9704AA731'
+          $archive = Join-Path $env:RUNNER_TEMP 'actionlint.zip'
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'actionlint'
+          Invoke-WebRequest -UseBasicParsing `
+              -Uri "https://github.com/rhysd/actionlint/releases/download/v$version/actionlint_${version}_windows_amd64.zip" `
+              -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash) {
+              throw 'The downloaded actionlint archive failed SHA256 verification.'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $toolRoot
+          & (Join-Path $toolRoot 'actionlint.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'actionlint reported workflow errors.' }

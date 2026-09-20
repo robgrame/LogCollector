@@ -57,11 +57,13 @@ internal static class TestCertificates
 
         var serial = new byte[8];
         RandomNumberGenerator.Fill(serial);
+        var requestedNotAfter = DateTimeOffset.UtcNow.AddYears(3);
+        var issuerNotAfter = new DateTimeOffset(issuer.NotAfter.ToUniversalTime()).AddMinutes(-1);
 
         using var issued = request.Create(
             issuer,
             DateTimeOffset.UtcNow.AddDays(-1),
-            DateTimeOffset.UtcNow.AddYears(3),
+            requestedNotAfter < issuerNotAfter ? requestedNotAfter : issuerNotAfter,
             serial);
 
         return issued.CopyWithPrivateKey(rsa);
@@ -119,11 +121,13 @@ internal static class TestCertificates
 
         var serial = new byte[8];
         RandomNumberGenerator.Fill(serial);
+        var requestedNotAfter = notAfter ?? DateTimeOffset.UtcNow.AddYears(1);
+        var issuerNotAfter = new DateTimeOffset(issuer.NotAfter.ToUniversalTime()).AddMinutes(-1);
 
         using var issued = request.Create(
             issuer,
             notBefore ?? DateTimeOffset.UtcNow.AddHours(-1),
-            notAfter ?? DateTimeOffset.UtcNow.AddYears(1),
+            requestedNotAfter < issuerNotAfter ? requestedNotAfter : issuerNotAfter,
             serial);
 
         // Reattach the private key: Create() returns a public-only certificate.
