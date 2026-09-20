@@ -528,6 +528,39 @@ Invoke-Pester -Path tests/Pester
 az bicep build --file infra/main.bicep --stdout
 ```
 
+## GitHub automation
+
+The repository includes GitHub Actions for .NET, isolated Pester and Bicep validation,
+CodeQL and NuGet vulnerability checks, customer-package validation, versioned releases,
+targeted Azure deployments, post-deployment ingestion probes and sanitized public snapshots.
+
+Azure deployment workflows use OpenID Connect and expect the `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` secrets. Configure approvals on the
+`production` environment before enabling deployments. Frontend deployment temporarily
+disables client-certificate enforcement only for the ZIP upload and restores and verifies
+the setting in an unconditional cleanup step. The positive ingestion probe runs
+only on a Windows self-hosted runner labelled `logcollector-e2e`, where the trusted client
+certificate and device identity are available. It is intentionally triggered through the
+default-branch-only `repository_dispatch` event:
+
+```powershell
+gh api repos/<owner>/<repository>/dispatches --method POST `
+  -f event_type=post-deploy-smoke `
+  -F 'client_payload[frontend_url]=https://<frontend>.azurewebsites.net/api/submit' `
+  -F 'client_payload[workspace_id]=<workspace-guid>' `
+  -F 'client_payload[timeout_minutes]=10'
+```
+
+Public snapshot publication uses the protected `public-release` environment and a
+`PUBLIC_SNAPSHOT_TOKEN` environment secret with access only to the target repository.
+Azure OIDC credentials must likewise be environment-scoped and federated specifically to
+the `production` environment; do not duplicate privileged credentials as repository
+secrets. Publication also requires a multiline `PUBLIC_RELEASE_DENY_LITERALS`
+environment secret containing at least one active, customer-specific deny literal.
+Pull-request and main-branch CI runs execute the built-in generic snapshot checks with a
+non-sensitive baseline policy; customer-specific literals are exposed only to the
+approval-protected publication job.
+
 Coverage focuses on the security and reliability surface rather than plumbing:
 
 - **xUnit** — canonical-string stability and golden vector; signature accept/tamper/wrong-key/
