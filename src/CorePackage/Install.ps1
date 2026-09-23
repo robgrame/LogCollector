@@ -22,7 +22,7 @@ Overrides the customer folder in Config.psd1. This is the <CustomerName> in
 %ProgramData%\<CustomerName>\<ApplicationName>\Logs, where Write-CMTraceLog writes.
 Intended for a single-machine test install.
 .NOTES
-Version 1.8.0.
+Version 1.8.1.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -32,11 +32,64 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.8.0'
+$packageVersion = '1.8.1'
 
+$logCustomerName = 'LogCollector'
+$logApplicationName = 'LogCollectorCore'
+$installPhase = 'Initialize'
+$timer = [Diagnostics.Stopwatch]::StartNew()
+$configPath = Join-Path $PSScriptRoot 'Config.psd1'
+$loggingModulePath = Join-Path $PSScriptRoot 'Modules\CMTraceLogging.psm1'
+if (-not (Test-Path -LiteralPath $loggingModulePath -PathType Leaf)) {
+    throw 'Incomplete package: Modules\CMTraceLogging.psm1 is missing.'
+}
+Import-Module $loggingModulePath -Force -ErrorAction Stop
+
+function Write-CoreInstallLog {
+    param(
+        [Parameter(Mandatory)] [string] $Message,
+        [ValidateSet('Info', 'Warning', 'Error')] [string] $Level = 'Info'
+    )
+
+    try {
+        Write-CMTraceLog -Message $Message -Level $Level -ApplicationName $logApplicationName `
+            -CustomerName $logCustomerName -Component $installPhase
+    }
+    catch {
+        Write-Warning "Core installer could not write its local diagnostic log: $($_.Exception.Message)"
+    }
+}
+
+trap {
+    $failure = $_
+    Write-CoreInstallLog -Level Error -Message (
+        "Install failed; Phase=$installPhase; Error=$($failure.Exception.Message); " +
+        "Position=$($failure.InvocationInfo.PositionMessage); Stack=$($failure.ScriptStackTrace)")
+    throw $failure
+}
+
+try {
+    $preflightConfig = Import-PowerShellDataFile -LiteralPath $configPath -ErrorAction Stop
+    $preflightCustomer = if ($CustomerName) { $CustomerName } else { [string] $preflightConfig.CustomerName }
+    $reservedNames = @('CON', 'PRN', 'AUX', 'NUL', 'CLOCK$',
+        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9')
+    if ($preflightCustomer -cmatch '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\z' -and
+        $preflightCustomer -cnotmatch '[. ]\z' -and
+        ($preflightCustomer -split '\.')[0].ToUpperInvariant() -notin $reservedNames) {
+        $logCustomerName = $preflightCustomer
+    }
+}
+catch {
+    Write-CoreInstallLog -Level Warning -Message (
+        "Preflight customer log path unavailable; using fallback CustomerName=$logCustomerName; " +
+        "ErrorType=$($_.Exception.GetType().Name).")
+}
+
+Write-CoreInstallLog -Message "Install started; PackageVersion=$packageVersion; ProcessId=$PID."
 if (-not [Environment]::Is64BitProcess) { throw 'Run this installer with 64-bit Windows PowerShell.' }
 
-$configPath = Join-Path $PSScriptRoot 'Config.psd1'
+$installPhase = 'LoadConfiguration'
 $config = Import-PowerShellDataFile -LiteralPath $configPath -ErrorAction Stop
 if ($config.PackageVersion -ne $packageVersion) {
     throw "Config.psd1 declares version '$($config.PackageVersion)' but this installer is $packageVersion; do not mix files from different packages."
@@ -60,8 +113,9 @@ if ($config.Contains('CustomerName') -and $config.CustomerName) {
             'characters, starting with a letter or digit, containing only letters, digits, space, dot, ' +
             'underscore or hyphen, not ending in a dot or space, and not a reserved Windows device name.')
     }
+    $logCustomerName = $name
 }
-
+$installPhase = 'ValidatePackage'
 $manifestPath = Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw "Incomplete package: Modules\LogCollector.Client.psd1 is missing."
@@ -76,6 +130,8 @@ Import-Module (Join-Path $PSScriptRoot 'Core.Provisioning.psm1') -Force -ErrorAc
 # endpoint that installs can never be one the client would later refuse.
 $endpointModule = Import-Module (Join-Path $PSScriptRoot 'Modules\EndpointConfiguration.psm1') -PassThru -Force -ErrorAction Stop
 & $endpointModule { param($Url) Assert-LogCollectorEndpoint -FrontendUrl ([Uri] $Url) } $config.FrontendUrl
+Write-CoreInstallLog -Message ("Configuration validated; Endpoint={0}; CustomerName={1}; SubmissionEnabled={2}." -f
+    $config.FrontendUrl, $logCustomerName, $config.SubmissionEnabled)
 
 $files = @('LogCollector.Client.psd1')
 foreach ($file in $manifest.FileList) { $files += (Split-Path $file -Leaf) }
@@ -103,6 +159,7 @@ if ([IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') -eq $target.TrimEnd('\'))
 }
 
 if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machine-wide')) {
+    $installPhase = 'PrepareModuleRoot'
     # Harden the parent too. Protecting only the version directory is not enough: a principal
     # holding create/delete-child rights on the parent can rename it away and put its own
     # directory at the same path, which SYSTEM-scheduled work would then import.
@@ -118,6 +175,7 @@ if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machi
     $stage = '{0}.staging-{1}' -f $target, ([guid]::NewGuid().ToString('N'))
     $retired = $null
     try {
+        $installPhase = 'StageFiles'
         $null = New-Item -ItemType Directory -Path $stage -Force -ErrorAction Stop
         Set-LogCollectorMachineAcl -Path $stage
         foreach ($file in $files) {
@@ -140,6 +198,7 @@ if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machi
             Move-Item -LiteralPath $target -Destination $retired -ErrorAction Stop
         }
         try {
+            $installPhase = 'ActivateModule'
             Move-Item -LiteralPath $stage -Destination $target -ErrorAction Stop
 
             Assert-LogCollectorMachineAcl -Path $target
@@ -155,6 +214,7 @@ if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machi
                     'PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
                 if ($config.Contains($key) -and $config[$key]) { $settings[$key] = $config[$key] }
             }
+            $installPhase = 'WriteConfiguration'
             $endpointPath = Join-Path $env:ProgramData 'LogCollector\Config\Endpoint.psd1'
             Write-LogCollectorEndpointConfiguration -Path $endpointPath -Configuration ([hashtable] $settings)
 
@@ -163,6 +223,7 @@ if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machi
             # the ACL check. Passed as an encoded command rather than a temporary script file:
             # writing a script into the elevated user's %TEMP% and then executing it lets a
             # same-user, medium-integrity process race the file between creation and execution.
+            $installPhase = 'VerifyInstallation'
             $machineModulePath = @(
                 (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules'),
                 (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules')
@@ -203,10 +264,14 @@ Write-Output (Get-LogCollectorEndpointConfiguration).FrontendUrl
                     # is impossible. Say so loudly: this needs manual recovery, and silently
                     # rethrowing would leave an unverified module live and look like a
                     # transient install failure.
+                    Write-CoreInstallLog -Level Error -Message (
+                        "Rollback failed; TargetOccupied=True; RetiredCopyPresent=True; Target=$target.")
                     throw ("Install failed and the previous version could not be restored: '$target' is still occupied " +
                         "by the rejected version and the known-good copy remains at '$retired'. Original error: $failure")
                 }
                 Move-Item -LiteralPath $retired -Destination $target -ErrorAction Stop
+                Write-CoreInstallLog -Level Warning -Message (
+                    "Rollback completed; PreviousVersionRestored=True; Target=$target.")
                 $retired = $null
             }
             throw $failure
@@ -222,8 +287,12 @@ Write-Output (Get-LogCollectorEndpointConfiguration).FrontendUrl
         Remove-Item -LiteralPath $retired -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    $installPhase = 'Completed'
+    Write-CoreInstallLog -Message ("Install completed; PackageVersion={0}; Target={1}; DurationMs={2}." -f
+        $packageVersion, $target, $timer.ElapsedMilliseconds)
     Write-Output "Installed LogCollector core $packageVersion at $target; endpoint $($config.FrontendUrl); SubmissionEnabled=$($config.SubmissionEnabled)."
     if (-not $config.SubmissionEnabled) {
         Write-Warning 'SubmissionEnabled is false: scripts will spool locally instead of delivering until it is enabled.'
     }
 }
+$timer.Stop()

@@ -13,7 +13,7 @@ BeforeAll {
         $package = Get-Variable -Name $variant -Scope Script -ValueOnly
         $text = Get-Content (Join-Path $package.PackagePath 'Detect.ps1') -Raw
         # Only redirect the installation root in this test copy. Hash and task checks stay intact.
-        $original = '$target = Join-Path ([Environment]::GetFolderPath(''ProgramFiles'')) ''LogCollector\CustomInventory\' + $package.PackageVersion + ''''
+        $original = '$target = Join-Path ([Environment]::GetFolderPath(''ProgramFiles'')) ''CustomInventory'''
         if (-not $text.Contains($original)) { throw 'Detection fixture cannot locate the installation root.' }
         $text.Replace($original, ('$target = ''' + $script:Installed.Replace("'", "''") + '''')) |
             Set-Content (Join-Path $TestDrive "$variant-Detect.ps1")

@@ -1,10 +1,10 @@
-# Custom Inventory 1.5.0 - distribuzione Intune Win32
+# Custom Inventory 1.6.0 - distribuzione Intune Win32
 
 Il pacchetto installa il collector hardware/software e tutti i moduli comuni.
 Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 Gli script originali cliente non vengono letti o modificati. Il modulo condiviso
-è alla versione 1.5.0, supporta `/api/submit` e l'esportazione offline del campione schema.
-Il pacchetto inventory passa a **1.5.0** per l'aggiornamento della dipendenza;
+è alla versione 1.8.1, supporta `/api/submit` e l'esportazione offline del campione schema.
+Il pacchetto inventory passa a **1.6.0** per il percorso di installazione stabile;
 mantiene compatibili endpoint e tabelle precedenti. Il logging introdotto in 1.4.5
 resta invariato (versioning Major.Minor.Build).
 
@@ -14,15 +14,14 @@ Usare Windows con Windows PowerShell 5.1 o PowerShell 7 e .NET Framework 4.7.2
 o successivo per il tool Microsoft. Non sono necessari privilegi amministrativi.
 Scaricare `IntuneWinAppUtil.exe` dal repository ufficiale
 [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool),
-consultando licenza e requisiti. La release usata per questo pacchetto e **1.8.7**.
-Il wrapper richiede un eseguibile locale: non scarica/esegue aggiornamenti automatici
-e non aggiunge il tool al payload dei dispositivi.
+consultando licenza e requisiti, e copiarlo in
+`tools\IntuneWinAppUtil\IntuneWinAppUtil.exe`. Il wrapper non scarica aggiornamenti,
+non aggiunge il tool al payload e verifica la firma Authenticode Microsoft prima di eseguirlo.
 
 Dalla root della repository:
 
 ```powershell
 .\scripts\Publish-IntuneWin32Package.ps1 `
-    -IntuneWinAppUtilPath 'C:\Tools\IntuneWinAppUtil.exe' `
     -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
     -Environment 'MSLabs'
 ```
@@ -34,10 +33,10 @@ Output predefiniti:
 
 | File/cartella | Utilizzo |
 |---|---|
-| `out\IntuneWin32\1.5.0\Output\Install.intunewin` | File da caricare nell'app Win32 |
-| `out\IntuneWin32\1.5.0\Detect.ps1` | Script da caricare nella detection rule |
-| `out\IntuneWin32\1.5.0\Intune-Deployment.md` | Copia di questa guida |
-| `out\IntuneWin32\1.5.0\Source\1.5.0` | Tutti i 16 file inclusi nel payload, configurazione e logger compresi |
+| `out\IntuneWin32\1.6.0\Output\Install.intunewin` | File da caricare nell'app Win32 |
+| `out\IntuneWin32\1.6.0\Detect.ps1` | Script da caricare nella detection rule |
+| `out\IntuneWin32\1.6.0\Intune-Deployment.md` | Copia di questa guida |
+| `out\IntuneWin32\1.6.0\Source\1.6.0` | Tutti i file inclusi nel payload, configurazione e logger compresi |
 
 Il comando restituisce SHA256 del pacchetto, ConfigurationSha256 e stato SubmissionEnabled. Source e Output
 sono separati: il tool non ingloba il proprio eseguibile o il file .intunewin.
@@ -64,18 +63,17 @@ Per personalizzare endpoint, selezione certificato, CA, tabelle o attivazione:
     -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
     -Environment 'MSLabs' -OutputRoot '.\out\Inventory-PilotConfig'
 
-# Modificare out\Inventory-PilotConfig\1.5.0\Config.psd1 con un editor.
+# Modificare out\Inventory-PilotConfig\1.6.0\Config.psd1 con un editor.
 # Impostare SubmissionEnabled = $true SOLO dopo la preparazione lato Azure.
 
 .\scripts\Publish-IntuneWin32Package.ps1 `
-    -IntuneWinAppUtilPath 'C:\Tools\IntuneWinAppUtil.exe' `
-    -ConfigurationPath '.\out\Inventory-PilotConfig\1.5.0\Config.psd1' `
+    -ConfigurationPath '.\out\Inventory-PilotConfig\1.6.0\Config.psd1' `
     -OutputRoot '.\out\IntuneWin32-Pilot02'
 ```
 
 ConfigurationPath importa solo dati PSD1, non gli script di quella cartella:
 il payload viene sempre costruito dai sorgenti correnti della repository.
-La versione della configurazione deve coincidere con 1.5.0. La configurazione
+La versione della configurazione deve coincidere con 1.6.0. La configurazione
 viene validata dallo stesso runtime dell'installer prima di chiamare il tool.
 Non inserire chiavi private o credenziali. I certificati non vengono esportati.
 Per PKI vedere `docs\pki-ca-policy.md`: filtri Root/SubCA e trust server sono distinti.
@@ -128,7 +126,7 @@ non garantisce di anticipare tutti i cicli IME. Riferimento:
 ## 3. Creazione dell'app
 
 Intune admin center > Apps > Windows > Add > **Windows app (Win32)**.
-Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inventory 1.5.0**.
+Caricare `Output\Install.intunewin`; nome suggerito: **MSLabs - LogCollector Custom Inventory**.
 
 | Impostazione Program | Valore |
 |---|---|
@@ -151,12 +149,17 @@ installata anche se nel frattempo l'app in Intune e' stata aggiornata a un pacch
 piu' recente):
 
 ```text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.5.0\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\CustomInventory\Uninstall.ps1"
 ```
 
-Aggiornare il numero di versione nel percorso a ogni release: l'Uninstall command deve
-puntare alla cartella versionata effettivamente installata (variabile `$target` in
-`Install.ps1`), non a `.\`.
+Il percorso non e' versionato (variabile `$target` in `Install.ps1`): l'Uninstall
+command sopra resta invariato tra una release e l'altra, non serve aggiornarlo
+a ogni pacchetto.
+
+Quando si migra da una release con percorso versionato (per esempio 1.3.4 o 1.5.0),
+disinstallare o supersedere prima la vecchia app e solo dopo installare 1.6.0. Il vecchio
+`Uninstall.ps1` rimuove gli stessi task `\LogCollector\` usati dalla nuova release; eseguirlo
+dopo l'installazione 1.6.0 lascerebbe i file nuovi presenti ma senza i task operativi.
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
 Per prove manuali da una console gia a 64 bit usare System32 al posto di Sysnative
@@ -231,8 +234,9 @@ SYSTEM, non soltanto come utente interattivo.
 
 ## 6. Comportamento installato e prova
 
-Percorso: `C:\Program Files\LogCollector\CustomInventory\1.5.0`
-(il codice usa il percorso Program Files del sistema, senza presupporre il disco C).
+Percorso: `C:\Program Files\CustomInventory`
+(il codice usa il percorso Program Files del sistema, senza presupporre il disco C;
+il percorso non e' versionato: un aggiornamento sovrascrive gli stessi file in place).
 
 | Task SYSTEM in `\LogCollector\` | Azione |
 |---|---|

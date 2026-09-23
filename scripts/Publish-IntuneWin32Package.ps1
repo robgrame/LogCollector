@@ -3,11 +3,11 @@
 .SYNOPSIS
 Builds a complete inventory Win32 package using Microsoft's local content prep tool.
 .NOTES
-Version 1.4.6. Does not install tasks, collect inventory, upload content or change Azure.
+Version 1.5.0. Does not install tasks, collect inventory, upload content or change Azure.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
 param(
-    [Parameter(Mandatory)] [string] $IntuneWinAppUtilPath,
+    [string] $IntuneWinAppUtilPath,
     [Parameter(Mandatory, ParameterSetName = 'Endpoint')] [Uri] $FrontendUrl,
     [Parameter(ParameterSetName = 'Endpoint')] [string] $Environment = '',
     [Parameter(Mandatory, ParameterSetName = 'Configuration')] [string] $ConfigurationPath,
@@ -17,8 +17,6 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $repo 'out\IntuneWin32' }
-$tool = Get-Item -LiteralPath $IntuneWinAppUtilPath -ErrorAction Stop
-if ($tool.PSIsContainer -or $tool.Extension -ne '.exe') { throw 'Supply the official IntuneWinAppUtil.exe file.' }
 $defaults = Import-PowerShellDataFile -LiteralPath (Join-Path $repo 'src\InventoryPackage\Config.psd1')
 $version = $defaults.PackageVersion
 $configurationFile = $null
@@ -31,6 +29,37 @@ $release = [IO.Path]::GetFullPath((Join-Path $OutputRoot $version))
 if ($release.Contains('"')) { throw 'Output paths must not contain double quotes.' }
 if (Test-Path -LiteralPath $release) { throw "Output already exists: $release. Choose a new OutputRoot; releases are never overwritten." }
 if (-not $PSCmdlet.ShouldProcess($release, 'Build the complete inventory .intunewin package')) { return }
+
+if ($PSBoundParameters.ContainsKey('IntuneWinAppUtilPath') -and $IntuneWinAppUtilPath) {
+    $tool = Get-Item -LiteralPath $IntuneWinAppUtilPath -ErrorAction Stop
+}
+else {
+    $toolsRoot = Join-Path $repo 'tools\IntuneWinAppUtil'
+    $found = @(
+        if (Test-Path -LiteralPath $toolsRoot -PathType Container) {
+            Get-ChildItem -LiteralPath $toolsRoot -Filter 'IntuneWinAppUtil.exe' -File -Recurse -ErrorAction SilentlyContinue
+        }
+    )
+    if ($found.Count -gt 1) {
+        throw ("Found $($found.Count) copies of IntuneWinAppUtil.exe under '$toolsRoot'; " +
+            'keep one or pass -IntuneWinAppUtilPath explicitly.')
+    }
+    $tool = if ($found.Count -eq 1) { $found[0] } else { $null }
+    if (-not $tool) {
+        $onPath = Get-Command 'IntuneWinAppUtil.exe' -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($onPath) { $tool = Get-Item -LiteralPath $onPath.Source }
+    }
+    if (-not $tool) {
+        throw ("IntuneWinAppUtil.exe was not found. Place it under '$toolsRoot', add it to PATH, " +
+            'or pass -IntuneWinAppUtilPath.')
+    }
+}
+if ($tool.PSIsContainer -or $tool.Extension -ne '.exe') { throw 'Supply the official IntuneWinAppUtil.exe file.' }
+$signature = Get-AuthenticodeSignature -LiteralPath $tool.FullName -ErrorAction Stop
+if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?i)O=Microsoft Corporation') {
+    throw "'$($tool.FullName)' must carry a valid Microsoft Corporation Authenticode signature."
+}
 
 $buildParameters = @{ OutputRoot = Join-Path $release 'Source' }
 if ($configurationFile) {

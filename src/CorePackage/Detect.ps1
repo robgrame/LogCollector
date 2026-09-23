@@ -4,13 +4,14 @@
 Intune detection script for the LogCollector core package.
 .DESCRIPTION
 Writes one line and exits 0 only when this exact version is installed, importable by name
-and configured. Anything else exits 1 with no output, which Intune reads as not installed.
+and configured. Anything else writes a non-sensitive reason code and exits 1, which Intune
+reads as not installed.
 
 Detection deliberately imports the module rather than only checking that files exist: the
 package's promise is that `Import-Module LogCollector.Client` works for any script, and a
 present-but-unimportable module would otherwise be reported as a healthy install.
 .NOTES
-Version 1.8.0.
+Version 1.8.1.
 #>
 [CmdletBinding()]
 param()
@@ -18,6 +19,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $expectedConfigurationBase64 = '__LOGCOLLECTOR_CORE_EXPECTED_CONFIGURATION_BASE64__'
+
+function Write-CoreDetectionFailure {
+    param([Parameter(Mandatory)] [string] $Reason)
+    Write-Output "LogCollector core not detected: $Reason"
+    exit 1
+}
 
 function Test-ExpectedLogCollectorConfiguration {
     param(
@@ -62,9 +69,11 @@ function Test-ExpectedLogCollectorConfiguration {
 }
 
 try {
-    $version = '1.8.0'
+    $version = '1.8.1'
     $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "WindowsPowerShell\Modules\LogCollector.Client\$version"
-    if (-not (Test-Path -LiteralPath $root -PathType Container)) { exit 1 }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        Write-CoreDetectionFailure -Reason 'ModuleDirectoryMissing'
+    }
 
     # Detection runs as SYSTEM and is about to import this code, so it must establish that
     # only administrators can have written it BEFORE loading anything. The check is inlined
@@ -93,30 +102,46 @@ try {
     }
     # The parent is included: create/delete-child rights there allow the whole version
     # directory to be swapped for another, whatever the version directory's own ACL says.
-    if (-not (Test-TrustedPath -Path (Split-Path $root -Parent))) { exit 1 }
-    if (-not (Test-TrustedPath -Path $root)) { exit 1 }
+    if (-not (Test-TrustedPath -Path (Split-Path $root -Parent))) {
+        Write-CoreDetectionFailure -Reason 'ModuleParentAclMismatch'
+    }
+    if (-not (Test-TrustedPath -Path $root)) {
+        Write-CoreDetectionFailure -Reason 'ModuleDirectoryAclMismatch'
+    }
     foreach ($item in @(Get-ChildItem -LiteralPath $root -Recurse -Force)) {
-        if (-not (Test-TrustedPath -Path $item.FullName)) { exit 1 }
+        if (-not (Test-TrustedPath -Path $item.FullName)) {
+            Write-CoreDetectionFailure -Reason 'ModuleContentAclMismatch'
+        }
     }
 
     $manifestPath = Join-Path $root 'LogCollector.Client.psd1'
-    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { exit 1 }
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        Write-CoreDetectionFailure -Reason 'ModuleManifestMissing'
+    }
     $manifest = Test-ModuleManifest -Path $manifestPath -ErrorAction Stop
-    if ($manifest.Version.ToString() -ne $version) { exit 1 }
+    if ($manifest.Version.ToString() -ne $version) {
+        Write-CoreDetectionFailure -Reason 'ModuleVersionMismatch'
+    }
 
     # Derived from the manifest rather than hard-coded, so adding a module file cannot leave
     # detection reporting a healthy install of an incomplete one.
     foreach ($file in $manifest.FileList) {
-        if (-not (Test-Path -LiteralPath (Join-Path $root (Split-Path $file -Leaf)) -PathType Leaf)) { exit 1 }
+        if (-not (Test-Path -LiteralPath (Join-Path $root (Split-Path $file -Leaf)) -PathType Leaf)) {
+            Write-CoreDetectionFailure -Reason 'ModuleFileMissing'
+        }
     }
 
     $configuration = Join-Path $env:ProgramData 'LogCollector\Config\Endpoint.psd1'
-    if (-not (Test-Path -LiteralPath $configuration -PathType Leaf)) { exit 1 }
+    if (-not (Test-Path -LiteralPath $configuration -PathType Leaf)) {
+        Write-CoreDetectionFailure -Reason 'EndpointConfigurationMissing'
+    }
 
     Import-Module $manifestPath -Force -ErrorAction Stop
     foreach ($command in @('Send-LogAnalyticsData', 'Send-LogCollectorData', 'Get-LogCollectorEndpointConfiguration',
             'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName')) {
-        if (-not (Get-Command $command -Module LogCollector.Client -ErrorAction SilentlyContinue)) { exit 1 }
+        if (-not (Get-Command $command -Module LogCollector.Client -ErrorAction SilentlyContinue)) {
+            Write-CoreDetectionFailure -Reason 'ModuleCommandMissing'
+        }
     }
     # Reads through the ACL check, so a configuration a user could have rewritten is not
     # reported as installed and Intune remediates it.
@@ -127,16 +152,16 @@ try {
         $expectedConfiguration = $expectedJson | ConvertFrom-Json -ErrorAction Stop
         if (-not (Test-ExpectedLogCollectorConfiguration -Actual $installedConfiguration `
                     -Expected $expectedConfiguration)) {
-            exit 1
+            Write-CoreDetectionFailure -Reason 'ConfigurationMismatch'
         }
     }
 
     $endpoint = $installedConfiguration.FrontendUrl
-    if (-not $endpoint) { exit 1 }
+    if (-not $endpoint) { Write-CoreDetectionFailure -Reason 'EndpointMissing' }
 
     Write-Output "LogCollector core $version installed; endpoint $endpoint."
     exit 0
 }
 catch {
-    exit 1
+    Write-CoreDetectionFailure -Reason "DetectionError=$($_.Exception.GetType().Name)"
 }

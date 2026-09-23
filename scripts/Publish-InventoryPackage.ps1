@@ -3,7 +3,7 @@
 .SYNOPSIS
 Creates a customer-neutral inventory folder with the shared client and deployment configuration.
 .NOTES
-Version 1.4.6. No customer source, device inventory, certificates or Azure credentials are read.
+Version 1.4.7. No customer source, device inventory, certificates or Azure credentials are read.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
 param(
@@ -56,7 +56,9 @@ $files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1',
 $client = Join-Path $repo 'src\Client'
 Import-Module (Join-Path $client 'LogCollector.Client.psd1') -ErrorAction Stop
 $null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl
-$manifest = Test-ModuleManifest -Path (Join-Path $client 'LogCollector.Client.psd1') -ErrorAction Stop
+$manifestPath = Join-Path $client 'LogCollector.Client.psd1'
+$manifestData = Import-PowerShellDataFile -LiteralPath $manifestPath
+$null = Test-ModuleManifest -Path $manifestPath -ErrorAction Stop
 foreach ($file in $files) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file) -PathType Leaf)) { throw "Missing package source: $file" }
 }
@@ -64,9 +66,10 @@ if (Test-Path -LiteralPath $target) { throw "Output already exists: $target. Use
 if ($PSCmdlet.ShouldProcess($target, 'Create ready-to-package universal inventory folder')) {
     $null = New-Item -ItemType Directory -Path (Join-Path $target 'Modules') -Force
     foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $source $file) -Destination (Join-Path $target $file) }
-    foreach ($file in $manifest.FileList) {
-        $name = Split-Path $file -Leaf
-        Copy-Item -LiteralPath (Join-Path $client $name) -Destination (Join-Path $target "Modules\$name")
+    foreach ($file in $manifestData.FileList) {
+        $destination = Join-Path $target "Modules\$file"
+        $null = New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force
+        Copy-Item -LiteralPath (Join-Path $client $file) -Destination $destination
     }
     $configLines = @('@{')
     foreach ($key in @($config.Keys | Sort-Object)) {

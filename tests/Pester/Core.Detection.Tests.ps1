@@ -35,7 +35,7 @@ BeforeAll {
         Environment                   = 'Production'
         CustomerName                  = 'Example'
         SubmissionEnabled             = $true
-        PackageVersion                = '1.8.0'
+        PackageVersion                = '1.8.1'
         CertificateThumbprint         = ''
         CertificateSubjectLike        = ''
         CertificateIssuerLike         = ''
@@ -94,6 +94,14 @@ Describe 'Core package configuration-bound detection' {
         $script:GeneratorText | Should -Match ([regex]::Escape(
                 '$coreDetection = $coreDetection.Replace($coreDetectionMarker, $coreDetectionPayload)'))
         $script:GeneratorText | Should -Match 'Core detection template is missing its expected-configuration marker'
+    }
+
+    It 'emits non-sensitive reason codes when detection fails' {
+        $text = Get-Content -LiteralPath $script:DetectionPath -Raw
+        $text | Should -Match 'function Write-CoreDetectionFailure'
+        $text | Should -Match "Write-CoreDetectionFailure -Reason 'ConfigurationMismatch'"
+        $text | Should -Match "Write-CoreDetectionFailure -Reason 'ModuleDirectoryAclMismatch'"
+        $text | Should -Not -Match 'Write-CoreDetectionFailure -Reason .*(FrontendUrl|CertificateThumbprint)'
     }
 
     It 'matches the exact generated configuration' {

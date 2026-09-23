@@ -32,7 +32,12 @@ function New-InventoryDiagnosticSink { param($Context); throw 'Logger must be mo
 Export-ModuleMember -Function New-InventoryLogContext, Write-InventoryLog, Write-InventoryLogFailure, New-InventoryDiagnosticSink
 '@ | Set-Content (Join-Path $script:Fixture 'Inventory.Logging.psm1')
     # Only the elevation directive is removed in this isolated fixture. All system mutations are mocked.
-    (Get-Content (Join-Path $script:Source 'Install.ps1') -Raw).Replace('#Requires -RunAsAdministrator', '') |
+    $script:Installed = Join-Path $TestDrive 'Installed'
+    (Get-Content (Join-Path $script:Source 'Install.ps1') -Raw).
+        Replace('#Requires -RunAsAdministrator', '').
+        Replace(
+            '$target = Join-Path ([Environment]::GetFolderPath(''ProgramFiles'')) ''CustomInventory''',
+            ('$target = ''' + $script:Installed.Replace("'", "''") + '''')) |
         Set-Content (Join-Path $script:Fixture 'Install.ps1')
     Import-Module (Join-Path $script:Fixture 'Inventory.Runtime.psm1') -Force -ErrorAction Stop
     Import-Module (Join-Path $script:Fixture 'Inventory.Logging.psm1') -Force -ErrorAction Stop
@@ -222,7 +227,11 @@ Describe 'inventory package installer' {
         }
         Mock Disable-ScheduledTask {}
         Mock Copy-Item {}
-        Mock -ModuleName InventorySpool Assert-SpoolHierarchy { $true }
+        Mock -ModuleName InventorySpool Assert-SpoolHierarchy {
+            param($Path, $Directory, $AllowMissing, $Create)
+            if ($Create) { $null = New-Item -ItemType Directory -Path $Path -Force }
+            $true
+        }
         Mock New-InventoryLogContext { [pscustomobject]@{ RunId = 'test-run' } }
         Mock Write-InventoryLog {}
         Mock Write-InventoryLogFailure {}
@@ -257,7 +266,7 @@ Describe 'inventory package installer' {
     }
 
     It 'rejects an old configuration version before installation' {
-        $script:DefaultConfigText.Replace("PackageVersion = '1.5.0'", "PackageVersion = '1.0.0'") |
+        $script:DefaultConfigText.Replace("PackageVersion = '1.6.0'", "PackageVersion = '1.0.0'") |
             Set-Content $script:ConfigPath
         { & (Join-Path $script:Fixture 'Install.ps1') } | Should -Throw '*must match package version*'
         Should -Invoke Write-InventoryLogFailure -Times 1 -Exactly -ParameterFilter { $Stage -eq 'LoadConfiguration' }
@@ -308,7 +317,7 @@ Describe 'inventory distribution builder' {
         $output = Join-Path $TestDrive 'Distribution'
         $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
         $result.FileCount | Should -Be 18
-        $result.PackageVersion | Should -BeExactly '1.5.0'
+        $result.PackageVersion | Should -BeExactly '1.6.0'
         $result.SubmissionEnabled | Should -BeFalse
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.PackagePath 'Config.psd1')).Hash
         (Get-Content (Join-Path $result.PackagePath 'Detect.ps1') -Raw) | Should -Match $result.ConfigurationSha256
@@ -320,7 +329,7 @@ Describe 'inventory distribution builder' {
         $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
         @($copied.PkiRootCaThumbprints).Count | Should -Be 0
         (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
-            Should -BeExactly '1.8.0'
+            Should -BeExactly '1.8.1'
     }
 
     It 'escapes deployment configuration as data and supports alternative tables' {

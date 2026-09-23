@@ -17,6 +17,14 @@ AfterAll {
 Describe 'Intune Win32 package generation' {
     BeforeEach {
         $script:Output = Join-Path $TestDrive ([guid]::NewGuid().ToString() + ' output with spaces')
+        Mock Get-AuthenticodeSignature {
+            [pscustomobject]@{
+                Status = 'Valid'
+                SignerCertificate = [pscustomobject]@{
+                    Subject = 'CN=Microsoft Corporation, O=Microsoft Corporation, C=US'
+                }
+            }
+        }
         Mock Start-Process {
             param($FilePath, $ArgumentList)
             $destination = $ArgumentList[5].Trim('"')
@@ -94,6 +102,21 @@ Describe 'Intune Win32 package generation' {
             Should -Throw '*exit code 9*'
     }
 
+    It 'rejects a content prep tool not signed by Microsoft' {
+        Mock Get-AuthenticodeSignature {
+            [pscustomobject]@{
+                Status = 'Valid'
+                SignerCertificate = [pscustomobject]@{
+                    Subject = 'CN=Example Tool, O=Example Corporation, C=US'
+                }
+            }
+        }
+        { & $script:Builder -IntuneWinAppUtilPath $script:Tool `
+            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output } |
+            Should -Throw '*valid Microsoft Corporation Authenticode signature*'
+        Should -Invoke Start-Process -Times 0 -Exactly
+    }
+
     It 'rejects missing and empty artifacts even with native exit code zero' -ForEach @(
         @{ EmptyFile = $false }, @{ EmptyFile = $true }
     ) {
@@ -113,6 +136,14 @@ Describe 'Intune Win32 package generation' {
         & $script:Builder -IntuneWinAppUtilPath $script:Tool `
             -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output -WhatIf
         Test-Path $script:Output | Should -BeFalse
+        Should -Invoke Start-Process -Times 0 -Exactly
+    }
+
+    It 'does not require the content prep utility under WhatIf' {
+        & $script:Builder -IntuneWinAppUtilPath (Join-Path $TestDrive 'missing.exe') `
+            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output -WhatIf
+        Test-Path $script:Output | Should -BeFalse
+        Should -Invoke Get-AuthenticodeSignature -Times 0 -Exactly
         Should -Invoke Start-Process -Times 0 -Exactly
     }
 
