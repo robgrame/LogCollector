@@ -3,7 +3,7 @@
 Il pacchetto installa il collector hardware/software e tutti i moduli comuni.
 Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 Gli script originali cliente non vengono letti o modificati. Il modulo condiviso
-è alla versione 1.8.1, supporta `/api/submit` e l'esportazione offline del campione schema.
+è alla versione 1.8.2, supporta `/api/submit` e l'esportazione offline del campione schema.
 Il pacchetto inventory passa a **1.6.0** per il percorso di installazione stabile;
 mantiene compatibili endpoint e tabelle precedenti. Il logging introdotto in 1.4.5
 resta invariato (versioning Major.Minor.Build).

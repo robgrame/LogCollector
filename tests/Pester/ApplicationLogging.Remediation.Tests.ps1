@@ -50,7 +50,7 @@ Describe 'Application logging remediation scripts' {
         @{ Disposition = 'Deferred'; Delivered = $false; ShouldSucceed = $false }
     ) {
         $moduleRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString())
-        $versionRoot = Join-Path $moduleRoot '1.8.1'
+        $versionRoot = Join-Path $moduleRoot '1.8.2'
         $null = New-Item -ItemType Directory -Path $versionRoot -Force
         @'
 function Get-LogCollectorEndpointConfiguration {
@@ -85,8 +85,8 @@ function Write-SpoolFile {
 '@ | Set-Content -LiteralPath (Join-Path $versionRoot 'InventorySpool.psm1')
         @{
             RootModule = 'LogCollector.Client.psm1'
-            ModuleVersion = '1.8.1'
-            GUID = 'a0c19236-04bd-4dc5-8865-32dfa32d1637'
+            ModuleVersion = '1.8.2'
+            GUID = [guid]::NewGuid()
             FunctionsToExport = @('Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath',
                 'Send-LogCollectorData')
         } | ForEach-Object {

@@ -22,7 +22,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$minimumModuleVersion = [version] '1.8.1'
+$minimumModuleVersion = [version] '1.8.2'
 $scriptVersion = '1.0.0'
 
 if (-not [Environment]::Is64BitProcess) {

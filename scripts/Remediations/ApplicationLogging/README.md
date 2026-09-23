@@ -18,7 +18,7 @@ uses the secure defaults and does not pass these arguments.
 
 ## Prerequisite
 
-Deploy **MSLabs - LogCollector Core** 1.8.1 or later first. Its protected configuration must
+Deploy **MSLabs - LogCollector Core** 1.8.2 or later first. Its protected configuration must
 have `SubmissionEnabled = $true` and the Frontend endpoint must end in `/api/submit`.
 
 ## Intune configuration
@@ -59,6 +59,6 @@ the intake accepted all batches but downstream ingestion is incomplete or delaye
 If remediation fails, inspect its Intune output and the local Core configuration:
 
 ```powershell
-Import-Module LogCollector.Client -MinimumVersion 1.8.1
+Import-Module LogCollector.Client -MinimumVersion 1.8.2
 Get-LogCollectorEndpointConfiguration
 ```

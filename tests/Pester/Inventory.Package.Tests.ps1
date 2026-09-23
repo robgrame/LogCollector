@@ -329,7 +329,7 @@ Describe 'inventory distribution builder' {
         $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
         @($copied.PkiRootCaThumbprints).Count | Should -Be 0
         (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
-            Should -BeExactly '1.8.1'
+            Should -BeExactly '1.8.2'
     }
 
     It 'escapes deployment configuration as data and supports alternative tables' {

@@ -265,7 +265,7 @@ Package **1.4.5** also writes protected, bounded JSONL lifecycle, inventory and
 spool logs under `C:\ProgramData\LogCollector\Logs\CustomInventory`, using selected
 metadata rather than a transcript of payloads or HTTP response bodies.
 
-The current package source is **1.6.0** and includes shared client **1.8.1**, including schema-sample export.
+The current package source is **1.6.0** and includes shared client **1.8.2**, including schema-sample export.
 Existing installed packages remain compatible with their configured inventory endpoints and tables.
 The folder-only builder creates `out\Inventory\1.6.0`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
