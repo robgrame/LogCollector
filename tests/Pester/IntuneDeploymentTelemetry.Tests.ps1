@@ -208,6 +208,17 @@ Describe 'LogCollector delivery classification' {
 }
 
 Describe 'Provisioning and sensitive-data semantics' {
+    It 'detects the Intune policy identifier from the execution path when configuration is empty' {
+        $policyId = '22222222-2222-2222-2222-222222222222'
+        $identity = Get-IntunePolicyIdentity -ConfiguredPolicyId '' `
+            -ExecutingScriptPath "C:\Program Files (x86)\Microsoft Intune Management Extension\Policies\Scripts\$policyId`_1\$policyId`_1.ps1"
+
+        $identity.ConfiguredPolicyId | Should -BeNullOrEmpty
+        $identity.DetectedPolicyId | Should -Be $policyId
+        $identity.EffectivePolicyId | Should -Be $policyId
+        $identity.MatchStatus | Should -Be 'DetectedFromScriptPath'
+    }
+
     It 'returns non-zero only for an essential-operation failure' {
         Get-DeploymentTelemetryExitCode -EssentialOperationSucceeded $true | Should -Be 0
         Get-DeploymentTelemetryExitCode -EssentialOperationSucceeded $false | Should -Be 1
@@ -255,7 +266,7 @@ Describe 'IME evidence and delay classification' {
         $assignment = [datetime]::SpecifyKind([datetime]'2026-09-23T10:00:00', [DateTimeKind]::Utc)
         $collectionEnd = [datetime]::SpecifyKind([datetime]'2026-09-23T10:10:00', [DateTimeKind]::Utc)
         $evidence = Get-ImeLogEvidence -AssignmentUtc $assignment `
-            -CollectionEndUtc $collectionEnd -PolicyId '91652293-8a62-4ed5-90ff-19baa07c249c' `
+            -CollectionEndUtc $collectionEnd -PolicyId '22222222-2222-2222-2222-222222222222' `
             -MaximumPollTimestamps 10 -LogDirectoryPath $logDirectory
         $classification = Get-DeploymentDelayClassification -ImeEvidence $evidence `
             -MdmCycleCount 1 -AssignmentUtc $assignment

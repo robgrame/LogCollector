@@ -21,7 +21,7 @@ $TelemetryEndpoint = ''
 $LogCollectorTableName = 'IntuneDeploymentTelemetry_CL'
 $LogCollectorModuleMinimumVersion = '1.8.0'
 $AssignmentTimestampUtc = '2026-08-28T17:00:00Z'
-$IntunePolicyId = '91652293-8a62-4ed5-90ff-19baa07c249c'
+$IntunePolicyId = ''
 $EventLookbackHours = 72
 $MaximumMdmEvents = 20
 $MaximumImePollTimestamps = 100
@@ -35,7 +35,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$ScriptVersion = '1.6.1'
+$ScriptVersion = '1.6.2'
 $RegistryPath = 'HKLM:\SOFTWARE\Bigfix Tags\IntuneDeploymentTelemetry'
 $LogDirectory = Join-Path $env:ProgramData 'IntuneDeploymentTelemetry'
 $TranscriptPath = $null

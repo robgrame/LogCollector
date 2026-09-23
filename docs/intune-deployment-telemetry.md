@@ -1,9 +1,9 @@
 # Intune deployment telemetry
 
-`scripts\Intune-DeploymentTelemetry.ps1` is the source for Intune Platform
-Script policy `91652293-8a62-4ed5-90ff-19baa07c249c`. It runs non-interactively
-as `SYSTEM` in 64-bit Windows PowerShell 5.1 and collects Windows, MDM and Intune
-Management Extension timing evidence.
+`scripts\Intune-DeploymentTelemetry.ps1` is the source for the Intune Platform
+Script policy deployed by the operator. It runs non-interactively as `SYSTEM`
+in 64-bit Windows PowerShell 5.1 and collects Windows, MDM and Intune Management
+Extension timing evidence.
 
 Local evidence collection is the essential operation. Remote delivery is
 optional and fail-open: missing or failed telemetry never blocks Autopilot,
@@ -17,6 +17,7 @@ ESP, or Intune provisioning.
 | `TelemetryMode = 'Certificate'` | LogCollector Core 1.8.0 or later installed for the device. |
 | `TelemetryEndpoint` | Leave empty to use the protected machine-wide LogCollector configuration. An override must be an absolute HTTPS `/api/submit` URI and cannot contain credentials, a query string, or a fragment. |
 | `LogCollectorTableName` | Operator-approved custom table and DCR mapping. Default: `IntuneDeploymentTelemetry_CL`. |
+| `IntunePolicyId` | Leave empty to detect the policy identifier from the Intune execution path. Set an explicit GUID only when the host path does not expose it. |
 
 Certificate mode reuses `LogCollector.Client`. The module selects the device
 certificate from `LocalMachine`, signs the exact request body, sends through
