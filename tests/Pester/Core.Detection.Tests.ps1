@@ -2,6 +2,7 @@ BeforeAll {
     $script:RepoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:DetectionPath = Join-Path $script:RepoRoot 'src\CorePackage\Detect.ps1'
     $script:PublisherPath = Join-Path $script:RepoRoot 'scripts\Publish-CustomerDeliverable.ps1'
+    $script:GeneratorPath = Join-Path $script:RepoRoot 'scripts\New-IntunePackage.ps1'
 
     $tokens = $null
     $errors = $null
@@ -13,14 +14,9 @@ BeforeAll {
             $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
             $node.Name -eq 'Test-ExpectedLogCollectorConfiguration'
         }, $true)
-    Invoke-Expression $comparisonFunction.Extent.Text
+    . ([scriptblock]::Create($comparisonFunction.Extent.Text))
 
-    $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
-    $generatorMatch = [regex]::Match($publisherText,
-        "(?s)\`$intuneGenerator = @'\r?\n(.*?)\r?\n'@\r?\n" +
-        "\[IO\.File\]::WriteAllText\(\(Join-Path \`$intune 'New-IntunePackage\.ps1'\)")
-    if (-not $generatorMatch.Success) { throw 'Could not extract the generated New-IntunePackage.ps1 template.' }
-    $generatorText = $generatorMatch.Groups[1].Value
+    $generatorText = [IO.File]::ReadAllText($script:GeneratorPath)
     $script:GeneratorText = $generatorText
     $tokens = $null
     $errors = $null
@@ -32,7 +28,7 @@ BeforeAll {
             $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
             $node.Name -eq 'ConvertTo-CoreDetectionPayload'
         }, $true)
-    Invoke-Expression $payloadFunction.Extent.Text
+    . ([scriptblock]::Create($payloadFunction.Extent.Text))
 
     $script:Configuration = @{
         FrontendUrl                   = 'https://example.invalid/api/submit'
@@ -76,6 +72,20 @@ Describe 'Core package configuration-bound detection' {
         $publisherText | Should -Match 'CorePackageVersion\s*=\s*\$coreVersion'
         $publisherText | Should -Not -Match 'ClientPackageVersion'
         $publisherText | Should -Not -Match '\$clientVersion'
+    }
+
+    It 'copies the canonical generator instead of embedding a second implementation' {
+        $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
+        $publisherText | Should -Match ([regex]::Escape(
+                "Copy-Item -LiteralPath `$generatorSource -Destination (Join-Path `$intune 'New-IntunePackage.ps1')"))
+        $publisherText | Should -Not -Match '\$intuneGenerator\s*='
+    }
+
+    It 'preserves relative module paths when creating the customer deliverable' {
+        $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
+        $publisherText | Should -Match '\$moduleManifestData\s*=\s*Import-PowerShellDataFile'
+        $publisherText | Should -Match 'foreach\s*\(\$file in \$moduleManifestData\.FileList\)'
+        $publisherText | Should -Not -Match 'Split-Path \$file -Leaf'
     }
 
     It 'wires the generated payload into the staged Core detection script' {

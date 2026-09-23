@@ -19,7 +19,7 @@ Folder under which a versioned deliverable folder is created. Defaults to '<repo
 Bicep parameter file bundled as the deployment default. Defaults to
 'infra\logcollector.bicepparam'.
 .NOTES
-Version 1.0.1. Builds via dotnet publish; makes no changes to Azure resources and never
+Version 1.1.2. Builds via dotnet publish; makes no changes to Azure resources and never
 overwrites an existing deliverable.
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -93,7 +93,9 @@ if ($blob.Success) {
 foreach ($file in $coreFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $coreSource $file) -PathType Leaf)) { throw "Missing core package source: $file" }
 }
-$moduleManifest = Test-ModuleManifest -Path (Join-Path $clientModules 'LogCollector.Client.psd1') -ErrorAction Stop
+$moduleManifestPath = Join-Path $clientModules 'LogCollector.Client.psd1'
+$moduleManifestData = Import-PowerShellDataFile -LiteralPath $moduleManifestPath
+$moduleManifest = Test-ModuleManifest -Path $moduleManifestPath -ErrorAction Stop
 # The core installer refuses a module whose version differs from its own, so a mismatch must
 # fail while building the deliverable rather than on every device at install time.
 $coreVersion = (Import-PowerShellDataFile -LiteralPath (Join-Path $coreSource 'Config.psd1')).PackageVersion
@@ -118,239 +120,17 @@ $intune = Join-Path $target '2-Intune'
 $corePayload = Join-Path $intune 'CoreSource'
 $null = New-Item -ItemType Directory -Path (Join-Path $corePayload 'Modules') -Force
 foreach ($file in $coreFiles) { Copy-Item -LiteralPath (Join-Path $coreSource $file) -Destination (Join-Path $corePayload $file) }
-foreach ($file in $moduleManifest.FileList) {
-    $name = Split-Path $file -Leaf
-    Copy-Item -LiteralPath (Join-Path $clientModules $name) -Destination (Join-Path $corePayload "Modules\$name")
+foreach ($file in $moduleManifestData.FileList) {
+    $destination = Join-Path $corePayload "Modules\$file"
+    $null = New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force
+    Copy-Item -LiteralPath (Join-Path $clientModules $file) -Destination $destination -ErrorAction Stop
 }
 
-$intuneGenerator = @'
-#Requires -Version 5.1
-<#
-.SYNOPSIS
-Builds the shared LogCollector Core .intunewin package for deployment as an Intune Win32 app.
-.DESCRIPTION
-Self-contained: uses only the CoreSource folder shipped next to this script. The Core package
-installs LogCollector.Client and its protected endpoint configuration; it does not collect
-inventory, create scheduled tasks or package any application script.
-.PARAMETER IntuneWinAppUtilPath
-Path to Microsoft's IntuneWinAppUtil.exe (Microsoft Win32 Content Prep Tool). Optional: if
-omitted, the script looks for it in the 'Tools' folder next to this script (recursively),
-then on PATH. Simply dropping IntuneWinAppUtil.exe into '.\Tools\' is enough.
-The executable must carry a valid Authenticode signature issued to Microsoft Corporation.
-Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
-.PARAMETER FrontendUrl
-Intake endpoint, e.g. https://<prefix>-logcollector-intake.azurewebsites.net/api/submit.
-Printed by Deploy-LogCollector.ps1 as 'frontendIngestUrl'.
-.PARAMETER Environment
-Free-text environment tag recorded with every record (e.g. Production, Pilot).
-.PARAMETER CustomerName
-Customer folder used by Write-CMTraceLog, so every script on the device logs to
-%ProgramData%\<CustomerName>\<ApplicationName>\Logs. Defaults to 'LogCollector'.
-.EXAMPLE
-.\New-IntunePackage.ps1 -FrontendUrl https://example-logcollector-intake.azurewebsites.net/api/submit
-Uses .\Tools\IntuneWinAppUtil.exe and builds the Core package.
-.EXAMPLE
-.\New-IntunePackage.ps1 -IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe `
-  -FrontendUrl https://example-logcollector-intake.azurewebsites.net/api/submit `
-  -CustomerName ACIInformatica -Environment Production
-.NOTES
-The generated package collects nothing and registers no scheduled task.
-Existing output folders are never overwritten.
-#>
-[CmdletBinding(SupportsShouldProcess)]
-param(
-    [string] $IntuneWinAppUtilPath,
-    [Parameter(Mandatory)] [Uri] $FrontendUrl,
-    [string] $Environment = '',
-    [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')] [string] $CustomerName = 'LogCollector',
-    [string[]] $PkiRootCaThumbprints = @(),
-    [string[]] $PkiRootCaSubjects = @(),
-    [string[]] $PkiIntermediateCaThumbprints = @(),
-    [string[]] $PkiIntermediateCaSubjects = @(),
-    [ValidateNotNullOrEmpty()] [string] $OutputRoot
-)
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-
-if ($FrontendUrl.Scheme -ne 'https') {
-    throw "FrontendUrl must use https; '$($FrontendUrl.Scheme)' would send signed inventory in clear text."
+$generatorSource = Join-Path $PSScriptRoot 'New-IntunePackage.ps1'
+if (-not (Test-Path -LiteralPath $generatorSource -PathType Leaf)) {
+    throw "Missing Intune package generator source: $generatorSource"
 }
-# A reserved DOS device name is still reserved as a folder, so it would produce a package
-# that builds cleanly and then fails on every device the moment a script logs. Rejected
-# here, where the operator can still fix it, rather than at deployment time.
-if (($CustomerName -split '\.')[0].ToUpperInvariant() -in @('CON', 'PRN', 'AUX', 'NUL', 'CLOCK$',
-        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
-        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
-    throw "CustomerName '$CustomerName' is a reserved Windows device name and cannot be a log folder."
-}
-$coreSource = Join-Path $PSScriptRoot 'CoreSource'
-if (-not (Test-Path -LiteralPath $coreSource -PathType Container)) {
-    throw "CoreSource folder not found next to this script: $coreSource. Copy the whole 2-Intune folder, not just this script."
-}
-$coreFiles = @('Config.psd1', 'Core.Provisioning.psm1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
-if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $PSScriptRoot 'Output' }
-
-$moduleFiles = @('LogCollector.Client.psd1', 'LogCollector.Client.psm1', 'EndpointConfiguration.psm1',
-    'CMTraceLogging.psm1', 'DeviceIdentity.psm1', 'RequestSigning.psm1', 'InventoryClient.psm1', 'InventorySpool.psm1')
-foreach ($file in $coreFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $coreSource $file) -PathType Leaf)) { throw "Missing core package source: $file" }
-}
-foreach ($file in $moduleFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $coreSource "Modules\$file") -PathType Leaf)) { throw "Missing core package source: Modules\$file" }
-}
-
-if ($PSBoundParameters.ContainsKey('IntuneWinAppUtilPath') -and $IntuneWinAppUtilPath) {
-    $tool = Get-Item -LiteralPath $IntuneWinAppUtilPath -ErrorAction Stop
-}
-else {
-    # Convention over configuration: dropping the tool into .\Tools\ is enough. Searched
-    # recursively so an unzipped release folder works as-is. Ambiguity is never resolved by
-    # guessing: "v1.9" would sort above "v1.10", so two candidates are an error, not a choice.
-    $toolsRoot = Join-Path $PSScriptRoot 'Tools'
-    $tool = $null
-    if (Test-Path -LiteralPath $toolsRoot -PathType Container) {
-        $found = @(Get-ChildItem -LiteralPath $toolsRoot -Filter 'IntuneWinAppUtil.exe' -Recurse -File -ErrorAction SilentlyContinue)
-        if ($found.Count -gt 1) {
-            throw ("Found $($found.Count) copies of IntuneWinAppUtil.exe under '$toolsRoot'; " +
-                'keep only one or pass -IntuneWinAppUtilPath explicitly. Candidates: ' +
-                (($found | ForEach-Object { $_.FullName }) -join '; '))
-        }
-        if ($found.Count -eq 1) { $tool = $found[0] }
-    }
-    if (-not $tool) {
-        $onPath = Get-Command 'IntuneWinAppUtil.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($onPath) { $tool = Get-Item -LiteralPath $onPath.Source }
-    }
-    if (-not $tool) {
-        throw ("IntuneWinAppUtil.exe was not found. Place it in '$toolsRoot' (any subfolder), " +
-            'add it to PATH, or pass -IntuneWinAppUtilPath. Download it from ' +
-            'https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool')
-    }
-    Write-Verbose "Using content prep tool: $($tool.FullName)"
-}
-if ($tool.PSIsContainer -or $tool.Extension -ne '.exe') { throw 'Supply the official IntuneWinAppUtil.exe file.' }
-
-# This executable is about to be run, and with discovery it may not have been chosen by hand,
-# so an .exe extension is not evidence of anything. Require a valid Microsoft signature.
-$signature = Get-AuthenticodeSignature -LiteralPath $tool.FullName -ErrorAction Stop
-if ($signature.Status -ne 'Valid') {
-    throw ("'$($tool.FullName)' does not carry a valid Authenticode signature (status: " +
-        "$($signature.Status)). Download the official tool from " +
-        'https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool')
-}
-$signer = $signature.SignerCertificate.Subject
-if ($signer -notmatch '(?i)O=Microsoft Corporation') {
-    throw "'$($tool.FullName)' is signed by '$signer', not by Microsoft Corporation; refusing to run it."
-}
-Write-Verbose "Content prep tool signature verified: $signer"
-
-$coreConfig = Import-PowerShellDataFile -LiteralPath (Join-Path $coreSource 'Config.psd1')
-$coreVersion = $coreConfig.PackageVersion
-$coreConfig.FrontendUrl = $FrontendUrl.AbsoluteUri
-$coreConfig.Environment = $Environment
-$coreConfig.CustomerName = $CustomerName
-$coreConfig.SubmissionEnabled = $true
-$coreConfig.PkiRootCaThumbprints = $PkiRootCaThumbprints
-$coreConfig.PkiRootCaSubjects = $PkiRootCaSubjects
-$coreConfig.PkiIntermediateCaThumbprints = $PkiIntermediateCaThumbprints
-$coreConfig.PkiIntermediateCaSubjects = $PkiIntermediateCaSubjects
-foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
-    foreach ($entry in $coreConfig[$key]) {
-        if ([string]::IsNullOrWhiteSpace($entry)) { throw "$key contains an empty entry." }
-        if ($key -like '*Thumbprints' -and ($entry -replace '[\s:]', '') -notmatch '^[0-9a-fA-F]{40}$') {
-            throw "$key entries must be SHA1 certificate thumbprints (40 hexadecimal digits)."
-        }
-    }
-}
-
-$release = [IO.Path]::GetFullPath((Join-Path ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)) $coreVersion))
-if ($release.Contains('"')) { throw 'Output paths must not contain double quotes.' }
-if (Test-Path -LiteralPath $release) { throw "Output already exists: $release. Choose a new OutputRoot; releases are never overwritten." }
-if (-not $PSCmdlet.ShouldProcess($release, 'Build the LogCollector Core .intunewin package')) { return }
-
-# Rewrite Config.psd1 deterministically so its hash matches what Detect.ps1 will look for.
-function ConvertTo-ConfigurationText {
-    param([Parameter(Mandatory)] [hashtable] $Configuration)
-    $lines = @('@{')
-    foreach ($key in @($Configuration.Keys | Sort-Object)) {
-        $value = $Configuration[$key]
-        if ($value -is [bool]) { $literal = '$' + $value.ToString().ToLowerInvariant() }
-        elseif ($value -is [int]) { $literal = $value.ToString([Globalization.CultureInfo]::InvariantCulture) }
-        elseif ($value -is [string]) { $literal = "'" + $value.Replace("'", "''") + "'" }
-        elseif ($value -is [array]) {
-            $items = @($value | ForEach-Object {
-                if ($_ -isnot [string]) { throw "Only strings are supported in configuration array $key." }
-                "'" + $_.Replace("'", "''") + "'"
-            })
-            $literal = '@(' + ($items -join ', ') + ')'
-        }
-        else { throw "Unsupported configuration value type for $key." }
-        $lines += "    $key = $literal"
-    }
-    $lines += '}'
-    return ($lines -join "`r`n")
-}
-function ConvertTo-CoreDetectionPayload {
-    param([Parameter(Mandatory)] [hashtable] $Configuration)
-
-    $expected = [ordered] @{}
-    foreach ($key in @('FrontendUrl', 'Environment', 'CustomerName', 'SubmissionEnabled', 'PackageVersion',
-            'CertificateThumbprint', 'CertificateSubjectLike', 'CertificateIssuerLike',
-            'PkiRootCaThumbprints', 'PkiRootCaSubjects',
-            'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
-        if (-not $Configuration.Contains($key)) {
-            throw "Core configuration does not define required detection value '$key'."
-        }
-        $expected[$key] = $Configuration[$key]
-    }
-
-    $json = [pscustomobject] $expected | ConvertTo-Json -Depth 4 -Compress
-    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-}
-$coreStaging = Join-Path $release 'Source'
-$null = New-Item -ItemType Directory -Path (Join-Path $coreStaging 'Modules') -Force
-foreach ($file in $coreFiles) {
-    Copy-Item -LiteralPath (Join-Path $coreSource $file) -Destination (Join-Path $coreStaging $file) -ErrorAction Stop
-}
-foreach ($file in $moduleFiles) {
-    Copy-Item -LiteralPath (Join-Path $coreSource "Modules\$file") -Destination (Join-Path $coreStaging "Modules\$file") -ErrorAction Stop
-}
-$coreConfigPath = Join-Path $coreStaging 'Config.psd1'
-[IO.File]::WriteAllText($coreConfigPath, (ConvertTo-ConfigurationText -Configuration $coreConfig), [Text.UTF8Encoding]::new($false))
-$coreDetectionPath = Join-Path $coreStaging 'Detect.ps1'
-$coreDetection = [IO.File]::ReadAllText($coreDetectionPath)
-$coreDetectionMarker = '__LOGCOLLECTOR_CORE_EXPECTED_CONFIGURATION_BASE64__'
-if (-not $coreDetection.Contains($coreDetectionMarker)) {
-    throw 'Core detection template is missing its expected-configuration marker.'
-}
-$coreDetectionPayload = ConvertTo-CoreDetectionPayload -Configuration $coreConfig
-$coreDetection = $coreDetection.Replace($coreDetectionMarker, $coreDetectionPayload)
-[IO.File]::WriteAllText($coreDetectionPath, $coreDetection, [Text.UTF8Encoding]::new($false))
-$null = Test-ModuleManifest -Path (Join-Path $coreStaging 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
-
-$coreOutput = Join-Path $release 'Package'
-$null = New-Item -ItemType Directory -Path $coreOutput -Force
-$coreArguments = @('-c', ('"{0}"' -f $coreStaging), '-s', 'Install.ps1', '-o', ('"{0}"' -f $coreOutput), '-qq')
-$coreProcess = Start-Process -FilePath $tool.FullName -ArgumentList $coreArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
-if ($coreProcess.ExitCode -ne 0) { throw "IntuneWinAppUtil failed for the core package with exit code $($coreProcess.ExitCode). Output retained at $release." }
-$coreArtifact = Join-Path $coreOutput 'Install.intunewin'
-if (-not (Test-Path -LiteralPath $coreArtifact -PathType Leaf) -or (Get-Item -LiteralPath $coreArtifact).Length -eq 0) {
-    throw "IntuneWinAppUtil produced no nonempty core Install.intunewin. Output retained at $release."
-}
-Copy-Item -LiteralPath (Join-Path $coreStaging 'Detect.ps1') -Destination (Join-Path $release 'Detect.ps1')
-[pscustomobject]@{
-    PackageVersion   = $coreVersion
-    IntuneWinPackage = $coreArtifact
-    PackageSha256    = (Get-FileHash -LiteralPath $coreArtifact -Algorithm SHA256).Hash
-    DetectionScript  = Join-Path $release 'Detect.ps1'
-    ConfigurationSha256 = (Get-FileHash -LiteralPath $coreConfigPath -Algorithm SHA256).Hash
-    InstallCommand   = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"'
-    UninstallCommand = ('"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' +
-        '"%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\{0}\Uninstall.ps1"') -f $coreVersion
-    ContentPrepTool = $tool.FullName
-}
-'@
-[IO.File]::WriteAllText((Join-Path $intune 'New-IntunePackage.ps1'), $intuneGenerator, [Text.UTF8Encoding]::new($false))
+Copy-Item -LiteralPath $generatorSource -Destination (Join-Path $intune 'New-IntunePackage.ps1') -ErrorAction Stop
 
 # Microsoft's content prep tool cannot be redistributed, so ship the drop location and the
 # instructions instead: New-IntunePackage.ps1 searches this folder recursively.
