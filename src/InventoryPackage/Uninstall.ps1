@@ -1,17 +1,25 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
-# Version 1.6.0. Logs lifecycle; removes only tasks, never retained data or logs.
+# Version 1.6.1. Logs lifecycle; removes only tasks, never retained data or logs.
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
+$packageVersion = '1.6.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     if (-not $WhatIfPreference) {
-        $log = New-InventoryLogContext -Component Install
-        Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.6.0'; Mode = 'Uninstall' }
+        $log = Initialize-InventoryLogContext -Component Install -PackageVersion $packageVersion
+        if ($log) {
+            $startData = @{ PackageVersion = $packageVersion; Mode = 'Uninstall' }
+            if ($log.FallbackUsed) {
+                $startData.ExceptionType = $log.PrimaryExceptionType
+                $startData.HResult = $log.PrimaryHResult
+            }
+            Write-InventoryLog -Context $log -Event RunStarted -Data $startData
+        }
     }
     $stage = 'RemoveTasks'
     $names = @('LogCollector-CustomInventory', 'LogCollector-CustomInventory-Spool')

@@ -3,29 +3,41 @@
 .SYNOPSIS
 Runs custom inventory using the destinations supplied in Config.psd1.
 .NOTES
-Version 1.6.0. Protected metadata-only diagnostics for each run.
+Version 1.6.1. Protected metadata-only diagnostics for each run.
 #>
 [CmdletBinding()]
 param([switch] $Preview, [switch] $QueueOnly)
 $ErrorActionPreference = 'Stop'
+$packageVersion = '1.6.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
-    $log = New-InventoryLogContext -Component Inventory
+    $log = Initialize-InventoryLogContext -Component Inventory -PackageVersion $packageVersion
     $mode = if ($Preview) { 'Preview' } elseif ($QueueOnly) { 'QueueOnly' } else { 'Live' }
-    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.6.0'; Mode = $mode }
+    if ($log) {
+        $startData = @{ PackageVersion = $packageVersion; Mode = $mode }
+        if ($log.FallbackUsed) {
+            $startData.ExceptionType = $log.PrimaryExceptionType
+            $startData.HResult = $log.PrimaryHResult
+        }
+        Write-InventoryLog -Context $log -Event RunStarted -Data $startData
+    }
     if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell so both registry views are collected.' }
     $stage = 'ImportRuntime'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
-    $sink = New-InventoryDiagnosticSink -Context $log
+    $sink = if ($log) { New-InventoryDiagnosticSink -Context $log } else { $null }
     $stage = 'CollectAndSend'
     $results = @(Invoke-InventoryRun -ConfigPath (Join-Path $PSScriptRoot 'Config.psd1') `
             -Preview:$Preview -QueueOnly:$QueueOnly -DiagnosticSink $sink)
     $results | Write-Output
     $failed = @($results | Where-Object Disposition -NotIn @('Delivered', 'Deferred', 'Preview')).Count -gt 0
-    Write-InventoryLog -Context $log -Event RunCompleted -Data @{ Stopped = $failed; DurationMs = $timer.ElapsedMilliseconds }
+    if ($log) {
+        Write-InventoryLog -Context $log -Event RunCompleted -Data @{
+            Stopped = $failed; DurationMs = $timer.ElapsedMilliseconds
+        }
+    }
     if ($failed) { exit 1 }
 }
 catch {

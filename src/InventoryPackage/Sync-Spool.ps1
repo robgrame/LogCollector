@@ -1,23 +1,34 @@
 #Requires -Version 5.1
-# Version 1.6.0. Protected metadata-only spool diagnostics; no new collection.
+# Version 1.6.1. Protected metadata-only spool diagnostics; no new collection.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
+$packageVersion = '1.6.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
-    $log = New-InventoryLogContext -Component Spool
-    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.6.0'; Mode = 'Drain' }
+    $log = Initialize-InventoryLogContext -Component Spool -PackageVersion $packageVersion
+    if ($log) {
+        $startData = @{ PackageVersion = $packageVersion; Mode = 'Drain' }
+        if ($log.FallbackUsed) {
+            $startData.ExceptionType = $log.PrimaryExceptionType
+            $startData.HResult = $log.PrimaryHResult
+        }
+        Write-InventoryLog -Context $log -Event RunStarted -Data $startData
+    }
     $stage = 'ImportRuntime'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
     $stage = 'Drain'
-    $result = Invoke-InventoryDrain -ConfigPath (Join-Path $PSScriptRoot 'Config.psd1') -DiagnosticSink (New-InventoryDiagnosticSink -Context $log)
+    $sink = if ($log) { New-InventoryDiagnosticSink -Context $log } else { $null }
+    $result = Invoke-InventoryDrain -ConfigPath (Join-Path $PSScriptRoot 'Config.psd1') -DiagnosticSink $sink
     $result
-    Write-InventoryLog -Context $log -Event RunCompleted -Data @{
-        Delivered = $result.Delivered; Quarantined = $result.Quarantined; Remaining = $result.Remaining
-        Stopped = $result.Stopped; DurationMs = $timer.ElapsedMilliseconds
+    if ($log) {
+        Write-InventoryLog -Context $log -Event RunCompleted -Data @{
+            Delivered = $result.Delivered; Quarantined = $result.Quarantined; Remaining = $result.Remaining
+            Stopped = $result.Stopped; DurationMs = $timer.ElapsedMilliseconds
+        }
     }
     if ($result.Stopped -or $result.Quarantined -gt 0) { exit 1 }
 }

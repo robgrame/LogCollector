@@ -31,12 +31,12 @@ Describe 'Inventory logging isolated filesystem unit tests' {
         }
     }
 
-    It 'exports only the four API functions and does not initialize or import the guard on import' -Tag Adapters {
+    It 'exports only the five API functions and does not initialize or import the guard on import' -Tag Adapters {
         $before = @(Get-ChildItem -LiteralPath $TestDrive -Recurse -Force).Count
         Import-Module $script:LoggerPath -Force
         @(Get-ChildItem -LiteralPath $TestDrive -Recurse -Force).Count | Should -Be $before
         $exports = @((Get-Module Inventory.Logging).ExportedFunctions.Keys | Sort-Object)
-        ($exports -join ',') | Should -Be 'New-InventoryDiagnosticSink,New-InventoryLogContext,Write-InventoryLog,Write-InventoryLogFailure'
+        ($exports -join ',') | Should -Be 'Initialize-InventoryLogContext,New-InventoryDiagnosticSink,New-InventoryLogContext,Write-InventoryLog,Write-InventoryLogFailure'
         InModuleScope Inventory.Logging { $script:LogGuard | Should -BeNullOrEmpty }
     }
 
@@ -53,6 +53,35 @@ Describe 'Inventory logging isolated filesystem unit tests' {
         }
         Should -Invoke -ModuleName InventorySpool Assert-SpoolHierarchy -ParameterFilter { $Directory -and $Create } -Times 3 -Exactly
         Should -Invoke -ModuleName InventorySpool New-SpoolFileStream -Times 6 -Exactly
+    }
+
+    It 'uses a protected versioned fallback when the primary path is rejected' {
+        $primary = Join-Path $TestDrive 'unsafe-primary'
+        $fallback = Join-Path $TestDrive 'safe-fallback'
+        Set-Content -LiteralPath $primary -Value 'blocks directory creation'
+        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.6.1' `
+            -PrimaryDirectory $primary -FallbackDirectory $fallback -WarningAction SilentlyContinue
+        $context.Directory | Should -Be $fallback
+        $context.FallbackUsed | Should -BeTrue
+        $context.PrimaryExceptionType | Should -Not -BeNullOrEmpty
+        Write-InventoryLog -Context $context -Event RunStarted -Data @{
+            PackageVersion = '1.6.1'; Mode = 'InstallFallbackLog'
+            ExceptionType = $context.PrimaryExceptionType; HResult = $context.PrimaryHResult
+        }
+        $record = [IO.File]::ReadAllText($context.Path) | ConvertFrom-Json
+        $record.Event | Should -Be RunStarted
+        $record.Data.Mode | Should -Be InstallFallbackLog
+        $record.Data.ExceptionType | Should -Be $context.PrimaryExceptionType
+        $record.Data.HResult | Should -Be $context.PrimaryHResult
+    }
+
+    It 'returns null when both protected log paths are unavailable' {
+        Mock -ModuleName Inventory.Logging New-InventoryLogContext { throw 'unavailable' }
+        $context = Initialize-InventoryLogContext -Component Inventory -PackageVersion '1.6.1' `
+            -PrimaryDirectory (Join-Path $TestDrive 'primary') `
+            -FallbackDirectory (Join-Path $TestDrive 'fallback') -WarningAction SilentlyContinue
+        $context | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName Inventory.Logging New-InventoryLogContext -Times 2 -Exactly
     }
 
     It 'returns only a positional callback with captured context and writer command' -Tag Adapters {

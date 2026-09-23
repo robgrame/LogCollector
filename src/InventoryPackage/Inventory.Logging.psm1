@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.6.0. Protected, bounded metadata-only diagnostics; no activity on import.
+# Version 1.6.1. Protected, bounded metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 
 $script:LogGuard = $null
@@ -272,6 +272,51 @@ function New-InventoryLogContext {
     return $context
 }
 
+function Initialize-InventoryLogContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('Install', 'Inventory', 'Spool')] [string] $Component,
+        [Parameter(Mandatory)] [ValidatePattern('^\d+\.\d+\.\d+$')] [string] $PackageVersion,
+        [string] $PrimaryDirectory,
+        [string] $FallbackDirectory
+    )
+
+    if (-not $PSBoundParameters.ContainsKey('PrimaryDirectory')) {
+        $PrimaryDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+            'LogCollector\Logs\CustomInventory'
+    }
+    if (-not $PSBoundParameters.ContainsKey('FallbackDirectory')) {
+        $FallbackDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+            "LogCollector\Logs\CustomInventory-$PackageVersion"
+    }
+    try {
+        $context = New-InventoryLogContext -Component $Component -Directory $PrimaryDirectory
+        $context | Add-Member -NotePropertyName FallbackUsed -NotePropertyValue $false
+        return $context
+    }
+    catch {
+        $primaryFailure = $_
+        try {
+            $context = New-InventoryLogContext -Component $Component -Directory $FallbackDirectory
+            $context | Add-Member -NotePropertyName FallbackUsed -NotePropertyValue $true
+            $context | Add-Member -NotePropertyName PrimaryExceptionType `
+                -NotePropertyValue $primaryFailure.Exception.GetType().FullName
+            $context | Add-Member -NotePropertyName PrimaryHResult `
+                -NotePropertyValue $primaryFailure.Exception.HResult
+            Write-Warning ("Primary inventory lifecycle log is unavailable; using the protected versioned fallback. " +
+                "ExceptionType=$($primaryFailure.Exception.GetType().FullName); " +
+                "HResult=$($primaryFailure.Exception.HResult).")
+            return $context
+        }
+        catch {
+            Write-Warning ("Inventory lifecycle logging is unavailable; the operation will continue. " +
+                "PrimaryExceptionType=$($primaryFailure.Exception.GetType().FullName); " +
+                "FallbackExceptionType=$($_.Exception.GetType().FullName); HResult=$($_.Exception.HResult).")
+            return $null
+        }
+    }
+}
+
 function Write-InventoryLog {
     [CmdletBinding()]
     param(
@@ -369,4 +414,5 @@ function Write-InventoryLogFailure {
     }
 }
 
-Export-ModuleMember -Function New-InventoryLogContext, Write-InventoryLog, New-InventoryDiagnosticSink, Write-InventoryLogFailure
+Export-ModuleMember -Function Initialize-InventoryLogContext, New-InventoryLogContext, Write-InventoryLog, `
+    New-InventoryDiagnosticSink, Write-InventoryLogFailure

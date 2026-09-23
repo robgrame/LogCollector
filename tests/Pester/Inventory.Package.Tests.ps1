@@ -26,10 +26,12 @@ BeforeAll {
     # A missed mock must fail rather than create real ProgramData logs on the test host.
     @'
 function New-InventoryLogContext { param($Component); throw 'Logger must be mocked in lifecycle tests.' }
+function Initialize-InventoryLogContext { param($Component, $PackageVersion); throw 'Logger bootstrap must be mocked in lifecycle tests.' }
 function Write-InventoryLog { param($Context, $Event, $Data, $Level); throw 'Logger must be mocked in lifecycle tests.' }
 function Write-InventoryLogFailure { param($Context, $ErrorRecord, $Stage); throw 'Logger must be mocked in lifecycle tests.' }
 function New-InventoryDiagnosticSink { param($Context); throw 'Logger must be mocked in lifecycle tests.' }
-Export-ModuleMember -Function New-InventoryLogContext, Write-InventoryLog, Write-InventoryLogFailure, New-InventoryDiagnosticSink
+Export-ModuleMember -Function Initialize-InventoryLogContext, New-InventoryLogContext, Write-InventoryLog, `
+    Write-InventoryLogFailure, New-InventoryDiagnosticSink
 '@ | Set-Content (Join-Path $script:Fixture 'Inventory.Logging.psm1')
     # Only the elevation directive is removed in this isolated fixture. All system mutations are mocked.
     $script:Installed = Join-Path $TestDrive 'Installed'
@@ -233,6 +235,9 @@ Describe 'inventory package installer' {
             $true
         }
         Mock New-InventoryLogContext { [pscustomobject]@{ RunId = 'test-run' } }
+        Mock Initialize-InventoryLogContext {
+            [pscustomobject]@{ RunId = 'test-run'; FallbackUsed = $false }
+        }
         Mock Write-InventoryLog {}
         Mock Write-InventoryLogFailure {}
     }
@@ -262,11 +267,11 @@ Describe 'inventory package installer' {
         & (Join-Path $script:Fixture 'Install.ps1') -WhatIf
         Should -Invoke Register-ScheduledTask -Times 0 -Exactly
         Should -Invoke Copy-Item -Times 0 -Exactly
-        Should -Invoke New-InventoryLogContext -Times 0 -Exactly
+        Should -Invoke Initialize-InventoryLogContext -Times 0 -Exactly
     }
 
     It 'rejects an old configuration version before installation' {
-        $script:DefaultConfigText.Replace("PackageVersion = '1.6.0'", "PackageVersion = '1.0.0'") |
+        $script:DefaultConfigText.Replace("PackageVersion = '1.6.1'", "PackageVersion = '1.0.0'") |
             Set-Content $script:ConfigPath
         { & (Join-Path $script:Fixture 'Install.ps1') } | Should -Throw '*must match package version*'
         Should -Invoke Write-InventoryLogFailure -Times 1 -Exactly -ParameterFilter { $Stage -eq 'LoadConfiguration' }
@@ -279,6 +284,15 @@ Describe 'inventory package installer' {
         & (Join-Path $script:Fixture 'Install.ps1')
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory'].Settings.Enabled | Should -BeTrue
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory-Spool'].Settings.Enabled | Should -BeTrue
+    }
+
+    It 'continues installation when lifecycle logging is unavailable' {
+        Mock Initialize-InventoryLogContext { $null }
+        & (Join-Path $script:Fixture 'Install.ps1') -WarningAction SilentlyContinue
+        $global:InventoryPackageTestTasks.Count | Should -Be 2
+        Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly
+        Should -Invoke Write-InventoryLog -Times 0 -Exactly
+        Should -Invoke Write-InventoryLogFailure -Times 0 -Exactly
     }
 
     It 'does not register tasks if package copying fails' {
@@ -317,7 +331,7 @@ Describe 'inventory distribution builder' {
         $output = Join-Path $TestDrive 'Distribution'
         $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
         $result.FileCount | Should -Be 18
-        $result.PackageVersion | Should -BeExactly '1.6.0'
+        $result.PackageVersion | Should -BeExactly '1.6.1'
         $result.SubmissionEnabled | Should -BeFalse
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.PackagePath 'Config.psd1')).Hash
         (Get-Content (Join-Path $result.PackagePath 'Detect.ps1') -Raw) | Should -Match $result.ConfigurationSha256
@@ -329,7 +343,7 @@ Describe 'inventory distribution builder' {
         $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
         @($copied.PkiRootCaThumbprints).Count | Should -Be 0
         (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
-            Should -BeExactly '1.8.2'
+            Should -BeExactly '1.8.3'
     }
 
     It 'escapes deployment configuration as data and supports alternative tables' {

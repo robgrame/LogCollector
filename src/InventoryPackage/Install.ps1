@@ -4,27 +4,36 @@
 .SYNOPSIS
 Installs the complete custom inventory package and its two SYSTEM tasks without touching legacy tasks.
 .NOTES
-Version 1.6.0. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
+Version 1.6.1. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$packageVersion = '1.6.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     if (-not $WhatIfPreference) {
-        $log = New-InventoryLogContext -Component Install
-        Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.6.0'; Mode = 'Install' }
+        $log = Initialize-InventoryLogContext -Component Install -PackageVersion $packageVersion
+        if ($log) {
+            $startData = @{ PackageVersion = $packageVersion; Mode = 'Install' }
+            if ($log.FallbackUsed) {
+                $startData.Mode = 'InstallFallbackLog'
+                $startData.ExceptionType = $log.PrimaryExceptionType
+                $startData.HResult = $log.PrimaryHResult
+            }
+            Write-InventoryLog -Context $log -Event RunStarted -Data $startData
+        }
     }
     if (-not [Environment]::Is64BitProcess) { throw 'Run this installer with 64-bit Windows PowerShell.' }
     $stage = 'LoadConfiguration'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
     $configPath = Join-Path $PSScriptRoot 'Config.psd1'
     $config = Get-InventoryConfiguration -Path $configPath
-    if ($config.PackageVersion -ne '1.6.0') { throw 'Config.psd1 must match package version 1.6.0; do not mix files from older packages.' }
+    if ($config.PackageVersion -ne $packageVersion) { throw "Config.psd1 must match package version $packageVersion; do not mix files from older packages." }
     if ($log) {
         Write-InventoryLog -Context $log -Event ConfigurationLoaded -Data @{
             PackageVersion = $config.PackageVersion; ConfigurationSha256 = (Get-FileHash -LiteralPath $configPath).Hash
@@ -191,7 +200,7 @@ try {
         if ($retiredTarget -and (Test-Path -LiteralPath $retiredTarget)) {
             Remove-Item -LiteralPath $retiredTarget -Recurse -Force -ErrorAction SilentlyContinue
         }
-        Write-Output "Installed Custom Inventory 1.6.0 at $target; SubmissionEnabled=$($config.SubmissionEnabled)."
+        Write-Output "Installed Custom Inventory $packageVersion at $target; SubmissionEnabled=$($config.SubmissionEnabled)."
         if (-not $config.SubmissionEnabled) { Write-Warning 'Tasks are disabled until the original Azure table schemas and DCR mappings are ready.' }
     }
     if ($log) { Write-InventoryLog -Context $log -Event RunCompleted -Data @{ Mode = 'Install'; DurationMs = $timer.ElapsedMilliseconds } }
