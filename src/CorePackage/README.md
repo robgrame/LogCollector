@@ -166,6 +166,20 @@ The generator builds only LogCollector Core. Inventory and other application scr
 separate Win32 apps with their own packages and detection rules, and declare Core as an Intune
 dependency.
 
+From the repository, download Microsoft's Win32 Content Prep Tool into the Git-ignored
+`tools\IntuneWinAppUtil\IntuneWinAppUtil.exe` location, then run:
+
+```powershell
+.\scripts\New-IntunePackage.ps1 `
+  -FrontendUrl 'https://<intake-host>/api/submit' `
+  -CustomerName 'Contoso' `
+  -Environment 'Production'
+```
+
+The same tracked generator is copied unchanged into `2-Intune` by
+`Publish-CustomerDeliverable.ps1`; there it discovers `CoreSource` and `Tools` beside itself.
+In both layouts, the utility must have a valid Microsoft Authenticode signature.
+
 ## Uninstall
 
 ```powershell

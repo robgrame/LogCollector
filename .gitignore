@@ -22,6 +22,11 @@ artifacts/
 publish/
 *.zip
 
+## Microsoft Win32 Content Prep Tool (download locally; never redistribute)
+tools/IntuneWinAppUtil/*
+!tools/IntuneWinAppUtil/README.md
+scripts/Tools/
+
 ## Compiled Bicep (build artifact, not source)
 infra/*.json
 
