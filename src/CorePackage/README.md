@@ -1,6 +1,6 @@
 # LogCollector Core — shared telemetry dependency
 
-Version 1.8.3
+Version 1.8.4
 
 This package installs **LogCollector.Client** machine-wide. It is a *dependency*: it
 registers no scheduled task and collects nothing by itself. Install it on every device that
@@ -122,7 +122,7 @@ for data that is not in Log Analytics yet would be a false success.
 
 Requires elevation and 64-bit Windows PowerShell. It:
 
-1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.8.3`,
+1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.8.4`,
    which is on `PSModulePath` for both Windows PowerShell 5.1 and PowerShell 7;
 2. writes `%ProgramData%\LogCollector\Config\Endpoint.psd1`;
 3. restricts write access on both — **and on their parent directories** — to SYSTEM and

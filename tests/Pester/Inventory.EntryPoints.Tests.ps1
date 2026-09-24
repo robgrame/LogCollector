@@ -50,7 +50,7 @@ Describe 'Logged inventory entry points' {
         $result = & (Join-Path $script:Fixture 'Run-Inventory.ps1') -Preview
         $result.Disposition | Should -Be 'Delivered'
         Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly -ParameterFilter {
-            $Component -eq 'Inventory' -and $PackageVersion -eq '1.6.1'
+            $Component -eq 'Inventory' -and $PackageVersion -eq '1.6.2'
         }
         Should -Invoke Invoke-InventoryRun -Times 1 -Exactly -ParameterFilter { $Preview -and -not $QueueOnly -and $DiagnosticSink }
         Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter { $Event -eq 'RunStarted' -and $Data.Mode -eq 'Preview' }
@@ -93,7 +93,7 @@ Describe 'Logged inventory entry points' {
         $LASTEXITCODE | Should -Be 1
         $result.Remaining | Should -Be 3
         Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly -ParameterFilter {
-            $Component -eq 'Spool' -and $PackageVersion -eq '1.6.1'
+            $Component -eq 'Spool' -and $PackageVersion -eq '1.6.2'
         }
         Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter { $Event -eq 'RunCompleted' -and $Data.Remaining -eq 3 -and $Data.Stopped }
         Should -Invoke Invoke-InventoryRun -Times 0 -Exactly
@@ -103,7 +103,7 @@ Describe 'Logged inventory entry points' {
         Mock Get-ScheduledTask { [pscustomobject]@{ TaskPath = '\LogCollector\'; TaskName = 'LogCollector-CustomInventory'; State = 'Ready' } }
         $null = & (Join-Path $script:Fixture 'Uninstall.ps1')
         Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly -ParameterFilter {
-            $Component -eq 'Install' -and $PackageVersion -eq '1.6.1'
+            $Component -eq 'Install' -and $PackageVersion -eq '1.6.2'
         }
         Should -Invoke Unregister-ScheduledTask -Times 1 -Exactly
         Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter { $Event -eq 'TasksRemoved' -and $Data.TaskName -eq 'LogCollector-CustomInventory' }

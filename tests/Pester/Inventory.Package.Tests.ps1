@@ -271,7 +271,7 @@ Describe 'inventory package installer' {
     }
 
     It 'rejects an old configuration version before installation' {
-        $script:DefaultConfigText.Replace("PackageVersion = '1.6.1'", "PackageVersion = '1.0.0'") |
+        $script:DefaultConfigText.Replace("PackageVersion = '1.6.2'", "PackageVersion = '1.0.0'") |
             Set-Content $script:ConfigPath
         { & (Join-Path $script:Fixture 'Install.ps1') } | Should -Throw '*must match package version*'
         Should -Invoke Write-InventoryLogFailure -Times 1 -Exactly -ParameterFilter { $Stage -eq 'LoadConfiguration' }
@@ -293,6 +293,22 @@ Describe 'inventory package installer' {
         Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly
         Should -Invoke Write-InventoryLog -Times 0 -Exactly
         Should -Invoke Write-InventoryLogFailure -Times 0 -Exactly
+    }
+
+    It 'records fallback metadata without changing the install mode' {
+        Mock Initialize-InventoryLogContext {
+            [pscustomobject]@{
+                RunId = 'fallback-run'; FallbackUsed = $true
+                PrimaryExceptionType = 'System.UnauthorizedAccessException'; PrimaryHResult = -2147024891
+            }
+        }
+        & (Join-Path $script:Fixture 'Install.ps1') -WarningAction SilentlyContinue
+        Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter {
+            $Event -eq 'RunStarted' -and $Data.Mode -eq 'Install' -and
+            $Data.Stage -eq 'FallbackLog' -and
+            $Data.ExceptionType -eq 'System.UnauthorizedAccessException' -and
+            $Data.HResult -eq -2147024891
+        }
     }
 
     It 'does not register tasks if package copying fails' {
@@ -331,7 +347,7 @@ Describe 'inventory distribution builder' {
         $output = Join-Path $TestDrive 'Distribution'
         $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
         $result.FileCount | Should -Be 18
-        $result.PackageVersion | Should -BeExactly '1.6.1'
+        $result.PackageVersion | Should -BeExactly '1.6.2'
         $result.SubmissionEnabled | Should -BeFalse
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.PackagePath 'Config.psd1')).Hash
         (Get-Content (Join-Path $result.PackagePath 'Detect.ps1') -Raw) | Should -Match $result.ConfigurationSha256
@@ -343,7 +359,7 @@ Describe 'inventory distribution builder' {
         $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
         @($copied.PkiRootCaThumbprints).Count | Should -Be 0
         (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
-            Should -BeExactly '1.8.3'
+            Should -BeExactly '1.8.4'
     }
 
     It 'escapes deployment configuration as data and supports alternative tables' {

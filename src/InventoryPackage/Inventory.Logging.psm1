@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.6.1. Protected, bounded metadata-only diagnostics; no activity on import.
+# Version 1.6.2. Protected, bounded metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 
 $script:LogGuard = $null
@@ -287,7 +287,7 @@ function Initialize-InventoryLogContext {
     }
     if (-not $PSBoundParameters.ContainsKey('FallbackDirectory')) {
         $FallbackDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-            "LogCollector\Logs\CustomInventory-$PackageVersion"
+            "LogCollectorInventory\Logs\CustomInventory-$PackageVersion"
     }
     try {
         $context = New-InventoryLogContext -Component $Component -Directory $PrimaryDirectory

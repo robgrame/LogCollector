@@ -1,9 +1,9 @@
 #Requires -Version 5.1
-# Version 1.6.1. Protected metadata-only spool diagnostics; no new collection.
+# Version 1.6.2. Protected metadata-only spool diagnostics; no new collection.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.6.1'
+$packageVersion = '1.6.2'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -13,6 +13,7 @@ try {
     if ($log) {
         $startData = @{ PackageVersion = $packageVersion; Mode = 'Drain' }
         if ($log.FallbackUsed) {
+            $startData.Stage = 'FallbackLog'
             $startData.ExceptionType = $log.PrimaryExceptionType
             $startData.HResult = $log.PrimaryHResult
         }

@@ -59,29 +59,49 @@ Describe 'Inventory logging isolated filesystem unit tests' {
         $primary = Join-Path $TestDrive 'unsafe-primary'
         $fallback = Join-Path $TestDrive 'safe-fallback'
         Set-Content -LiteralPath $primary -Value 'blocks directory creation'
-        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.6.1' `
+        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.6.2' `
             -PrimaryDirectory $primary -FallbackDirectory $fallback -WarningAction SilentlyContinue
         $context.Directory | Should -Be $fallback
         $context.FallbackUsed | Should -BeTrue
         $context.PrimaryExceptionType | Should -Not -BeNullOrEmpty
         Write-InventoryLog -Context $context -Event RunStarted -Data @{
-            PackageVersion = '1.6.1'; Mode = 'InstallFallbackLog'
+            PackageVersion = '1.6.2'; Mode = 'Install'; Stage = 'FallbackLog'
             ExceptionType = $context.PrimaryExceptionType; HResult = $context.PrimaryHResult
         }
         $record = [IO.File]::ReadAllText($context.Path) | ConvertFrom-Json
         $record.Event | Should -Be RunStarted
-        $record.Data.Mode | Should -Be InstallFallbackLog
+        $record.Data.Mode | Should -Be Install
+        $record.Data.Stage | Should -Be FallbackLog
         $record.Data.ExceptionType | Should -Be $context.PrimaryExceptionType
         $record.Data.HResult | Should -Be $context.PrimaryHResult
     }
 
     It 'returns null when both protected log paths are unavailable' {
         Mock -ModuleName Inventory.Logging New-InventoryLogContext { throw 'unavailable' }
-        $context = Initialize-InventoryLogContext -Component Inventory -PackageVersion '1.6.1' `
+        $context = Initialize-InventoryLogContext -Component Inventory -PackageVersion '1.6.2' `
             -PrimaryDirectory (Join-Path $TestDrive 'primary') `
             -FallbackDirectory (Join-Path $TestDrive 'fallback') -WarningAction SilentlyContinue
         $context | Should -BeNullOrEmpty
         Should -Invoke -ModuleName Inventory.Logging New-InventoryLogContext -Times 2 -Exactly
+    }
+
+    It 'places the default fallback outside the rejected legacy ancestor tree' {
+        Mock -ModuleName Inventory.Logging New-InventoryLogContext {
+            param($Component, $Directory)
+            if ($Directory -like '*\LogCollector\Logs\CustomInventory') { throw 'legacy tree rejected' }
+            [pscustomobject]@{
+                RunId = [guid]::NewGuid(); Component = $Component; Directory = $Directory
+                Path = Join-Path $Directory "$Component.log"; MaxFileBytes = 2097152
+                MaxArchives = 4; MaxAgeDays = 14
+            }
+        }
+        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.6.2' `
+            -WarningAction SilentlyContinue
+        $context.FallbackUsed | Should -BeTrue
+        $context.Directory | Should -Be (
+            Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+                'LogCollectorInventory\Logs\CustomInventory-1.6.2')
+        $context.Directory | Should -Not -Match '\\LogCollector\\Logs\\'
     }
 
     It 'returns only a positional callback with captured context and writer command' -Tag Adapters {

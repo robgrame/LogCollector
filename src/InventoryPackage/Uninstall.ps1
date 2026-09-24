@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
-# Version 1.6.1. Logs lifecycle; removes only tasks, never retained data or logs.
+# Version 1.6.2. Logs lifecycle; removes only tasks, never retained data or logs.
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.6.1'
+$packageVersion = '1.6.2'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -15,6 +15,7 @@ try {
         if ($log) {
             $startData = @{ PackageVersion = $packageVersion; Mode = 'Uninstall' }
             if ($log.FallbackUsed) {
+                $startData.Stage = 'FallbackLog'
                 $startData.ExceptionType = $log.PrimaryExceptionType
                 $startData.HResult = $log.PrimaryHResult
             }
