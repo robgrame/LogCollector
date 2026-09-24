@@ -4,20 +4,23 @@
 .SYNOPSIS
 Installs the complete custom inventory package and its two SYSTEM tasks without touching legacy tasks.
 .NOTES
-Version 1.6.2. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
+Version 1.7.0. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$packageVersion = '1.6.2'
+$packageVersion = '1.7.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
-    if (-not $WhatIfPreference) {
-        $log = Initialize-InventoryLogContext -Component Install -PackageVersion $packageVersion
+    $configPath = Join-Path $PSScriptRoot 'Config.psd1'
+    $customerName = Get-InventoryLogCustomerName -ConfigPath $configPath
+    if (-not $WhatIfPreference -and $customerName) {
+        $log = Initialize-InventoryLogContext -Component Install -PackageVersion $packageVersion `
+            -CustomerName $customerName
         if ($log) {
             $startData = @{ PackageVersion = $packageVersion; Mode = 'Install' }
             if ($log.FallbackUsed) {
@@ -31,7 +34,6 @@ try {
     if (-not [Environment]::Is64BitProcess) { throw 'Run this installer with 64-bit Windows PowerShell.' }
     $stage = 'LoadConfiguration'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
-    $configPath = Join-Path $PSScriptRoot 'Config.psd1'
     $config = Get-InventoryConfiguration -Path $configPath
     if ($config.PackageVersion -ne $packageVersion) { throw "Config.psd1 must match package version $packageVersion; do not mix files from older packages." }
     if ($log) {
@@ -40,10 +42,10 @@ try {
             SubmissionEnabled = $config.SubmissionEnabled; Endpoint = $config.FrontendUrl
         }
     }
-    $target = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'CustomInventory'
+    $target = Join-Path (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) $config.CustomerName) 'CustomInventory'
     $taskPath = '\LogCollector\'
     $names = @('LogCollector-CustomInventory', 'LogCollector-CustomInventory-Spool')
-    $files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
+    $files = @('Version', 'Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
         'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
     $manifestPath = Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1'
     $manifest = Test-ModuleManifest -Path $manifestPath -ErrorAction Stop

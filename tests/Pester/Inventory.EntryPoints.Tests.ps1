@@ -12,7 +12,8 @@ BeforeAll {
     }
     @'
 function New-InventoryLogContext { param($Component); throw 'Must mock logger' }
-function Initialize-InventoryLogContext { param($Component, $PackageVersion); throw 'Must mock logger bootstrap' }
+function Get-InventoryLogCustomerName { param($ConfigPath); throw 'Must mock logger configuration' }
+function Initialize-InventoryLogContext { param($Component, $PackageVersion, $CustomerName); throw 'Must mock logger bootstrap' }
 function Write-InventoryLog { param($Context, $Event, $Data, $Level); throw 'Must mock logger' }
 function Write-InventoryLogFailure { param($Context, $ErrorRecord, $Stage); throw 'Must mock logger' }
 function New-InventoryDiagnosticSink { param($Context); throw 'Must mock logger' }
@@ -23,6 +24,7 @@ function Invoke-InventoryRun { param($ConfigPath, [switch]$Preview, [switch]$Que
 function Invoke-InventoryDrain { param($ConfigPath, $DiagnosticSink); throw 'Must mock delivery' }
 Export-ModuleMember -Function *
 '@ | Set-Content (Join-Path $script:Fixture 'Inventory.Runtime.psm1')
+    "@{ CustomerName = 'TestCustomer' }" | Set-Content (Join-Path $script:Fixture 'Config.psd1')
     Import-Module (Join-Path $script:Fixture 'Inventory.Logging.psm1') -Force
     Import-Module (Join-Path $script:Fixture 'Inventory.Runtime.psm1') -Force
 }
@@ -34,6 +36,7 @@ AfterAll {
 Describe 'Logged inventory entry points' {
     BeforeEach {
         Mock Import-Module {}
+        Mock Get-InventoryLogCustomerName { 'TestCustomer' }
         Mock Initialize-InventoryLogContext {
             [pscustomobject]@{ RunId = 'fixture'; FallbackUsed = $false }
         }
@@ -50,7 +53,7 @@ Describe 'Logged inventory entry points' {
         $result = & (Join-Path $script:Fixture 'Run-Inventory.ps1') -Preview
         $result.Disposition | Should -Be 'Delivered'
         Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly -ParameterFilter {
-            $Component -eq 'Inventory' -and $PackageVersion -eq '1.6.2'
+            $Component -eq 'Inventory' -and $PackageVersion -eq '1.7.0' -and $CustomerName -eq 'TestCustomer'
         }
         Should -Invoke Invoke-InventoryRun -Times 1 -Exactly -ParameterFilter { $Preview -and -not $QueueOnly -and $DiagnosticSink }
         Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter { $Event -eq 'RunStarted' -and $Data.Mode -eq 'Preview' }
@@ -81,6 +84,14 @@ Describe 'Logged inventory entry points' {
         Should -Invoke Write-InventoryLogFailure -Times 0 -Exactly
     }
 
+    It 'continues to runtime validation when CustomerName cannot initialize logging' {
+        Mock Get-InventoryLogCustomerName { $null }
+        $result = & (Join-Path $script:Fixture 'Run-Inventory.ps1')
+        $result.Disposition | Should -Be 'Delivered'
+        Should -Invoke Initialize-InventoryLogContext -Times 0 -Exactly
+        Should -Invoke Invoke-InventoryRun -Times 1 -Exactly -ParameterFilter { $null -eq $DiagnosticSink }
+    }
+
     It 'logs fatal collection failure and preserves the error' {
         Mock Invoke-InventoryRun { throw 'Collection failed' }
         { & (Join-Path $script:Fixture 'Run-Inventory.ps1') } | Should -Throw '*Collection failed*'
@@ -93,7 +104,7 @@ Describe 'Logged inventory entry points' {
         $LASTEXITCODE | Should -Be 1
         $result.Remaining | Should -Be 3
         Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly -ParameterFilter {
-            $Component -eq 'Spool' -and $PackageVersion -eq '1.6.2'
+            $Component -eq 'Spool' -and $PackageVersion -eq '1.7.0' -and $CustomerName -eq 'TestCustomer'
         }
         Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter { $Event -eq 'RunCompleted' -and $Data.Remaining -eq 3 -and $Data.Stopped }
         Should -Invoke Invoke-InventoryRun -Times 0 -Exactly
@@ -103,7 +114,7 @@ Describe 'Logged inventory entry points' {
         Mock Get-ScheduledTask { [pscustomobject]@{ TaskPath = '\LogCollector\'; TaskName = 'LogCollector-CustomInventory'; State = 'Ready' } }
         $null = & (Join-Path $script:Fixture 'Uninstall.ps1')
         Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly -ParameterFilter {
-            $Component -eq 'Install' -and $PackageVersion -eq '1.6.2'
+            $Component -eq 'Install' -and $PackageVersion -eq '1.7.0' -and $CustomerName -eq 'TestCustomer'
         }
         Should -Invoke Unregister-ScheduledTask -Times 1 -Exactly
         Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter { $Event -eq 'TasksRemoved' -and $Data.TaskName -eq 'LogCollector-CustomInventory' }

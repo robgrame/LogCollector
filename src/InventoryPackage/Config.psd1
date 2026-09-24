@@ -1,5 +1,6 @@
 @{
-    PackageVersion = '1.6.2'
+    PackageVersion = '1.7.0'
+    CustomerName = 'LogCollector'
     Environment = ''
     FrontendUrl = ''
     DeviceTableName = 'DeviceInventory_CL'

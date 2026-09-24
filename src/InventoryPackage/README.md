@@ -1,6 +1,6 @@
 # Custom Inventory - pacchetto Windows universale
 
-Versione **1.6.2**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
+Versione **1.7.0**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
 La cartella generata e autosufficiente: non richiede la repository, OneDrive,
 PowerShell Gallery, Workspace ID/Primary Key o Function key sul dispositivo.
 Codice, nomi dei task e percorsi di installazione non dipendono da un cliente.
@@ -61,7 +61,7 @@ solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake sia nel
 - `Run-Inventory.ps1`: raccolta e invio separato alle destinazioni configurate.
 - `Sync-Spool.ps1`: ritrasmissione senza nuova raccolta.
 - `Inventory.Collection.psm1` / `Inventory.Runtime.psm1`: raccolta e integrazione.
-- `Modules`: i file del modulo condiviso LogCollector.Client 1.8.4.
+- `Modules`: i file del modulo condiviso LogCollector.Client 1.9.0.
 - `Inventory.Logging.psm1`: logger locale protetto, condiviso dalle entry point.
 - `Install.ps1`, `Uninstall.ps1`, `Detect.ps1`: gestione Intune Win32.
 - `Config.psd1`: configurazione del deployment.
@@ -96,8 +96,11 @@ anche la detection. Versione del codice e hash della configurazione sono distint
 L'installer copia tutti i componenti in:
 
 ```text
-C:\Program Files\CustomInventory
+C:\Program Files\<CustomerName>\CustomInventory
 ```
+
+Il percorso non contiene la versione. Il file `Version` nella directory installata
+contiene la versione del package (`1.7.0`) ed è verificato dalla detection.
 
 Il percorso viene protetto per SYSTEM/amministratori; percorsi preesistenti non
 attendibili o reparse point vengono rifiutati, non riparati automaticamente.
@@ -124,7 +127,7 @@ di cancellare dati eventualmente condivisi con altri sender.
 Dalla versione 1.4.5 vengono scritti log JSON Lines (un oggetto JSON per riga) sotto:
 
 ```text
-C:\ProgramData\LogCollector\Logs\CustomInventory\
+C:\ProgramData\<CustomerName>\CustomInventory\Logs\
     Install.log
     Inventory.log
     Spool.log
@@ -133,8 +136,8 @@ C:\ProgramData\LogCollector\Logs\CustomInventory\
 Se un percorso log creato da una release precedente non supera i controlli ACL correnti,
 nessuna entry point lo ripara o vi scrive. Installazione, disinstallazione, raccolta e drain
 usano invece il fallback protetto
-`C:\ProgramData\LogCollectorInventory\Logs\CustomInventory-1.6.2\`, sotto una radice
-indipendente dalla gerarchia ACL legacy; se anche il fallback non è
+`C:\ProgramData\LogCollectorInventory\<CustomerName>\CustomInventory-Fallback-1.7.0\Logs\`,
+separato dall'albero ACL cliente primario; se anche il fallback non è
 disponibile, il logging diagnostico viene disabilitato senza bloccare l'operazione principale.
 
 Install.log include installazione e disinstallazione. Inventory.log include
@@ -170,9 +173,9 @@ che non e ancora disponibile. Restano visibili nell'esito/console del processo.
 Per leggere gli ultimi eventi da una console elevata:
 
 ```powershell
-Get-Content 'C:\ProgramData\LogCollector\Logs\CustomInventory\Install.log' -Tail 30
-Get-Content 'C:\ProgramData\LogCollector\Logs\CustomInventory\Inventory.log' -Tail 50
-Get-Content 'C:\ProgramData\LogCollector\Logs\CustomInventory\Spool.log' -Tail 50
+Get-Content 'C:\ProgramData\<CustomerName>\CustomInventory\Logs\Install.log' -Tail 30
+Get-Content 'C:\ProgramData\<CustomerName>\CustomInventory\Logs\Inventory.log' -Tail 50
+Get-Content 'C:\ProgramData\<CustomerName>\CustomInventory\Logs\Spool.log' -Tail 50
 ```
 
 ## Prova locale e attivazione

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.6.2. Optional metadata-only diagnostics; no activity on import.
+# Version 1.7.0. Optional metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Collection.psm1') -ErrorAction Stop
@@ -8,7 +8,7 @@ function Get-InventoryConfiguration {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Path)
     $config = Import-PowerShellDataFile -LiteralPath $Path -ErrorAction Stop
-    foreach ($key in @('PackageVersion', 'Environment', 'FrontendUrl', 'DeviceTableName', 'AppTableName', 'SubmissionEnabled',
+    foreach ($key in @('PackageVersion', 'CustomerName', 'Environment', 'FrontendUrl', 'DeviceTableName', 'AppTableName', 'SubmissionEnabled',
         'CollectDeviceInventory', 'CollectAppInventory', 'CertificateThumbprint',
         'CertificateIssuerLike', 'MaxAttempts', 'TimeoutSeconds')) {
         if (-not $config.ContainsKey($key)) { throw "Missing package configuration: $key" }
@@ -33,6 +33,16 @@ function Get-InventoryConfiguration {
         if ($config[$key] -isnot [string] -or $config[$key] -notmatch '^[A-Za-z][A-Za-z0-9_]{0,96}_CL$') {
             throw "$key must be a valid custom table name ending in _CL."
         }
+    }
+    if ($config.CustomerName -isnot [string] -or
+        $config.CustomerName -notmatch '^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$') {
+        throw 'CustomerName must be a valid Windows folder name between 1 and 64 characters.'
+    }
+    if (($config.CustomerName -split '\.')[0].ToUpperInvariant() -in @(
+            'CON', 'PRN', 'AUX', 'NUL', 'CLOCK$', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+            'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5',
+            'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
+        throw "CustomerName '$($config.CustomerName)' is a reserved Windows device name."
     }
     if ([string]::IsNullOrWhiteSpace($config.FrontendUrl)) { throw 'Configure FrontendUrl for the destination deployment.' }
     $null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl

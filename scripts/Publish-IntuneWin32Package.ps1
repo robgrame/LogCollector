@@ -10,6 +10,9 @@ param(
     [string] $IntuneWinAppUtilPath,
     [Parameter(Mandatory, ParameterSetName = 'Endpoint')] [Uri] $FrontendUrl,
     [Parameter(ParameterSetName = 'Endpoint')] [string] $Environment = '',
+    [Parameter(ParameterSetName = 'Endpoint')]
+    [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')]
+    [string] $CustomerName = 'LogCollector',
     [Parameter(Mandatory, ParameterSetName = 'Configuration')] [string] $ConfigurationPath,
     [ValidateNotNullOrEmpty()] [string] $OutputRoot
 )
@@ -68,6 +71,7 @@ if ($configurationFile) {
 else {
     $buildParameters.FrontendUrl = $FrontendUrl
     $buildParameters.Environment = $Environment
+    $buildParameters.CustomerName = $CustomerName
 }
 $package = & (Join-Path $PSScriptRoot 'Publish-InventoryPackage.ps1') @buildParameters
 $output = Join-Path $release 'Output'
@@ -90,5 +94,9 @@ Copy-Item -LiteralPath (Join-Path $repo 'docs\intune-win32-deployment.md') -Dest
     DetectionScript = Join-Path $release 'Detect.ps1'
     DeploymentGuide = Join-Path $release 'Intune-Deployment.md'
     SubmissionEnabled = $package.SubmissionEnabled
+    CustomerName = $package.CustomerName
     ConfigurationSha256 = $package.ConfigurationSha256
+    InstallCommand = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"'
+    UninstallCommand = ('"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ' +
+        '-ExecutionPolicy Bypass -File "%ProgramW6432%\' + $package.CustomerName + '\CustomInventory\Uninstall.ps1"')
 }

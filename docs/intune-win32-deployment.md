@@ -1,10 +1,10 @@
-# Custom Inventory 1.6.2 - distribuzione Intune Win32
+# Custom Inventory 1.7.0 - distribuzione Intune Win32
 
 Il pacchetto installa il collector hardware/software e tutti i moduli comuni.
 Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 Gli script originali cliente non vengono letti o modificati. Il modulo condiviso
-è alla versione 1.8.4, supporta `/api/submit` e l'esportazione offline del campione schema.
-Il pacchetto inventory passa a **1.6.2** per il percorso di installazione stabile
+è alla versione 1.9.0, supporta `/api/submit` e l'esportazione offline del campione schema.
+Il pacchetto inventory passa a **1.7.0** per i percorsi standard per cliente
 e il fallback diagnostico fail-open;
 mantiene compatibili endpoint e tabelle precedenti. Il logging introdotto in 1.4.5
 resta invariato (versioning Major.Minor.Build).
@@ -24,6 +24,7 @@ Dalla root della repository:
 ```powershell
 .\scripts\Publish-IntuneWin32Package.ps1 `
     -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
+    -CustomerName 'Contoso' `
     -Environment 'MSLabs'
 ```
 
@@ -34,10 +35,10 @@ Output predefiniti:
 
 | File/cartella | Utilizzo |
 |---|---|
-| `out\IntuneWin32\1.6.2\Output\Install.intunewin` | File da caricare nell'app Win32 |
-| `out\IntuneWin32\1.6.2\Detect.ps1` | Script da caricare nella detection rule |
-| `out\IntuneWin32\1.6.2\Intune-Deployment.md` | Copia di questa guida |
-| `out\IntuneWin32\1.6.2\Source\1.6.2` | Tutti i file inclusi nel payload, configurazione e logger compresi |
+| `out\IntuneWin32\1.7.0\Output\Install.intunewin` | File da caricare nell'app Win32 |
+| `out\IntuneWin32\1.7.0\Detect.ps1` | Script da caricare nella detection rule |
+| `out\IntuneWin32\1.7.0\Intune-Deployment.md` | Copia di questa guida |
+| `out\IntuneWin32\1.7.0\Source\1.7.0` | Tutti i file inclusi nel payload, configurazione e logger compresi |
 
 Il comando restituisce SHA256 del pacchetto, ConfigurationSha256 e stato SubmissionEnabled. Source e Output
 sono separati: il tool non ingloba il proprio eseguibile o il file .intunewin.
@@ -62,19 +63,23 @@ Per personalizzare endpoint, selezione certificato, CA, tabelle o attivazione:
 ```powershell
 .\scripts\Publish-InventoryPackage.ps1 `
     -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
-    -Environment 'MSLabs' -OutputRoot '.\out\Inventory-PilotConfig'
+    -CustomerName 'Contoso' -Environment 'MSLabs' `
+    -OutputRoot '.\out\Inventory-PilotConfig'
 
-# Modificare out\Inventory-PilotConfig\1.6.2\Config.psd1 con un editor.
+# Modificare out\Inventory-PilotConfig\1.7.0\Config.psd1 con un editor.
 # Impostare SubmissionEnabled = $true SOLO dopo la preparazione lato Azure.
 
 .\scripts\Publish-IntuneWin32Package.ps1 `
-    -ConfigurationPath '.\out\Inventory-PilotConfig\1.6.2\Config.psd1' `
+    -ConfigurationPath '.\out\Inventory-PilotConfig\1.7.0\Config.psd1' `
     -OutputRoot '.\out\IntuneWin32-Pilot02'
 ```
 
 ConfigurationPath importa solo dati PSD1, non gli script di quella cartella:
 il payload viene sempre costruito dai sorgenti correnti della repository.
-La versione della configurazione deve coincidere con 1.6.2. La configurazione
+`CustomerName` determina sia `%ProgramFiles%\<CustomerName>\CustomInventory` sia
+`%ProgramData%\<CustomerName>\CustomInventory\Logs`; deve coincidere con il nome
+cliente usato dal package Core. La versione della configurazione deve coincidere
+con 1.7.0. La configurazione
 viene validata dallo stesso runtime dell'installer prima di chiamare il tool.
 Non inserire chiavi private o credenziali. I certificati non vengono esportati.
 Per PKI vedere `docs\pki-ca-policy.md`: filtri Root/SubCA e trust server sono distinti.
@@ -150,17 +155,19 @@ installata anche se nel frattempo l'app in Intune e' stata aggiornata a un pacch
 piu' recente):
 
 ```text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\CustomInventory\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\<CustomerName>\CustomInventory\Uninstall.ps1"
 ```
 
 Il percorso non e' versionato (variabile `$target` in `Install.ps1`): l'Uninstall
 command sopra resta invariato tra una release e l'altra, non serve aggiornarlo
 a ogni pacchetto.
 
-Quando si migra da una release con percorso versionato (per esempio 1.3.4 o 1.5.0),
-disinstallare o supersedere prima la vecchia app e solo dopo installare 1.6.2. Il vecchio
-`Uninstall.ps1` rimuove gli stessi task `\LogCollector\` usati dalla nuova release; eseguirlo
-dopo l'installazione 1.6.2 lascerebbe i file nuovi presenti ma senza i task operativi.
+Quando si migra da una release installata direttamente in
+`%ProgramFiles%\CustomInventory` (1.6.x) o da un percorso versionato precedente,
+aggiornare nella stessa app Intune contenuto, detection e Uninstall command. Il nuovo
+installer registra i task sul percorso cliente ma conserva i file legacy. Non eseguire
+il vecchio `Uninstall.ps1` dopo l'installazione 1.7.0: rimuoverebbe gli stessi task
+`\LogCollector\` appena registrati dalla nuova release.
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
 Per prove manuali da una console gia a 64 bit usare System32 al posto di Sysnative
@@ -235,9 +242,14 @@ SYSTEM, non soltanto come utente interattivo.
 
 ## 6. Comportamento installato e prova
 
-Percorso: `C:\Program Files\CustomInventory`
+Percorso: `C:\Program Files\<CustomerName>\CustomInventory`
 (il codice usa il percorso Program Files del sistema, senza presupporre il disco C;
 il percorso non e' versionato: un aggiornamento sovrascrive gli stessi file in place).
+Il file `Version` nel percorso installato contiene `1.7.0`; la detection verifica
+sia questo file sia la versione e l'hash della configurazione.
+Se `%ProgramFiles%\<CustomerName>` esiste già, deve impedire modifiche a utenti non
+amministrativi; una cartella cliente con ACL di scrittura non attendibili viene rifiutata,
+non corretta automaticamente.
 
 | Task SYSTEM in `\LogCollector\` | Azione |
 |---|---|
@@ -285,16 +297,16 @@ task in Task Scheduler. Evitare di esportare payload inventory nei log di suppor
 Dalla versione 1.4.5 i task e l'installer scrivono log propri, distinti dai log IME:
 
 ```text
-C:\ProgramData\LogCollector\Logs\CustomInventory\Install.log
-C:\ProgramData\LogCollector\Logs\CustomInventory\Inventory.log
-C:\ProgramData\LogCollector\Logs\CustomInventory\Spool.log
+C:\ProgramData\<CustomerName>\CustomInventory\Logs\Install.log
+C:\ProgramData\<CustomerName>\CustomInventory\Logs\Inventory.log
+C:\ProgramData\<CustomerName>\CustomInventory\Logs\Spool.log
 ```
 
 Durante un upgrade, un vecchio percorso log con ACL non più conformi non viene considerato
 attendibile né riparato automaticamente. Installazione, disinstallazione, raccolta e
 drain usano in quel caso il percorso protetto versionato
-`C:\ProgramData\LogCollectorInventory\Logs\CustomInventory-1.6.2\`, che non condivide
-la gerarchia ACL legacy rifiutata. Un problema di
+`C:\ProgramData\LogCollectorInventory\<CustomerName>\CustomInventory-Fallback-1.7.0\Logs\`,
+che non condivide l'albero ACL cliente primario rifiutato. Un problema di
 inizializzazione del logger locale non interrompe queste operazioni.
 
 Sono log JSONL con RunId, UTC, PID e metadati selezionati. Install.log registra

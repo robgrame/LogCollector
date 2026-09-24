@@ -3,18 +3,23 @@
 .SYNOPSIS
 Runs custom inventory using the destinations supplied in Config.psd1.
 .NOTES
-Version 1.6.2. Protected metadata-only diagnostics for each run.
+Version 1.7.0. Protected metadata-only diagnostics for each run.
 #>
 [CmdletBinding()]
 param([switch] $Preview, [switch] $QueueOnly)
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.6.2'
+$packageVersion = '1.7.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
-    $log = Initialize-InventoryLogContext -Component Inventory -PackageVersion $packageVersion
+    $configPath = Join-Path $PSScriptRoot 'Config.psd1'
+    $customerName = Get-InventoryLogCustomerName -ConfigPath $configPath
+    if ($customerName) {
+        $log = Initialize-InventoryLogContext -Component Inventory -PackageVersion $packageVersion `
+            -CustomerName $customerName
+    }
     $mode = if ($Preview) { 'Preview' } elseif ($QueueOnly) { 'QueueOnly' } else { 'Live' }
     if ($log) {
         $startData = @{ PackageVersion = $packageVersion; Mode = $mode }
@@ -30,7 +35,7 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
     $sink = if ($log) { New-InventoryDiagnosticSink -Context $log } else { $null }
     $stage = 'CollectAndSend'
-    $results = @(Invoke-InventoryRun -ConfigPath (Join-Path $PSScriptRoot 'Config.psd1') `
+    $results = @(Invoke-InventoryRun -ConfigPath $configPath `
             -Preview:$Preview -QueueOnly:$QueueOnly -DiagnosticSink $sink)
     $results | Write-Output
     $failed = @($results | Where-Object Disposition -NotIn @('Delivered', 'Deferred', 'Preview')).Count -gt 0

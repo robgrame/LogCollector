@@ -36,7 +36,7 @@ Describe 'Inventory logging isolated filesystem unit tests' {
         Import-Module $script:LoggerPath -Force
         @(Get-ChildItem -LiteralPath $TestDrive -Recurse -Force).Count | Should -Be $before
         $exports = @((Get-Module Inventory.Logging).ExportedFunctions.Keys | Sort-Object)
-        ($exports -join ',') | Should -Be 'Initialize-InventoryLogContext,New-InventoryDiagnosticSink,New-InventoryLogContext,Write-InventoryLog,Write-InventoryLogFailure'
+        ($exports -join ',') | Should -Be 'Get-InventoryLogCustomerName,Initialize-InventoryLogContext,New-InventoryDiagnosticSink,New-InventoryLogContext,Write-InventoryLog,Write-InventoryLogFailure'
         InModuleScope Inventory.Logging { $script:LogGuard | Should -BeNullOrEmpty }
     }
 
@@ -59,13 +59,13 @@ Describe 'Inventory logging isolated filesystem unit tests' {
         $primary = Join-Path $TestDrive 'unsafe-primary'
         $fallback = Join-Path $TestDrive 'safe-fallback'
         Set-Content -LiteralPath $primary -Value 'blocks directory creation'
-        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.6.2' `
+        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.7.0' -CustomerName 'TestCustomer' `
             -PrimaryDirectory $primary -FallbackDirectory $fallback -WarningAction SilentlyContinue
         $context.Directory | Should -Be $fallback
         $context.FallbackUsed | Should -BeTrue
         $context.PrimaryExceptionType | Should -Not -BeNullOrEmpty
         Write-InventoryLog -Context $context -Event RunStarted -Data @{
-            PackageVersion = '1.6.2'; Mode = 'Install'; Stage = 'FallbackLog'
+            PackageVersion = '1.7.0'; Mode = 'Install'; Stage = 'FallbackLog'
             ExceptionType = $context.PrimaryExceptionType; HResult = $context.PrimaryHResult
         }
         $record = [IO.File]::ReadAllText($context.Path) | ConvertFrom-Json
@@ -78,7 +78,7 @@ Describe 'Inventory logging isolated filesystem unit tests' {
 
     It 'returns null when both protected log paths are unavailable' {
         Mock -ModuleName Inventory.Logging New-InventoryLogContext { throw 'unavailable' }
-        $context = Initialize-InventoryLogContext -Component Inventory -PackageVersion '1.6.2' `
+        $context = Initialize-InventoryLogContext -Component Inventory -PackageVersion '1.7.0' -CustomerName 'TestCustomer' `
             -PrimaryDirectory (Join-Path $TestDrive 'primary') `
             -FallbackDirectory (Join-Path $TestDrive 'fallback') -WarningAction SilentlyContinue
         $context | Should -BeNullOrEmpty
@@ -88,20 +88,48 @@ Describe 'Inventory logging isolated filesystem unit tests' {
     It 'places the default fallback outside the rejected legacy ancestor tree' {
         Mock -ModuleName Inventory.Logging New-InventoryLogContext {
             param($Component, $Directory)
-            if ($Directory -like '*\LogCollector\Logs\CustomInventory') { throw 'legacy tree rejected' }
+            if ($Directory -like '*\TestCustomer\CustomInventory\Logs') { throw 'primary tree rejected' }
             [pscustomobject]@{
                 RunId = [guid]::NewGuid(); Component = $Component; Directory = $Directory
                 Path = Join-Path $Directory "$Component.log"; MaxFileBytes = 2097152
                 MaxArchives = 4; MaxAgeDays = 14
             }
         }
-        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.6.2' `
+        $context = Initialize-InventoryLogContext -Component Install -PackageVersion '1.7.0' -CustomerName 'TestCustomer' `
             -WarningAction SilentlyContinue
         $context.FallbackUsed | Should -BeTrue
         $context.Directory | Should -Be (
             Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-                'LogCollectorInventory\Logs\CustomInventory-1.6.2')
-        $context.Directory | Should -Not -Match '\\LogCollector\\Logs\\'
+                'LogCollectorInventory\TestCustomer\CustomInventory-Fallback-1.7.0\Logs')
+        $context.Directory | Should -Not -Match '\\TestCustomer\\CustomInventory\\Logs$'
+    }
+
+    It 'places the primary logs under the configured customer application tree' {
+        Mock -ModuleName Inventory.Logging New-InventoryLogContext {
+            param($Component, $Directory)
+            [pscustomobject]@{
+                RunId = [guid]::NewGuid(); Component = $Component; Directory = $Directory
+                Path = Join-Path $Directory "$Component.log"; MaxFileBytes = 2097152
+                MaxArchives = 4; MaxAgeDays = 14
+            }
+        }
+        $context = Initialize-InventoryLogContext -Component Inventory -PackageVersion '1.7.0' `
+            -CustomerName 'TestCustomer'
+        $context.FallbackUsed | Should -BeFalse
+        $context.Directory | Should -Be (
+            Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+                'TestCustomer\CustomInventory\Logs')
+    }
+
+    It 'returns a validated customer name without throwing on unusable bootstrap configuration' {
+        $valid = Join-Path $TestDrive 'valid-config.psd1'
+        $invalid = Join-Path $TestDrive 'invalid-config.psd1'
+        "@{ CustomerName = 'TestCustomer' }" | Set-Content $valid
+        "@{ CustomerName = '..' }" | Set-Content $invalid
+        Get-InventoryLogCustomerName -ConfigPath $valid | Should -BeExactly 'TestCustomer'
+        Get-InventoryLogCustomerName -ConfigPath $invalid | Should -BeNullOrEmpty
+        Get-InventoryLogCustomerName -ConfigPath (Join-Path $TestDrive 'missing.psd1') `
+            -WarningAction SilentlyContinue | Should -BeNullOrEmpty
     }
 
     It 'returns only a positional callback with captured context and writer command' -Tag Adapters {

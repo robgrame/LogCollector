@@ -10,6 +10,9 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Endpoint')] [Uri] $FrontendUrl,
     [Parameter(ParameterSetName = 'Endpoint')] [string] $Environment = '',
     [Parameter(ParameterSetName = 'Endpoint')]
+    [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')]
+    [string] $CustomerName = 'LogCollector',
+    [Parameter(ParameterSetName = 'Endpoint')]
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $DeviceTableName = 'DeviceInventory_CL',
     [Parameter(ParameterSetName = 'Endpoint')]
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $AppTableName = 'AppInventory_CL',
@@ -27,6 +30,11 @@ if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path
 $source = Join-Path $repo 'src\InventoryPackage'
 $config = Import-PowerShellDataFile -LiteralPath (Join-Path $source 'Config.psd1')
 $version = $config.PackageVersion
+$versionFile = Join-Path $source 'Version'
+if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf) -or
+    [IO.File]::ReadAllText($versionFile).Trim() -ne $version) {
+    throw "Inventory Version file must contain package version $version."
+}
 if ($PSCmdlet.ParameterSetName -eq 'Configuration') {
     $config = Import-PowerShellDataFile -LiteralPath $ConfigurationPath
     if ($config.PackageVersion -ne $version) { throw "Configuration must use package version $version." }
@@ -34,12 +42,19 @@ if ($PSCmdlet.ParameterSetName -eq 'Configuration') {
 else {
     $config.FrontendUrl = $FrontendUrl.AbsoluteUri
     $config.Environment = $Environment
+    $config.CustomerName = $CustomerName
     $config.DeviceTableName = $DeviceTableName
     $config.AppTableName = $AppTableName
     $config.PkiRootCaThumbprints = $PkiRootCaThumbprints
     $config.PkiRootCaSubjects = $PkiRootCaSubjects
     $config.PkiIntermediateCaThumbprints = $PkiIntermediateCaThumbprints
     $config.PkiIntermediateCaSubjects = $PkiIntermediateCaSubjects
+}
+if (($config.CustomerName -split '\.')[0].ToUpperInvariant() -in @(
+        'CON', 'PRN', 'AUX', 'NUL', 'CLOCK$', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+        'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5',
+        'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
+    throw "CustomerName '$($config.CustomerName)' is a reserved Windows device name."
 }
 foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
     if ($null -eq $config[$key]) { throw "$key must be an array; use @() for no constraint." }
@@ -51,7 +66,7 @@ foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediate
     }
 }
 $target = Join-Path $OutputRoot $config.PackageVersion
-$files = @('Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
+$files = @('Version', 'Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1',
     'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
 $client = Join-Path $repo 'src\Client'
 Import-Module (Join-Path $client 'LogCollector.Client.psd1') -ErrorAction Stop
@@ -100,13 +115,16 @@ if ($PSCmdlet.ShouldProcess($target, 'Create ready-to-package universal inventor
     $configurationSha256 = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
     $detection = [IO.File]::ReadAllText((Join-Path $source 'Detect.ps1'))
     if (-not $detection.Contains('__LOGCOLLECTOR_CONFIGURATION_SHA256__')) { throw 'Detection template is missing its configuration hash marker.' }
+    if (-not $detection.Contains('__LOGCOLLECTOR_CUSTOMER_NAME__')) { throw 'Detection template is missing its customer name marker.' }
     $detection = $detection.Replace('__LOGCOLLECTOR_CONFIGURATION_SHA256__', $configurationSha256)
+    $detection = $detection.Replace('__LOGCOLLECTOR_CUSTOMER_NAME__', $config.CustomerName.Replace("'", "''"))
     [IO.File]::WriteAllText((Join-Path $target 'Detect.ps1'), $detection, [Text.UTF8Encoding]::new($false))
     $null = Test-ModuleManifest -Path (Join-Path $target 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
     [pscustomobject]@{
         PackageVersion = $config.PackageVersion; PackagePath = [IO.Path]::GetFullPath($target)
         SetupFile = 'Install.ps1'; FileCount = @(Get-ChildItem -LiteralPath $target -File -Recurse).Count
         SubmissionEnabled = $config.SubmissionEnabled
+        CustomerName = $config.CustomerName
         ConfigurationSha256 = $configurationSha256
     }
 }

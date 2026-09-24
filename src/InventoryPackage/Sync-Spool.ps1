@@ -1,15 +1,20 @@
 #Requires -Version 5.1
-# Version 1.6.2. Protected metadata-only spool diagnostics; no new collection.
+# Version 1.7.0. Protected metadata-only spool diagnostics; no new collection.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.6.2'
+$packageVersion = '1.7.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
-    $log = Initialize-InventoryLogContext -Component Spool -PackageVersion $packageVersion
+    $configPath = Join-Path $PSScriptRoot 'Config.psd1'
+    $customerName = Get-InventoryLogCustomerName -ConfigPath $configPath
+    if ($customerName) {
+        $log = Initialize-InventoryLogContext -Component Spool -PackageVersion $packageVersion `
+            -CustomerName $customerName
+    }
     if ($log) {
         $startData = @{ PackageVersion = $packageVersion; Mode = 'Drain' }
         if ($log.FallbackUsed) {
@@ -23,7 +28,7 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
     $stage = 'Drain'
     $sink = if ($log) { New-InventoryDiagnosticSink -Context $log } else { $null }
-    $result = Invoke-InventoryDrain -ConfigPath (Join-Path $PSScriptRoot 'Config.psd1') -DiagnosticSink $sink
+    $result = Invoke-InventoryDrain -ConfigPath $configPath -DiagnosticSink $sink
     $result
     if ($log) {
         Write-InventoryLog -Context $log -Event RunCompleted -Data @{

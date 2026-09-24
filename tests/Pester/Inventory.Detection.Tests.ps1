@@ -13,7 +13,7 @@ BeforeAll {
         $package = Get-Variable -Name $variant -Scope Script -ValueOnly
         $text = Get-Content (Join-Path $package.PackagePath 'Detect.ps1') -Raw
         # Only redirect the installation root in this test copy. Hash and task checks stay intact.
-        $original = '$target = Join-Path ([Environment]::GetFolderPath(''ProgramFiles'')) ''CustomInventory'''
+        $original = '$target = Join-Path (Join-Path ([Environment]::GetFolderPath(''ProgramFiles'')) $customerName) ''CustomInventory'''
         if (-not $text.Contains($original)) { throw 'Detection fixture cannot locate the installation root.' }
         $text.Replace($original, ('$target = ''' + $script:Installed.Replace("'", "''") + '''')) |
             Set-Content (Join-Path $TestDrive "$variant-Detect.ps1")
@@ -82,7 +82,8 @@ Describe 'Configuration-aware inventory detection' {
     }
 
     It 'rejects a missing installed configuration or runtime file' -ForEach @(
-        @{ MissingFile = 'Config.psd1' }, @{ MissingFile = 'Inventory.Runtime.psm1' }, @{ MissingFile = 'Inventory.Logging.psm1' }
+        @{ MissingFile = 'Version' }, @{ MissingFile = 'Config.psd1' },
+        @{ MissingFile = 'Inventory.Runtime.psm1' }, @{ MissingFile = 'Inventory.Logging.psm1' }
     ) {
         $path = Join-Path $script:Installed $MissingFile
         Remove-Item -LiteralPath $path
@@ -148,6 +149,20 @@ Describe 'Configuration-aware inventory detection' {
 
     It 'rejects the unrendered repository template' {
         @(& (Join-Path $script:Repo 'src\InventoryPackage\Detect.ps1')).Count | Should -Be 0
+        $LASTEXITCODE | Should -Be 1
+    }
+
+    It 'rejects an installed configuration for another customer path' {
+        $path = Join-Path $script:Installed 'Config.psd1'
+        (Get-Content $path -Raw).Replace("CustomerName = 'LogCollector'", "CustomerName = 'OtherCustomer'") |
+            Set-Content $path
+        @(& $script:EnabledDetection).Count | Should -Be 0
+        $LASTEXITCODE | Should -Be 1
+    }
+
+    It 'rejects a mismatched installed version file' {
+        Set-Content -LiteralPath (Join-Path $script:Installed 'Version') -Value '1.6.2'
+        @(& $script:EnabledDetection).Count | Should -Be 0
         $LASTEXITCODE | Should -Be 1
     }
 }

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.6.2. Protected, bounded metadata-only diagnostics; no activity on import.
+# Version 1.7.0. Protected, bounded metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 
 $script:LogGuard = $null
@@ -247,7 +247,7 @@ function New-InventoryLogContext {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [ValidateSet('Install', 'Inventory', 'Spool')] [string] $Component,
-        [string] $Directory = 'C:\ProgramData\LogCollector\Logs\CustomInventory',
+        [Parameter(Mandatory)] [string] $Directory,
         [ValidateRange(1024, 20971520)] [int] $MaxFileBytes = 2097152,
         [ValidateRange(0, 32)] [int] $MaxArchives = 4,
         [ValidateRange(1, 365)] [int] $MaxAgeDays = 14
@@ -272,22 +272,56 @@ function New-InventoryLogContext {
     return $context
 }
 
+function Get-InventoryLogCustomerName {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $ConfigPath)
+
+    try {
+        $config = Import-PowerShellDataFile -LiteralPath $ConfigPath -ErrorAction Stop
+        if (-not $config.ContainsKey('CustomerName') -or $config.CustomerName -isnot [string] -or
+            $config.CustomerName -notmatch '^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$') {
+            return $null
+        }
+        if (($config.CustomerName -split '\.')[0].ToUpperInvariant() -in @(
+                'CON', 'PRN', 'AUX', 'NUL', 'CLOCK$', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+                'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5',
+                'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
+            return $null
+        }
+        return $config.CustomerName
+    }
+    catch {
+        Write-Warning ("Inventory log configuration is unavailable; logging will be skipped. " +
+            "ExceptionType=$($_.Exception.GetType().FullName); HResult=$($_.Exception.HResult).")
+        return $null
+    }
+}
+
 function Initialize-InventoryLogContext {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [ValidateSet('Install', 'Inventory', 'Spool')] [string] $Component,
         [Parameter(Mandatory)] [ValidatePattern('^\d+\.\d+\.\d+$')] [string] $PackageVersion,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')]
+        [string] $CustomerName,
         [string] $PrimaryDirectory,
         [string] $FallbackDirectory
     )
 
+    if (($CustomerName -split '\.')[0].ToUpperInvariant() -in @(
+            'CON', 'PRN', 'AUX', 'NUL', 'CLOCK$', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+            'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5',
+            'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
+        throw "CustomerName '$CustomerName' is a reserved Windows device name."
+    }
     if (-not $PSBoundParameters.ContainsKey('PrimaryDirectory')) {
         $PrimaryDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-            'LogCollector\Logs\CustomInventory'
+            "$CustomerName\CustomInventory\Logs"
     }
     if (-not $PSBoundParameters.ContainsKey('FallbackDirectory')) {
         $FallbackDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-            "LogCollectorInventory\Logs\CustomInventory-$PackageVersion"
+            "LogCollectorInventory\$CustomerName\CustomInventory-Fallback-$PackageVersion\Logs"
     }
     try {
         $context = New-InventoryLogContext -Component $Component -Directory $PrimaryDirectory
@@ -414,5 +448,5 @@ function Write-InventoryLogFailure {
     }
 }
 
-Export-ModuleMember -Function Initialize-InventoryLogContext, New-InventoryLogContext, Write-InventoryLog, `
-    New-InventoryDiagnosticSink, Write-InventoryLogFailure
+Export-ModuleMember -Function Get-InventoryLogCustomerName, Initialize-InventoryLogContext, `
+    New-InventoryLogContext, Write-InventoryLog, New-InventoryDiagnosticSink, Write-InventoryLogFailure
