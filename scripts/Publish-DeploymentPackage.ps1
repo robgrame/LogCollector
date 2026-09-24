@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.0.0. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.1.0. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -181,6 +181,8 @@ if (-not $groupExists) {
 
 $frontendAppNameResolved = $FrontendAppName
 $workerAppNameResolved = $WorkerAppName
+$frontendIdentityNameResolved = $null
+$entraDeviceValidationEnabledResolved = $null
 $infraDeployed = $false
 if (-not $SkipInfra) {
     if ($PSCmdlet.ShouldProcess($ResourceGroup, 'Deploy infrastructure (Bicep)')) {
@@ -197,6 +199,8 @@ if (-not $SkipInfra) {
         $outputs = $outputsJson | ConvertFrom-Json
         $frontendAppNameResolved = $outputs.frontendAppName.value
         $workerAppNameResolved = $outputs.workerAppName.value
+        $frontendIdentityNameResolved = $outputs.frontendIdentityName.value
+        $entraDeviceValidationEnabledResolved = [bool]$outputs.entraDeviceValidationEnabled.value
         $infraDeployed = $true
         Write-Output "Frontend ingest URL: $($outputs.frontendIngestUrl.value)"
         Write-Output "Log Analytics workspace: $($outputs.logAnalyticsWorkspaceName.value)"
@@ -230,6 +234,37 @@ if (-not $SkipApps) {
     }
 }
 Write-Output 'Deployment complete.'
+if (-not $frontendIdentityNameResolved -and $frontendAppNameResolved) {
+    $frontendIdentityNameResolved = "$frontendAppNameResolved-identity"
+}
+if ($null -eq $entraDeviceValidationEnabledResolved -and $frontendAppNameResolved -and -not $WhatIfPreference) {
+    $configuredValue = & az functionapp config appsettings list `
+        --name $frontendAppNameResolved `
+        --resource-group $ResourceGroup `
+        --query "[?name=='EntraDeviceValidation__Enabled'].value | [0]" `
+        --only-show-errors -o tsv @subscriptionArgs
+    $parsedValue = $false
+    if ($LASTEXITCODE -eq 0) {
+        if ([string]::IsNullOrWhiteSpace("$configuredValue")) {
+            $entraDeviceValidationEnabledResolved = $true
+        }
+        elseif ([bool]::TryParse("$configuredValue", [ref] $parsedValue)) {
+            $entraDeviceValidationEnabledResolved = $parsedValue
+        }
+    }
+}
+if ($entraDeviceValidationEnabledResolved -eq $true -and $frontendIdentityNameResolved) {
+    Write-Warning 'Intune enrollment certificates require Microsoft Graph Device.Read.All application consent before the pilot.'
+    Write-Output "Intake managed identity: $frontendIdentityNameResolved"
+    Write-Output ("From a trusted, reviewed checkout of this release, run: scripts\Grant-IntuneGraphPermission.ps1 " +
+        "-SubscriptionId '$SubscriptionId' -ResourceGroup '$ResourceGroup' -IdentityName '$frontendIdentityNameResolved'")
+}
+elseif ($entraDeviceValidationEnabledResolved -eq $false) {
+    Write-Warning 'Entra device validation is disabled. Intune submissions are accepted without proving that the certificate-bound device belongs to this tenant.'
+}
+else {
+    Write-Warning 'Entra device validation mode could not be determined. Verify the Frontend setting EntraDeviceValidation__Enabled before onboarding devices.'
+}
 '@
 [IO.File]::WriteAllText((Join-Path $target 'Deploy-LogCollector.ps1'), $deployScript, [Text.UTF8Encoding]::new($false))
 
@@ -285,6 +320,44 @@ migrates the resources.
 Use ``-SkipInfra`` to redeploy only the Function app code against an existing resource group,
 or ``-SkipApps`` to only (re)apply the infrastructure template. Run with ``-WhatIf`` first to
 preview the changes.
+
+### Optional Microsoft Entra device validation for Intune certificates
+
+The secure default is ``entraDeviceValidationEnabled = true``. In this mode, devices authenticated
+with Microsoft Intune enrollment certificates are also verified as enabled devices in the
+frontend identity's tenant. Grant Microsoft Graph ``Device.Read.All`` application permission to
+the exact intake identity printed by ``Deploy-LogCollector.ps1`` before starting the pilot.
+
+The operator must hold **Privileged Role Administrator** or **Global Administrator** in Entra.
+Cloud Application Administrator is not sufficient for Microsoft Graph application permissions.
+Azure ``Contributor``, ``Owner`` and ``User Access Administrator`` do not include this consent.
+
+The administrative helper is intentionally **not bundled** in this unsigned deployment package:
+running package-supplied PowerShell as a tenant administrator would create an unnecessary
+supply-chain trust boundary. Run ``scripts\Grant-IntuneGraphPermission.ps1`` only from a trusted,
+reviewed checkout of the matching LogCollector release, or implement the equivalent app-role
+assignment through your organization's approved Entra administration process.
+
+If the printed identity name must be rediscovered, stop unless exactly one candidate exists:
+
+``````powershell
+`$intakeIdentities = @(az identity list --subscription <sub-id> -g <rg-name> ``
+  --query "[?ends_with(name, '-intake-identity')].name" -o tsv)
+if (`$intakeIdentities.Count -ne 1) { throw "Expected one intake identity, found `$(`$intakeIdentities.Count)." }
+.\scripts\Grant-IntuneGraphPermission.ps1 -SubscriptionId <sub-id> ``
+  -ResourceGroup <rg-name> -IdentityName `$intakeIdentities[0]
+``````
+
+Do not start the pilot until the helper reports that ``Device.Read.All`` was assigned or was
+already present. Without it, the intake accepts the device certificate but returns HTTP 500;
+Application Insights shows the Microsoft Graph device lookup returning HTTP 403.
+
+If the customer cannot grant this permission, set ``entraDeviceValidationEnabled = false`` in
+``infra\$parameterFileName`` and redeploy. The resulting Function App setting is
+``EntraDeviceValidation__Enabled=false``. Certificate-chain validation, request signing,
+anti-replay and exact certificate-to-device-ID binding remain enforced, but the service can no
+longer prove that the device belongs to the customer's Entra tenant. Use this exception only
+after accepting that reduced tenant-isolation control.
 
 ### Reusing an existing Log Analytics workspace
 
@@ -342,5 +415,6 @@ Set-Content -LiteralPath (Join-Path $target 'README.md') -Value $readme -Encodin
     PackagePath = [IO.Path]::GetFullPath($target)
     FrontendSha256 = $frontendHash
     WorkerSha256 = $workerHash
+    ParameterFileName = $parameterFileName
     FileCount = @(Get-ChildItem -LiteralPath $target -File -Recurse).Count
 }

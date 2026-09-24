@@ -2,6 +2,8 @@ BeforeAll {
     $script:RepoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:DetectionPath = Join-Path $script:RepoRoot 'src\CorePackage\Detect.ps1'
     $script:PublisherPath = Join-Path $script:RepoRoot 'scripts\Publish-CustomerDeliverable.ps1'
+    $script:DeploymentPublisherPath = Join-Path $script:RepoRoot 'scripts\Publish-DeploymentPackage.ps1'
+    $script:GraphPermissionPath = Join-Path $script:RepoRoot 'scripts\Grant-IntuneGraphPermission.ps1'
     $script:GeneratorPath = Join-Path $script:RepoRoot 'scripts\New-IntunePackage.ps1'
 
     $tokens = $null
@@ -79,6 +81,29 @@ Describe 'Core package configuration-bound detection' {
         $publisherText | Should -Match ([regex]::Escape(
                 "Copy-Item -LiteralPath `$generatorSource -Destination (Join-Path `$intune 'New-IntunePackage.ps1')"))
         $publisherText | Should -Not -Match '\$intuneGenerator\s*='
+    }
+
+    It 'documents optional Graph consent without bundling the administrative helper' {
+        $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
+        $deploymentPublisherText = [IO.File]::ReadAllText($script:DeploymentPublisherPath)
+        $mainBicep = [IO.File]::ReadAllText((Join-Path $script:RepoRoot 'infra\main.bicep'))
+        $deploymentParameters = [IO.File]::ReadAllText(
+            (Join-Path $script:RepoRoot 'infra\logcollector.bicepparam'))
+        Test-Path -LiteralPath $script:GraphPermissionPath -PathType Leaf | Should -BeTrue
+        $helperText = [IO.File]::ReadAllText($script:GraphPermissionPath)
+
+        $deploymentPublisherText | Should -Not -Match ([regex]::Escape(
+                "Copy-Item -LiteralPath `$graphPermissionSource"))
+        $deploymentPublisherText | Should -Match 'Grant-IntuneGraphPermission\.ps1'
+        $deploymentPublisherText | Should -Match 'Device\.Read\.All'
+        $deploymentPublisherText | Should -Match 'intentionally \*\*not bundled\*\*'
+        $deploymentPublisherText | Should -Match 'frontendIdentityName'
+        $helperText | Should -Match 'Device\.Read\.All'
+        $helperText | Should -Match 'appRoleAssignments'
+        $publisherText | Should -Match 'Device\.Read\.All'
+        $publisherText | Should -Match 'entraDeviceValidationEnabled = false'
+        $mainBicep | Should -Match 'param entraDeviceValidationEnabled bool = true'
+        $deploymentParameters | Should -Match 'param entraDeviceValidationEnabled = true'
     }
 
     It 'preserves relative module paths when creating the customer deliverable' {

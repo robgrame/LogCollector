@@ -69,7 +69,45 @@ necessario un ruolo abilitato alla gestione RBAC: senza di esso il deployment si
 con errore `AuthorizationFailed` sulla creazione dei role assignment.
 
 I permessi possono essere limitati al **solo resource group di destinazione**: non è richiesto
-alcun ruolo a livello di sottoscrizione o di tenant.
+alcun ruolo Azure a livello di sottoscrizione o di tenant.
+
+### Verifica opzionale del device Entra per i certificati Intune
+
+Se i dispositivi si autenticano con il certificato di enrollment Microsoft Intune, dopo il
+deployment, per mantenere la verifica Entra predefinita, un amministratore deve assegnare alla managed identity dell'Intake la permission
+applicativa Microsoft Graph **`Device.Read.All`**. Questa autorizzazione consente esclusivamente
+di verificare che il device ID legato al certificato esista e sia abilitato nel tenant.
+
+È un consenso Entra separato dai ruoli Azure sopra elencati. L'operatore deve disporre di
+**Privileged Role Administrator** o **Global Administrator**. **Cloud Application
+Administrator non è sufficiente** per le permission applicative Microsoft Graph.
+
+Usare il nome identity stampato dallo script di deployment. L'helper amministrativo non viene
+incluso nel package unsigned: deve essere eseguito esclusivamente da un checkout repository
+fidato e revisionato, oppure sostituito dal processo Entra approvato dall'organizzazione.
+Se il nome deve essere riscoperto, limitare la query alla subscription e interrompere in caso
+di risultati multipli:
+
+```powershell
+$intakeIdentities = @(az identity list --subscription <subscription-id> -g <resource-group> `
+  --query "[?ends_with(name, '-intake-identity')].name" -o tsv)
+if ($intakeIdentities.Count -ne 1) { throw "Expected one intake identity, found $($intakeIdentities.Count)." }
+.\scripts\Grant-IntuneGraphPermission.ps1 `
+  -SubscriptionId <subscription-id> `
+  -ResourceGroup <resource-group> `
+  -IdentityName $intakeIdentities[0]
+```
+
+Il pilot Intune non deve iniziare finché il comando non conferma che `Device.Read.All` è stato
+assegnato o era già presente. In sua assenza, il certificato viene ricevuto correttamente ma
+l'Intake termina con HTTP 500 e Application Insights registra una dipendenza Microsoft Graph 403.
+
+Se il cliente non può concedere questa permission, prima del deployment può impostare
+`entraDeviceValidationEnabled = false` nel file Bicep parameters. La Function riceverà
+`EntraDeviceValidation__Enabled=false`: certificato, firma, anti-replay e corrispondenza esatta
+tra device ID del certificato e payload restano obbligatori, ma non viene più verificata
+l'appartenenza del device al tenant Entra del cliente. Questa riduzione del controllo di
+isolamento tenant deve essere approvata esplicitamente.
 
 Se il resource group deve essere **creato dallo script**, è invece necessario il ruolo
 **Contributor a livello di sottoscrizione** (oppure createlo voi in anticipo e assegnateci i

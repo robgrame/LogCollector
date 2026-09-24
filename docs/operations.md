@@ -82,9 +82,9 @@ Function App with `clientCertMode: Required` · Flex Consumption FC1 plan + work
 
 ## 2. Deploy applications
 
-### Intune fallback: grant tenant device-read permission
+### Intune fallback: Entra device validation
 
-Deploy the frontend in the customer's Entra tenant. When Intune fallback is enabled, an Entra
+Deploy the frontend in the customer's Entra tenant. By default, when Intune fallback is enabled, an Entra
 administrator must grant **Microsoft Graph Device.Read.All (application)** to its user-assigned
 managed identity. This is a Graph app-role assignment, not an Azure RBAC role; Bicep does not
 silently grant tenant-wide directory permissions. Enterprise-PKI-only deployments do not need it.
@@ -96,6 +96,40 @@ subscription's tenant. It does not change the caller's default Azure CLI subscri
 .\scripts\Grant-IntuneGraphPermission.ps1 -SubscriptionId $subscription `
   -ResourceGroup LOGCOLLECTOR-RG -IdentityName LogCollector-intake-identity
 ```
+
+Run this command after every first deployment into a new Entra tenant and before assigning the
+Core package to pilot devices. The operator needs **Privileged Role Administrator** or
+**Global Administrator**. **Cloud Application Administrator is not sufficient** for Microsoft
+Graph application permissions. Azure `Contributor`, `Owner`, and `User Access Administrator`
+do not grant this tenant-level consent by themselves.
+
+The command is the deployment gate: it must report either `Assigned Microsoft Graph
+Device.Read.All to the intake managed identity.` or `Device.Read.All is already assigned.`.
+Re-running it is safe and is the supported verification that consent is still present.
+
+For prefixed deployments, use the exact identity name printed by the deployment package. To
+rediscover it without reproducing the Bicep normalization rules, scope the lookup to the target
+subscription and stop unless exactly one identity matches:
+
+```powershell
+$intakeIdentities = @(az identity list --subscription $subscription -g LOGCOLLECTOR-RG `
+  --query "[?ends_with(name, '-intake-identity')].name" -o tsv)
+if ($intakeIdentities.Count -ne 1) { throw "Expected one intake identity, found $($intakeIdentities.Count)." }
+.\scripts\Grant-IntuneGraphPermission.ps1 -SubscriptionId $subscription `
+  -ResourceGroup LOGCOLLECTOR-RG -IdentityName $intakeIdentities[0]
+```
+
+Run the helper only from a trusted, reviewed repository checkout. It is deliberately not copied
+into the unsigned customer deployment package because it is executed in a tenant-administrator
+session.
+
+If the customer cannot grant `Device.Read.All`, set the Bicep parameter
+`entraDeviceValidationEnabled = false` and redeploy. This writes
+`EntraDeviceValidation__Enabled=false` to the Frontend Function App configuration. The request
+still requires a trusted certificate, valid body signature, fresh timestamp, unique nonce and
+an exact certificate-to-payload device-ID match. It no longer verifies that the bound device
+exists and is enabled in the customer's Entra tenant. Record this reduced-security exception in
+the customer deployment decision.
 
 Missing consent or unavailable Graph produces a failed submission, never an authorization bypass.
 For the pilot, confirm the enrollment certificate's `.5.25` GUID equals the device's `dsregcmd`
@@ -379,6 +413,7 @@ description.
 | `401 request signature verification failed` | Body altered in transit, or a proxy re-encoded it | Ensure nothing rewrites the body; the client signs raw bytes |
 | `401 missing the configured device-id binding claim` | Certificate template has no device id | Add a SAN URI `urn:uuid:<guid>`, or use `ClientCert__ThumbprintToDeviceMap` |
 | `403 not bound to the submitted device` | Certificate belongs to another device | Re-issue for the correct device; do **not** relax the binding |
+| Intake returns `500`; Graph dependency returns `403` | Entra validation is enabled but the intake identity lacks Microsoft Graph `Device.Read.All` | Grant the permission, or explicitly set `EntraDeviceValidation__Enabled=false` after accepting reduced tenant isolation; restart the intake and retry the spooled submission |
 | `400 skew … exceeds …` | Device clock drift | Fix time sync; do not widen the window as a workaround |
 | `409 duplicate nonce` | Genuine replay, or a client resending an identical signed request | Expected on replay; the client re-signs per attempt, so it should not occur normally |
 | `400 not an accepted ingestion target` | `Ingestion__StreamMap` missing the table | Add `Table_CL=Custom-Table_CL` on **both** apps |

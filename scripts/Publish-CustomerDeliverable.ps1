@@ -19,7 +19,7 @@ Folder under which a versioned deliverable folder is created. Defaults to '<repo
 Bicep parameter file bundled as the deployment default. Defaults to
 'infra\logcollector.bicepparam'.
 .NOTES
-Version 1.1.2. Builds via dotnet publish; makes no changes to Azure resources and never
+Version 1.2.0. Builds via dotnet publish; makes no changes to Azure resources and never
 overwrites an existing deliverable.
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -112,7 +112,8 @@ $null = New-Item -ItemType Directory -Path $target -Force
 $azureArgs = @{ OutputRoot = Join-Path $target 'azure-staging' }
 if ($PSBoundParameters.ContainsKey('ParameterFile')) { $azureArgs.ParameterFile = $ParameterFile }
 $azure = & (Join-Path $PSScriptRoot 'Publish-DeploymentPackage.ps1') @azureArgs | Select-Object -Last 1
-Move-Item -LiteralPath $azure.PackagePath -Destination (Join-Path $target '1-Azure')
+$azureTarget = Join-Path $target '1-Azure'
+Move-Item -LiteralPath $azure.PackagePath -Destination $azureTarget
 Remove-Item -LiteralPath (Join-Path $target 'azure-staging') -Recurse -Force
 
 # --- 2-Intune ------------------------------------------------------------------------
@@ -346,6 +347,48 @@ collision handling and troubleshooting.
 Add ``-WhatIf`` to preview without changing anything.
 
 When it finishes the script prints **``frontendIngestUrl``**. Copy it: step 2 needs it.
+
+### Optional Entra device validation for Intune certificates
+
+The secure default ``entraDeviceValidationEnabled = true`` verifies that an Intune
+certificate's device ID belongs to an enabled device in this Entra tenant. Bicep cannot grant
+the required tenant-wide Microsoft Graph application permission. The canonical repository
+contains an idempotent helper, intentionally not copied into this unsigned customer package.
+Run tenant-administrator code only from a trusted, reviewed checkout of the matching release:
+
+``````powershell
+.\scripts\Grant-IntuneGraphPermission.ps1 ``
+  -SubscriptionId <subscription-id> ``
+  -ResourceGroup  <resource-group> ``
+  -IdentityName   <resolved-intake-identity-name>
+``````
+
+The helper is idempotent and grants only ``Device.Read.All`` to the intake managed identity.
+The operator needs an Entra role allowed to assign application permissions, such as
+**Privileged Role Administrator** or **Global Administrator**. **Cloud Application
+Administrator is not sufficient** for Microsoft Graph application permissions.
+This is separate from Azure ``Contributor``/``User Access Administrator``.
+
+Use the exact identity name printed by ``Deploy-LogCollector.ps1``. If it must be reconstructed,
+scope discovery to the target subscription and stop unless exactly one match exists:
+
+``````powershell
+`$intakeIdentities = @(az identity list --subscription <subscription-id> -g <resource-group> ``
+  --query "[?ends_with(name, '-intake-identity')].name" -o tsv)
+if (`$intakeIdentities.Count -ne 1) { throw "Expected one intake identity, found `$(`$intakeIdentities.Count)." }
+.\scripts\Grant-IntuneGraphPermission.ps1 -SubscriptionId <subscription-id> ``
+  -ResourceGroup <resource-group> -IdentityName `$intakeIdentities[0]
+``````
+
+Do not start the Intune pilot before this command reports that the permission was assigned or
+already present. Without it, authenticated submissions fail in the intake with HTTP 500 while
+Application Insights shows a Microsoft Graph dependency returning HTTP 403.
+
+If the customer cannot grant this permission, set ``entraDeviceValidationEnabled = false`` in
+``1-Azure\infra\$($azure.ParameterFileName)`` before deployment. This produces the Function App
+setting ``EntraDeviceValidation__Enabled=false``. mTLS, body signature, anti-replay and exact
+certificate-to-device-ID binding remain active, but tenant membership is no longer verified.
+This reduced-security mode must be an explicit customer decision.
 
 ## Step 2 - build the Core Intune package
 

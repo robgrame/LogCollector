@@ -39,6 +39,7 @@ param trustedCaThumbprints = ''
 param trustedIntuneRootCertificatesBase64 = ''
 param trustedIntuneIntermediateCertificatesBase64 = ''
 param allowIntuneEnrollmentCertificateFallback = true
+param entraDeviceValidationEnabled = true
 param intuneEnrollmentIssuerSubjects = 'CN=Microsoft Intune MDM Device CA|CN=Microsoft Intune Device Management Device CA'
 
 // --- Binding and anti-replay ---

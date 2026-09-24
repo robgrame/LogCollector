@@ -40,6 +40,7 @@ public sealed class TelemetryIngestFunction
     private readonly TelemetryPointerPublisher _publisher;
     private readonly IngestionStreamMap _streamMap;
     private readonly TelemetryIntakeOptions _options;
+    private readonly EntraDeviceValidationOptions _entraDeviceValidation;
     private readonly GraphDeviceAuthorizer _deviceAuthorizer;
     private readonly ILogger<TelemetryIngestFunction> _log;
 
@@ -50,6 +51,7 @@ public sealed class TelemetryIngestFunction
         TelemetryPointerPublisher publisher,
         IngestionStreamMap streamMap,
         TelemetryIntakeOptions options,
+        EntraDeviceValidationOptions entraDeviceValidation,
         GraphDeviceAuthorizer deviceAuthorizer,
         ILogger<TelemetryIngestFunction> log)
     {
@@ -57,6 +59,7 @@ public sealed class TelemetryIngestFunction
         _publisher = publisher;
         _streamMap = streamMap;
         _options = options;
+        _entraDeviceValidation = entraDeviceValidation;
         _deviceAuthorizer = deviceAuthorizer;
         _log = log;
     }
@@ -157,12 +160,12 @@ public sealed class TelemetryIngestFunction
         }
 
         if (auth.Tier == ClientCertValidator.TrustTier.IntuneEnrollment
+            && _entraDeviceValidation.Enabled
             && !await _deviceAuthorizer.IsEnabledTenantDeviceAsync(binding.BoundDeviceId!, ct))
         {
             _log.LogWarning("Intune device {DeviceId} is absent or disabled in the frontend identity's tenant.", binding.BoundDeviceId);
             return Problem(StatusCodes.Status403Forbidden, "device is not authorized in this tenant", correlationId);
         }
-
         var submissionId = SubmissionIdentity.FromBody(bodyBytes);
         var pointer = await _publisher
             .PublishAsync(envelope, bodyBytes, submissionId, auth.Certificate!.Thumbprint, ct)

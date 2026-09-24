@@ -128,12 +128,12 @@ Six complementary controls run in a fixed, fail-closed order.
 | 5 | **Certificate ↔ device binding** | A valid device submitting inventory attributed to a *different* device (IDOR). The device id must be an exact GUID in the certificate; substrings are rejected. |
 | 6 | **Table → DCR stream allow-list** | A client choosing an arbitrary ingestion destination. An unmapped table name fails closed. |
 
-**Intune tenant authorization is mandatory before intake.** Microsoft Intune CA roots can be
-shared across tenants. A valid enrollment certificate therefore is not sufficient authorization.
-After signature and device binding, the frontend looks up the bound device in Microsoft Graph
-using its own managed identity and requires an enabled device in that identity's tenant.
-The frontend identity needs Graph **Device.Read.All (application)** permission with administrator
-consent for the Intune fallback. Graph failures never bypass this check.
+**Intune tenant authorization is enabled by default.** Microsoft Intune CA roots can be shared
+across tenants, so the frontend normally looks up the certificate-bound device in Microsoft
+Graph and requires an enabled device in its identity's tenant. This requires Graph
+**Device.Read.All (application)**. Customers unable to grant it can explicitly set
+`EntraDeviceValidation__Enabled=false`; mTLS, signing, anti-replay and certificate/device binding
+remain enforced, but tenant membership is no longer proven.
 
 Then, at the data layer, `TelemetryRowFactory` writes the server-asserted identity columns **after**
 copying client fields, so a record containing its own `EntraDeviceId` cannot spoof attribution.
@@ -421,8 +421,9 @@ az deployment group create `
 ```
 
 Record the outputs: `frontendIngestUrl`, `dataCollectionEndpoint`, `dataCollectionRuleImmutableId`.
-For Intune fallback, complete the administrator-operated Graph `Device.Read.All` grant in
-[the runbook](docs/operations.md#intune-fallback-grant-tenant-device-read-permission) before onboarding.
+For Intune fallback, either complete the administrator-operated Graph `Device.Read.All` grant or
+explicitly accept reduced tenant isolation as described in
+[the runbook](docs/operations.md#intune-fallback-entra-device-validation).
 
 **Naming and collisions:** the storage account and Function app names are globally unique
 across all of Azure. On a first-time deployment, set `customerPrefix` (e.g. `'aci'`) in the

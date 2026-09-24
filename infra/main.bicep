@@ -109,6 +109,9 @@ param trustedCaThumbprints string = ''
 @description('Allow the Intune enrollment certificate as a second trust tier.')
 param allowIntuneEnrollmentCertificateFallback bool = true
 
+@description('Verify Intune certificate-bound device IDs against Microsoft Entra ID through Microsoft Graph. Keep enabled when Device.Read.All can be granted. Disabling removes tenant-membership validation.')
+param entraDeviceValidationEnabled bool = true
+
 @description('Pipe-separated allow-list of Intune enrollment issuer subject DNs.')
 param intuneEnrollmentIssuerSubjects string = 'CN=Microsoft Intune MDM Device CA|CN=Microsoft Intune Device Management Device CA'
 
@@ -797,6 +800,7 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ClientCert__SkipIntuneRevocationCheck', value: string(skipIntuneRevocationCheck) }
         { name: 'ClientCert__RevocationMode', value: 'Online' }
         { name: 'ClientCert__RevocationFlag', value: 'ExcludeRoot' }
+        { name: 'EntraDeviceValidation__Enabled', value: string(entraDeviceValidationEnabled) }
 
         { name: 'Ingestion__StreamMap', value: ingestionStreamMap }
         { name: 'Intake__MaxRecordsPerEnvelope', value: '50000' }
@@ -917,6 +921,8 @@ resource workerApp 'Microsoft.Web/sites@2023-12-01' = {
 // ---------------------------------------------------------------------------
 
 output frontendAppName string = frontendApp.name
+output frontendIdentityName string = frontendIdentity.name
+output entraDeviceValidationEnabled bool = entraDeviceValidationEnabled
 output frontendIngestUrl string = 'https://${frontendApp.properties.defaultHostName}/api/submit'
 output legacyInventoryIngestUrl string = 'https://${frontendApp.properties.defaultHostName}/api/inventory'
 output frontendHealthUrl string = 'https://${frontendApp.properties.defaultHostName}/api/health'
