@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.2.2. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.2.4. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -137,7 +137,7 @@ Optional path for the detailed deployment log. Defaults to a timestamped file un
 .\Logs next to this script. Console and file logging contain operational metadata only;
 subscription IDs are masked and Azure credentials or access tokens are never logged.
 .NOTES
-Version 1.3.2. Never mutates the caller's persisted `az` default subscription; every
+Version 1.3.4. Never mutates the caller's persisted `az` default subscription; every
 command is scoped with --subscription instead of `az account set`. Writes detailed,
 timestamped progress diagnostics to the console and a local log file.
 #>
@@ -338,6 +338,39 @@ function Wait-MainSiteRulePresence {
     throw "Timed out waiting for access restriction rule '$RuleName' presence '$ExpectedPresent' on $AppName."
 }
 
+function Get-WebResponseHeaderValue {
+    param(
+        [Parameter(Mandatory)] [object] $Response,
+        [Parameter(Mandatory)] [string] $Name
+    )
+    try {
+        $values = @($Response.Headers.GetValues($Name))
+        if ($values.Count -gt 0) { return [string]$values[0] }
+    }
+    catch {
+        return ''
+    }
+    return ''
+}
+
+function Get-ExceptionWebResponse {
+    param([Parameter(Mandatory)] [Exception] $Exception)
+    $property = $Exception.PSObject.Properties['Response']
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-WebResponseStatusDescription {
+    param([Parameter(Mandatory)] [object] $Response)
+    foreach ($propertyName in @('StatusDescription', 'ReasonPhrase')) {
+        $property = $Response.PSObject.Properties[$propertyName]
+        if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return [string]$property.Value
+        }
+    }
+    return ''
+}
+
 function Wait-MainSiteIpRestrictionActive {
     param(
         [Parameter(Mandatory)] [string] $HostName,
@@ -351,10 +384,10 @@ function Wait-MainSiteIpRestrictionActive {
             Write-DeploymentLog -Level Warning -Message "Main-site lock probe unexpectedly returned HTTP $([int]$response.StatusCode); Uri=$uri."
         }
         catch {
-            $webResponse = $_.Exception.Response
+            $webResponse = Get-ExceptionWebResponse -Exception $_.Exception
             if ($null -ne $webResponse -and [int]$webResponse.StatusCode -eq 403) {
-                $forbiddenIp = [string]$webResponse.Headers['x-ms-forbidden-ip']
-                $statusDescription = [string]$webResponse.StatusDescription
+                $forbiddenIp = Get-WebResponseHeaderValue -Response $webResponse -Name 'x-ms-forbidden-ip'
+                $statusDescription = Get-WebResponseStatusDescription -Response $webResponse
                 if (-not [string]::IsNullOrWhiteSpace($forbiddenIp) -or $statusDescription -eq 'Ip Forbidden') {
                     Write-DeploymentLog -Message (
                         "Main-site IP restriction verified at the data plane; Host=$HostName; " +
@@ -382,11 +415,11 @@ function Wait-MainSiteClientCertificateRequired {
             Write-DeploymentLog -Level Warning -Message "mTLS probe unexpectedly returned HTTP $([int]$response.StatusCode); Uri=$uri."
         }
         catch {
-            $webResponse = $_.Exception.Response
+            $webResponse = Get-ExceptionWebResponse -Exception $_.Exception
             if ($null -ne $webResponse -and [int]$webResponse.StatusCode -eq 403) {
                 $responseBody = if ($null -ne $_.ErrorDetails) { [string]$_.ErrorDetails.Message } else { '' }
-                $statusDescription = [string]$webResponse.StatusDescription
-                $forbiddenIp = [string]$webResponse.Headers['x-ms-forbidden-ip']
+                $statusDescription = Get-WebResponseStatusDescription -Response $webResponse
+                $forbiddenIp = Get-WebResponseHeaderValue -Response $webResponse -Name 'x-ms-forbidden-ip'
                 if (-not [string]::IsNullOrWhiteSpace($forbiddenIp) -or $statusDescription -eq 'Ip Forbidden') {
                     if (-not [string]::IsNullOrWhiteSpace($forbiddenIp) -and $forbiddenIp -ne $ExpectedCallerIp) {
                         throw "The mTLS probe was rejected by the IP restriction because the caller address changed. ExpectedIp=$ExpectedCallerIp; ReportedIp=$forbiddenIp"
@@ -416,7 +449,7 @@ trap {
 }
 
 Write-DeploymentLog -Message (
-    "Deployment started; ScriptVersion=1.3.2; PowerShell=$($PSVersionTable.PSVersion); " +
+    "Deployment started; ScriptVersion=1.3.4; PowerShell=$($PSVersionTable.PSVersion); " +
     "ProcessId=$PID; LogPath=$LogPath.")
 Write-DeploymentLog -Message (
     "Requested scope; Subscription=$(Protect-DeploymentLogValue $SubscriptionId); " +
