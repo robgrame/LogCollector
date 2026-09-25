@@ -61,7 +61,7 @@ solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake sia nel
 - `Run-Inventory.ps1`: raccolta e invio separato alle destinazioni configurate.
 - `Sync-Spool.ps1`: ritrasmissione senza nuova raccolta.
 - `Inventory.Collection.psm1` / `Inventory.Runtime.psm1`: raccolta e integrazione.
-- `Modules`: i file del modulo condiviso LogCollector.Client 1.10.0.
+- `Modules`: i file del modulo condiviso LogCollector.Client 1.10.1.
 - `Inventory.Logging.psm1`: logger locale protetto, condiviso dalle entry point.
 - `Install.ps1`, `Uninstall.ps1`, `Detect.ps1`: gestione Intune Win32.
 - `Config.psd1`: configurazione del deployment.

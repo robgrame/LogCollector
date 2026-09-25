@@ -37,7 +37,7 @@ BeforeAll {
         Environment                   = 'Production'
         CustomerName                  = 'Example'
         SubmissionEnabled             = $true
-        PackageVersion                = '1.10.0'
+        PackageVersion                = '1.10.1'
         CertificateThumbprint         = ''
         CertificateSubjectLike        = ''
         CertificateIssuerLike         = ''
