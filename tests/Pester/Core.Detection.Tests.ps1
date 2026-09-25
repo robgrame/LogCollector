@@ -124,7 +124,7 @@ Describe 'Core package configuration-bound detection' {
                 'function Get-WebResponseStatusDescription',
                 'function Wait-MainSiteIpRestrictionActive',
                 'function Wait-MainSiteClientCertificateRequired',
-                'Deployment started; ScriptVersion=1.3.4',
+                'Deployment started; ScriptVersion=1.3.5',
                 'Starting Bicep deployment',
                 'Starting Frontend package deployment',
                 'Starting Worker package deployment',
@@ -148,6 +148,7 @@ Describe 'Core package configuration-bound detection' {
         $deploymentPublisherText | Should -Match 'Client Certificate Required'
         $deploymentPublisherText | Should -Match 'defaultHostName'
         $deploymentPublisherText | Should -Match 'Temporary LogCollector deployment mTLS verification'
+        $deploymentPublisherText | Should -Match "LCProbe-\{0\}-\{1\}"
         $deploymentPublisherText | Should -Match 'api-version=2024-04-01'
         $deploymentPublisherText | Should -Match '\$frontendWasRunning'
         $deploymentPublisherText | Should -Match '--default-action Deny'

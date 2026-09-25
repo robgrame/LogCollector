@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.2.4. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.2.5. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -137,7 +137,7 @@ Optional path for the detailed deployment log. Defaults to a timestamped file un
 .\Logs next to this script. Console and file logging contain operational metadata only;
 subscription IDs are masked and Azure credentials or access tokens are never logged.
 .NOTES
-Version 1.3.4. Never mutates the caller's persisted `az` default subscription; every
+Version 1.3.5. Never mutates the caller's persisted `az` default subscription; every
 command is scoped with --subscription instead of `az account set`. Writes detailed,
 timestamped progress diagnostics to the console and a local log file.
 #>
@@ -449,7 +449,7 @@ trap {
 }
 
 Write-DeploymentLog -Message (
-    "Deployment started; ScriptVersion=1.3.4; PowerShell=$($PSVersionTable.PSVersion); " +
+    "Deployment started; ScriptVersion=1.3.5; PowerShell=$($PSVersionTable.PSVersion); " +
     "ProcessId=$PID; LogPath=$LogPath.")
 Write-DeploymentLog -Message (
     "Requested scope; Subscription=$(Protect-DeploymentLogValue $SubscriptionId); " +
@@ -762,7 +762,7 @@ if (-not $SkipApps) {
                     }
                 }
                 else {
-                $probeRuleName = 'LogCollectorDeploymentProbe-{0}-{1}' -f $PID, (Get-Date -Format 'yyyyMMddHHmmss')
+                $probeRuleName = 'LCProbe-{0}-{1}' -f $PID, (Get-Date -Format 'HHmmss')
                 $probeRuleAdded = $false
                 try {
                     $probeRule = [pscustomobject]@{
@@ -839,8 +839,9 @@ if (-not $SkipApps) {
                             --only-show-errors @subscriptionArgs | Out-Null
                         if ($LASTEXITCODE -ne 0) { throw "Azure CLI exited with code $LASTEXITCODE." }
                         Wait-MainSiteDefaultAction -AppName $frontendAppNameResolved -ExpectedAction Deny
-                        $null = Wait-MainSiteIpRestrictionActive -HostName $frontendDefaultHostName
                         & $azCommand.Source functionapp stop --name $frontendAppNameResolved --resource-group $ResourceGroup --only-show-errors @subscriptionArgs
+                        if ($LASTEXITCODE -ne 0) { throw "Failed to stop $frontendAppNameResolved after restoring the Deny default (exit code $LASTEXITCODE)." }
+                        Wait-FunctionAppState -AppName $frontendAppNameResolved -ExpectedState Stopped
                         $cleanupErrors += "Failed to restore and verify the main-site access restriction default action '$previousMainSiteDefaultAction' on $frontendAppNameResolved; the fail-secure Deny default was reapplied. Error=$($restoreFailure.Exception.Message)"
                     }
                     catch {
