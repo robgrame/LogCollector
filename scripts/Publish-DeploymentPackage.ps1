@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.2.0. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.2.1. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -137,7 +137,7 @@ Optional path for the detailed deployment log. Defaults to a timestamped file un
 .\Logs next to this script. Console and file logging contain operational metadata only;
 subscription IDs are masked and Azure credentials or access tokens are never logged.
 .NOTES
-Version 1.3.0. Never mutates the caller's persisted `az` default subscription; every
+Version 1.3.1. Never mutates the caller's persisted `az` default subscription; every
 command is scoped with --subscription instead of `az account set`. Writes detailed,
 timestamped progress diagnostics to the console and a local log file.
 #>
@@ -227,7 +227,7 @@ trap {
 }
 
 Write-DeploymentLog -Message (
-    "Deployment started; ScriptVersion=1.3.0; PowerShell=$($PSVersionTable.PSVersion); " +
+    "Deployment started; ScriptVersion=1.3.1; PowerShell=$($PSVersionTable.PSVersion); " +
     "ProcessId=$PID; LogPath=$LogPath.")
 Write-DeploymentLog -Message (
     "Requested scope; Subscription=$(Protect-DeploymentLogValue $SubscriptionId); " +
@@ -237,8 +237,10 @@ Write-DeploymentLog -Message (
 
 $deploymentPhase = 'ValidatePrerequisites'
 $azCommand = Get-Command az -CommandType Application -ErrorAction Stop | Select-Object -First 1
-$azVersion = (& $azCommand.Source version --query '"azure-cli"' -o tsv --only-show-errors)
+$azVersionDocument = & $azCommand.Source version -o json --only-show-errors | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "Azure CLI version check failed (exit code $LASTEXITCODE)." }
+$azVersion = [string]$azVersionDocument.'azure-cli'
+if ([string]::IsNullOrWhiteSpace($azVersion)) { throw 'Azure CLI version output did not contain azure-cli.' }
 Write-DeploymentLog -Message "Azure CLI validated; Path=$($azCommand.Source); Version=$azVersion."
 
 if (-not $PSBoundParameters.ContainsKey('ParameterFile')) {

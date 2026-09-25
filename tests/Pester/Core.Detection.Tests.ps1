@@ -113,7 +113,7 @@ Describe 'Core package configuration-bound detection' {
         foreach ($expected in @(
                 'function Write-DeploymentLog',
                 'function Protect-DeploymentLogValue',
-                'Deployment started; ScriptVersion=1.3.0',
+                'Deployment started; ScriptVersion=1.3.1',
                 'Starting Bicep deployment',
                 'Starting Frontend package deployment',
                 'Starting Worker package deployment',
@@ -123,6 +123,7 @@ Describe 'Core package configuration-bound detection' {
         $deploymentPublisherText | Should -Match '\[Diagnostics\.Stopwatch\]::StartNew\(\)'
         $deploymentPublisherText | Should -Match 'ParameterFileSha256='
         $deploymentPublisherText | Should -Match 'Get-Command az -CommandType Application -ErrorAction Stop \| Select-Object -First 1'
+        $deploymentPublisherText | Should -Match "\.'azure-cli'"
         $deploymentPublisherText | Should -Match '& \$azCommand\.Source deployment group create'
         $deploymentPublisherText | Should -Match '& \$azCommand\.Source functionapp stop'
         $deploymentPublisherText | Should -Match '& \$azCommand\.Source functionapp start'
