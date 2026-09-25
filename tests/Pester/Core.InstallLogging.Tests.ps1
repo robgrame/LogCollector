@@ -15,6 +15,8 @@ Describe 'Core installer diagnostics' {
         $script:Text | Should -Match ([regex]::Escape(
                 "Join-Path `$PSScriptRoot 'Modules\CMTraceLogging.psm1'"))
         $script:Text | Should -Match 'function Write-CoreInstallLog'
+        $script:Text | Should -Match '\$logApplicationName\s*=\s*''LogCollector'''
+        $script:Text | Should -Not -Match '\$logApplicationName\s*=\s*''LogCollectorCore'''
         $script:Text.IndexOf('Install started; PackageVersion=') |
             Should -BeLessThan $script:Text.IndexOf('Is64BitProcess')
     }
@@ -40,6 +42,6 @@ Describe 'Core installer diagnostics' {
     It 'documents the stable local log path' {
         $readme = Get-Content -LiteralPath $script:Readme -Raw
         $readme | Should -Match ([regex]::Escape(
-                '%ProgramData%\<CustomerName>\LogCollectorCore\Logs\LogCollectorCore.log'))
+                '%ProgramData%\<CustomerName>\LogCollector\Logs\LogCollector.log'))
     }
 }

@@ -1,6 +1,6 @@
 # LogCollector Core — shared telemetry dependency
 
-Version 1.11.0
+Version 1.11.1
 
 This package installs **LogCollector.Client** machine-wide. It is a *dependency*: it
 registers no scheduled task and collects nothing by itself. Install it on every device that
@@ -140,11 +140,11 @@ The installer writes a persistent CMTrace diagnostic log, including its current 
 the complete PowerShell error location when installation fails:
 
 ```text
-%ProgramData%\<CustomerName>\LogCollectorCore\Logs\LogCollectorCore.log
+%ProgramData%\<CustomerName>\LogCollector\Logs\LogCollector.log
 ```
 
 For the MSLabs package this resolves to
-`C:\ProgramData\MSLabs\LogCollectorCore\Logs\LogCollectorCore.log`.
+`C:\ProgramData\MSLabs\LogCollector\Logs\LogCollector.log`.
 
 The ACL is not cosmetic. The module directory is imported by SYSTEM-scheduled work, so a
 user-writable copy would be code execution as SYSTEM; the configuration names the intake
@@ -197,9 +197,9 @@ In both layouts, the utility must have a valid Microsoft Authenticode signature.
 ## Uninstall
 
 ```powershell
-.\Uninstall.ps1 -ExpectedVersion 1.11.0                      # module only
-.\Uninstall.ps1 -ExpectedVersion 1.11.0 -RemoveConfiguration # also drop the endpoint
-.\Uninstall.ps1 -ExpectedVersion 1.11.0 -RemoveSpool         # also discard pending records
+.\Uninstall.ps1 -ExpectedVersion 1.11.1                      # module only
+.\Uninstall.ps1 -ExpectedVersion 1.11.1 -RemoveConfiguration # also drop the endpoint
+.\Uninstall.ps1 -ExpectedVersion 1.11.1 -RemoveSpool         # also discard pending records
 ```
 
 The Intune command always passes the package version. If a newer Core is already installed

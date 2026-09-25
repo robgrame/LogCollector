@@ -1,5 +1,5 @@
 @{
-    PackageVersion = '1.9.0'
+    PackageVersion = '1.9.1'
     DeviceTableName = 'DeviceInventory_CL'
     AppTableName = 'AppInventory_CL'
     CollectDeviceInventory = $true

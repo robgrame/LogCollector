@@ -3,7 +3,7 @@
 .SYNOPSIS
 Creates a customer-neutral inventory folder that consumes shared configuration from LogCollector Core.
 .NOTES
-Version 1.6.0. No customer source, device inventory, certificates or Azure credentials are read.
+Version 1.6.1. No customer source, device inventory, certificates or Azure credentials are read.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Settings')]
 param(
@@ -87,6 +87,6 @@ if ($PSCmdlet.ShouldProcess($target, 'Create ready-to-package universal inventor
         PackageVersion = $config.PackageVersion; PackagePath = [IO.Path]::GetFullPath($target)
         SetupFile = 'Install.ps1'; FileCount = @(Get-ChildItem -LiteralPath $target -File -Recurse).Count
         ConfigurationSha256 = $configurationSha256
-        MinimumCoreVersion = '1.11.0'
+        MinimumCoreVersion = '1.11.1'
     }
 }

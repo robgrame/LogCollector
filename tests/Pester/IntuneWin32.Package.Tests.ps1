@@ -47,7 +47,7 @@ Describe 'Intune Win32 package generation' {
         $result = & $script:Builder -IntuneWinAppUtilPath $script:Tool `
             -OutputRoot $script:Output
         $result.PackageVersion | Should -BeExactly $script:Version
-        $result.MinimumCoreVersion | Should -BeExactly '1.11.0'
+        $result.MinimumCoreVersion | Should -BeExactly '1.11.1'
         $result.UninstallCommand | Should -Match 'Get-ScheduledTask'
         $result.UninstallCommand | Should -Match 'Unregister-ScheduledTask'
         $result.UninstallCommand | Should -Not -Match 'Get-LogCollectorEndpointConfiguration'
@@ -81,7 +81,7 @@ Describe 'Intune Win32 package generation' {
             Replace('TimeoutSeconds = 30', 'TimeoutSeconds = 45') |
             Set-Content $custom
         $result = & $script:Builder -IntuneWinAppUtilPath $script:Tool -ConfigurationPath $custom -OutputRoot $script:Output
-        $result.MinimumCoreVersion | Should -BeExactly '1.11.0'
+        $result.MinimumCoreVersion | Should -BeExactly '1.11.1'
         (Get-Content $result.DetectionScript -Raw) | Should -Match $result.ConfigurationSha256
         (Get-Content $result.DetectionScript -Raw) | Should -Not -Match '__LOGCOLLECTOR_CONFIGURATION_SHA256__'
         (Get-FileHash (Join-Path $result.SourcePath 'Config.psd1')).Hash | Should -BeExactly (Get-FileHash $custom).Hash

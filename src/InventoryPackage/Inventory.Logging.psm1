@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.9.0. Protected, bounded metadata-only diagnostics; no activity on import.
+# Version 1.9.1. Protected, bounded metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 
 $script:LogGuard = $null
@@ -27,8 +27,26 @@ $script:LogBooleans = @('SubmissionEnabled', 'Stopped', 'Enabled')
 
 function Get-InventoryLogGuard {
     if ($null -eq $script:LogGuard) {
-        $script:LogGuard = Import-Module (Join-Path $PSScriptRoot 'Modules\InventorySpool.psm1') `
-            -PassThru -Scope Local -DisableNameChecking -ErrorAction Stop
+        $client = @(Get-Module -Name LogCollector.Client | Sort-Object Version -Descending |
+            Select-Object -First 1)
+        if ($client.Count -eq 0) {
+            throw 'LogCollector Core is not loaded; protected Inventory logging is unavailable.'
+        }
+        $script:LogGuard = Get-Module -All -Name InventorySpool |
+            Where-Object ModuleBase -eq $client[0].ModuleBase |
+            Select-Object -First 1
+        if (-not $script:LogGuard) {
+            throw 'LogCollector Core did not load its protected filesystem module.'
+        }
+        $missing = @(& $script:LogGuard {
+            param($Names)
+            @($Names | Where-Object {
+                    -not (Get-Command -Name $_ -CommandType Function -ErrorAction SilentlyContinue)
+                })
+        } @('Assert-SpoolHierarchy', 'New-SpoolSecurityDescriptor', 'New-SpoolFileStream', 'Get-SpoolFullPath'))
+        if ($missing.Count -gt 0) {
+            throw "LogCollector Core filesystem contract is incomplete: $($missing -join ', ')."
+        }
     }
     return $script:LogGuard
 }
@@ -321,7 +339,7 @@ function Initialize-InventoryLogContext {
     }
     if (-not $PSBoundParameters.ContainsKey('FallbackDirectory')) {
         $FallbackDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-            "LogCollectorInventory\$CustomerName\CustomInventory-Fallback-$PackageVersion\Logs"
+            "LogCollectorFallback\$CustomerName\CustomInventory\Logs"
     }
     try {
         $context = New-InventoryLogContext -Component $Component -Directory $PrimaryDirectory

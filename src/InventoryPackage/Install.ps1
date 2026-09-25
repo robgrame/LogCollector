@@ -4,13 +4,13 @@
 .SYNOPSIS
 Installs the complete custom inventory package and its two SYSTEM tasks without touching legacy tasks.
 .NOTES
-Version 1.9.0. Protected lifecycle diagnostics; shared configuration comes from LogCollector Core.
+Version 1.9.1. Protected lifecycle diagnostics; shared configuration comes from LogCollector Core.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$packageVersion = '1.9.0'
+$packageVersion = '1.9.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -18,7 +18,7 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     $configPath = Join-Path $PSScriptRoot 'Config.psd1'
     $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-    Import-Module $coreManifest -MinimumVersion 1.11.0 -ErrorAction Stop
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
     $coreConfiguration = Get-LogCollectorEndpointConfiguration
     $customerName = $coreConfiguration.CustomerName
     if (-not $WhatIfPreference -and $customerName) {

@@ -1,7 +1,7 @@
-# Custom Inventory 1.9.0 - distribuzione Intune Win32
+# Custom Inventory 1.9.1 - distribuzione Intune Win32
 
 Il pacchetto installa il collector hardware/software e richiede **LogCollector Core
-1.11.0 o successivo** come dipendenza Intune. URL, ambiente, nome cliente,
+1.11.1 o successivo** come dipendenza Intune. URL, ambiente, nome cliente,
 abilitazione e criteri certificato/PKI sono letti dalla configurazione protetta del
 Core. Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 
@@ -29,10 +29,10 @@ Output predefiniti:
 
 | File/cartella | Utilizzo |
 |---|---|
-| `out\IntuneWin32-Production\1.9.0\Output\Install.intunewin` | File da caricare nell'app Win32 |
-| `out\IntuneWin32-Production\1.9.0\Detect.ps1` | Script da caricare nella detection rule |
-| `out\IntuneWin32-Production\1.9.0\Intune-Deployment.md` | Copia di questa guida |
-| `out\IntuneWin32-Production\1.9.0\Source\1.9.0` | File inclusi nel payload e configurazione collector |
+| `out\IntuneWin32-Production\1.9.1\Output\Install.intunewin` | File da caricare nell'app Win32 |
+| `out\IntuneWin32-Production\1.9.1\Detect.ps1` | Script da caricare nella detection rule |
+| `out\IntuneWin32-Production\1.9.1\Intune-Deployment.md` | Copia di questa guida |
+| `out\IntuneWin32-Production\1.9.1\Source\1.9.1` | File inclusi nel payload e configurazione collector |
 
 Il comando restituisce SHA256 del pacchetto, ConfigurationSha256 e versione minima Core. Source e Output
 sono separati: il tool non ingloba il proprio eseguibile o il file .intunewin.
@@ -62,7 +62,7 @@ configurano esclusivamente nel Core. Per personalizzare le sole opzioni del coll
 # Facoltativo: modificare soltanto raccolte, retry e timeout.
 
 .\scripts\Publish-IntuneWin32Package.ps1 `
-    -ConfigurationPath '.\out\Inventory-PilotConfig\1.9.0\Config.psd1' `
+    -ConfigurationPath '.\out\Inventory-PilotConfig\1.9.1\Config.psd1' `
     -OutputRoot '.\out\IntuneWin32-Pilot02'
 ```
 
@@ -70,7 +70,7 @@ ConfigurationPath importa solo dati PSD1, non gli script di quella cartella:
 il payload viene sempre costruito dai sorgenti correnti della repository.
 Il `CustomerName` del Core determina sia `%ProgramFiles%\<CustomerName>\CustomInventory`
 sia `%ProgramData%\<CustomerName>\CustomInventory\Logs`. La versione della
-configurazione Inventory deve coincidere con 1.9.0. La configurazione
+configurazione Inventory deve coincidere con 1.9.1. La configurazione
 viene validata dallo stesso runtime dell'installer prima di chiamare il tool.
 Non inserire endpoint, chiavi private o credenziali nel Config.psd1 Inventory.
 Per PKI vedere `docs\pki-ca-policy.md`: i criteri vengono distribuiti dal Core.
@@ -158,7 +158,7 @@ Quando si migra da una release installata direttamente in
 `%ProgramFiles%\CustomInventory` (1.6.x) o da un percorso versionato precedente,
 aggiornare nella stessa app Intune contenuto, detection e Uninstall command. Il nuovo
 installer registra i task sul percorso cliente ma conserva i file legacy. Non eseguire
-il vecchio `Uninstall.ps1` dopo l'installazione 1.9.0: rimuoverebbe gli stessi task
+il vecchio `Uninstall.ps1` dopo l'installazione 1.9.1: rimuoverebbe gli stessi task
 `\LogCollector\` appena registrati dalla nuova release.
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
@@ -178,7 +178,7 @@ Caricare **Detect.ps1 della stessa release**, disponibile accanto alla guida.
 | Enforce script signature check | No per i sorgenti non firmati del laboratorio |
 | Esecuzione | Contesto System, coerente con Install behavior |
 
-Lo script richiede Core 1.11.0, legge il relativo CustomerName e controlla l'hash
+Lo script richiede Core 1.11.1, legge il relativo CustomerName e controlla l'hash
 atteso di Config.psd1, PackageVersion, presenza dei file necessari e dei due task
 sotto `\LogCollector\`. Per ciascun task controlla abilitazione coerente con
 `SubmissionEnabled` del Core, principal SYSTEM con privilegi elevati
@@ -226,7 +226,7 @@ devono dichiarare LogCollector Core come dipendenza.
 | Rete per invio | HTTPS 443 all'Intake in contesto SYSTEM, senza interferenze TLS con mTLS; accesso PKI necessario secondo la catena |
 | Server | Trust CA, binding device, autorizzazione Entra per Intune, schemi/tabelle e mapping pronti |
 
-Configurare **LogCollector Core 1.11.0 o successivo come dependency applicativa
+Configurare **LogCollector Core 1.11.1 o successivo come dependency applicativa
 Intune**. Non serve un requirement script aggiuntivo.
 I prerequisiti di identita/certificato/rete sopra descritti sono operativi, non
 controlli automatici nella pagina Requirements. Non includere certificati o chiavi
@@ -239,7 +239,7 @@ SYSTEM, non soltanto come utente interattivo.
 Percorso: `C:\Program Files\<CustomerName>\CustomInventory`
 (il codice usa il percorso Program Files del sistema, senza presupporre il disco C;
 il percorso non e' versionato: un aggiornamento sovrascrive gli stessi file in place).
-Il file `Version` nel percorso installato contiene `1.9.0`; la detection verifica
+Il file `Version` nel percorso installato contiene `1.9.1`; la detection verifica
 sia questo file sia la versione e l'hash della configurazione.
 Se `%ProgramFiles%\<CustomerName>` esiste già, deve impedire modifiche a utenti non
 amministrativi; una cartella cliente con ACL di scrittura non attendibili viene rifiutata,
@@ -299,7 +299,7 @@ C:\ProgramData\<CustomerName>\CustomInventory\Logs\Spool.log
 Durante un upgrade, un vecchio percorso log con ACL non più conformi non viene considerato
 attendibile né riparato automaticamente. Installazione, disinstallazione, raccolta e
 drain usano in quel caso il percorso protetto versionato
-`C:\ProgramData\LogCollectorInventory\<CustomerName>\CustomInventory-Fallback-1.9.0\Logs\`,
+`C:\ProgramData\LogCollectorFallback\<CustomerName>\CustomInventory\Logs\`,
 che non condivide l'albero ACL cliente primario rifiutato. Un problema di
 inizializzazione del logger locale non interrompe queste operazioni.
 

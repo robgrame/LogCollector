@@ -257,7 +257,7 @@ with a local Microsoft `IntuneWinAppUtil.exe`. See
 [Intune Win32 deployment](docs/intune-win32-deployment.md) for the laboratory build
 command, install/uninstall commands, detection settings and requirements.
 The generated detection script pins the collector configuration SHA256, requires
-LogCollector Core 1.11.0, and checks task actions, SYSTEM identity and enablement
+LogCollector Core 1.11.1, and checks task actions, SYSTEM identity and enablement
 against the Core configuration. For collector-only updates, replace
 both the app content and its generated detection script in the same Required app;
 endpoint/customer/PKI changes require updating Core only.

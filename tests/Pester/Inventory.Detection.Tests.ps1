@@ -9,7 +9,7 @@ BeforeAll {
     }
     $env:PSModulePath = (Split-Path $moduleRoot -Parent) +
         [IO.Path]::PathSeparator + $env:PSModulePath
-    Import-Module LogCollector.Client -RequiredVersion 1.11.0 -Force -ErrorAction Stop
+    Import-Module LogCollector.Client -RequiredVersion 1.11.1 -Force -ErrorAction Stop
     $builder = Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1'
     $script:Package = & $builder -OutputRoot (Join-Path $TestDrive 'Package')
     $custom = Join-Path $TestDrive 'OtherTables.psd1'

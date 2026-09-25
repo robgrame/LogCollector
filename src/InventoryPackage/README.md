@@ -1,7 +1,7 @@
 # Custom Inventory - pacchetto Windows universale
 
-Versione **1.9.0**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
-Il pacchetto richiede **LogCollector Core 1.11.0 o successivo** come dipendenza Intune.
+Versione **1.9.1**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
+Il pacchetto richiede **LogCollector Core 1.11.1 o successivo** come dipendenza Intune.
 Non richiede repository, OneDrive, PowerShell Gallery, Workspace ID/Primary Key o
 Function key sul dispositivo. Codice e nomi dei task non dipendono da un cliente;
 endpoint, cliente e criteri certificato provengono dalla configurazione protetta del Core.
@@ -40,7 +40,7 @@ Core solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake si
 - `Run-Inventory.ps1`: raccolta e invio separato alle destinazioni configurate.
 - `Sync-Spool.ps1`: ritrasmissione senza nuova raccolta.
 - `Inventory.Collection.psm1` / `Inventory.Runtime.psm1`: raccolta e integrazione.
-- dipendenza esterna: LogCollector Core installa `LogCollector.Client` 1.11.0 o successivo.
+- dipendenza esterna: LogCollector Core installa `LogCollector.Client` 1.11.1 o successivo.
 - `Inventory.Logging.psm1`: logger locale protetto, condiviso dalle entry point.
 - `Install.ps1`, `Uninstall.ps1`, `Detect.ps1`: gestione Intune Win32.
 - `Config.psd1`: sole opzioni specifiche del collector.
@@ -63,7 +63,7 @@ e' stata installata anche se il pacchetto Intune viene poi aggiornato.
 Caricare `Detect.ps1` GENERATO insieme al pacchetto come regola di detection, con esecuzione a 32 bit su
 client a 64 bit impostata a **No**.
 
-La detection contiene lo SHA256 del Config.psd1 finale, richiede Core 1.11.0 e controlla
+La detection contiene lo SHA256 del Config.psd1 finale, richiede Core 1.11.1 e controlla
 azione, principal SYSTEM e abilitazione dei task rispetto al Core. Per applicare una nuova configurazione
 senza disinstallare, aggiornare nella stessa app Intune sia il contenuto .intunewin
 sia il relativo Detect.ps1, con assegnazione Required. La configurazione precedente
@@ -79,7 +79,7 @@ C:\Program Files\<CustomerName>\CustomInventory
 ```
 
 Il percorso non contiene la versione. Il file `Version` nella directory installata
-contiene la versione del package (`1.9.0`) ed è verificato dalla detection.
+contiene la versione del package (`1.9.1`) ed è verificato dalla detection.
 
 Il percorso viene protetto per SYSTEM/amministratori; percorsi preesistenti non
 attendibili o reparse point vengono rifiutati, non riparati automaticamente.
@@ -115,7 +115,7 @@ C:\ProgramData\<CustomerName>\CustomInventory\Logs\
 Se un percorso log creato da una release precedente non supera i controlli ACL correnti,
 nessuna entry point lo ripara o vi scrive. Installazione, disinstallazione, raccolta e drain
 usano invece il fallback protetto
-`C:\ProgramData\LogCollectorInventory\<CustomerName>\CustomInventory-Fallback-1.9.0\Logs\`,
+`C:\ProgramData\LogCollectorFallback\<CustomerName>\CustomInventory\Logs\`,
 separato dall'albero ACL cliente primario; se anche il fallback non è
 disponibile, il logging diagnostico viene disabilitato senza bloccare l'operazione principale.
 

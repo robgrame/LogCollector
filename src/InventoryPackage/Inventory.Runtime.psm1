@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.9.0. Uses the protected machine-wide configuration installed by LogCollector Core.
+# Version 1.9.1. Uses the protected machine-wide configuration installed by LogCollector Core.
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Collection.psm1') -ErrorAction Stop
 
@@ -30,7 +30,7 @@ function Get-InventoryConfiguration {
     }
     if ($SkipCoreConfiguration) { return $config }
     $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-    Import-Module $coreManifest -MinimumVersion 1.11.0 -ErrorAction Stop
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
     $endpoint = Get-LogCollectorEndpointConfiguration
     if ($endpoint.SubmissionEnabled -isnot [bool]) {
         throw 'LogCollector Core configuration SubmissionEnabled must be a Boolean.'

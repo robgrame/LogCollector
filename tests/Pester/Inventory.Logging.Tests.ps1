@@ -1,12 +1,10 @@
 BeforeAll {
     $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $package = Join-Path $TestDrive 'package'
-    $null = New-Item -ItemType Directory -Path (Join-Path $package 'Modules')
+    $null = New-Item -ItemType Directory -Path $package
     Copy-Item -LiteralPath (Join-Path $repoRoot 'src\InventoryPackage\Inventory.Logging.psm1') -Destination $package
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'src\Client\InventorySpool.psm1') -Destination (Join-Path $package 'Modules')
     $script:LoggerPath = Join-Path $package 'Inventory.Logging.psm1'
-    $script:GuardPath = Join-Path $package 'Modules\InventorySpool.psm1'
-    Import-Module $script:GuardPath -Force -DisableNameChecking
+    Import-Module (Join-Path $repoRoot 'src\Client\LogCollector.Client.psd1') -Force -ErrorAction Stop
     Import-Module $script:LoggerPath -Force
 }
 
@@ -38,6 +36,18 @@ Describe 'Inventory logging isolated filesystem unit tests' {
         $exports = @((Get-Module Inventory.Logging).ExportedFunctions.Keys | Sort-Object)
         ($exports -join ',') | Should -Be 'Get-InventoryLogCustomerName,Initialize-InventoryLogContext,New-InventoryDiagnosticSink,New-InventoryLogContext,Write-InventoryLog,Write-InventoryLogFailure'
         InModuleScope Inventory.Logging { $script:LogGuard | Should -BeNullOrEmpty }
+    }
+
+    It 'binds logging to the complete filesystem contract loaded by Core' {
+        $guard = InModuleScope Inventory.Logging { Get-InventoryLogGuard }
+        $guard.Name | Should -BeExactly 'InventorySpool'
+        foreach ($name in @('Assert-SpoolHierarchy', 'New-SpoolSecurityDescriptor',
+                'New-SpoolFileStream', 'Get-SpoolFullPath')) {
+            & $guard {
+                param($CommandName)
+                Get-Command -Name $CommandName -CommandType Function -ErrorAction Stop
+            } $name | Should -Not -BeNullOrEmpty
+        }
     }
 
     It 'initializes storage with the specified defaults and separate component paths' {
@@ -88,7 +98,9 @@ Describe 'Inventory logging isolated filesystem unit tests' {
     It 'places the default fallback outside the rejected legacy ancestor tree' {
         Mock -ModuleName Inventory.Logging New-InventoryLogContext {
             param($Component, $Directory)
-            if ($Directory -like '*\TestCustomer\CustomInventory\Logs') { throw 'primary tree rejected' }
+            $primary = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+                'TestCustomer\CustomInventory\Logs'
+            if ($Directory -eq $primary) { throw 'primary tree rejected' }
             [pscustomobject]@{
                 RunId = [guid]::NewGuid(); Component = $Component; Directory = $Directory
                 Path = Join-Path $Directory "$Component.log"; MaxFileBytes = 2097152
@@ -100,8 +112,10 @@ Describe 'Inventory logging isolated filesystem unit tests' {
         $context.FallbackUsed | Should -BeTrue
         $context.Directory | Should -Be (
             Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-                'LogCollectorInventory\TestCustomer\CustomInventory-Fallback-1.7.0\Logs')
-        $context.Directory | Should -Not -Match '\\TestCustomer\\CustomInventory\\Logs$'
+                'LogCollectorFallback\TestCustomer\CustomInventory\Logs')
+        $context.Directory | Should -Not -Be (
+            Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+                'TestCustomer\CustomInventory\Logs')
     }
 
     It 'places the primary logs under the configured customer application tree' {

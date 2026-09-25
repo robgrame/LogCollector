@@ -1,11 +1,11 @@
 #Requires -Version 5.1
-# Version 1.9.0. Resolves shared settings from the protected LogCollector Core configuration.
+# Version 1.9.1. Resolves shared settings from the protected LogCollector Core configuration.
 $ErrorActionPreference = 'Stop'
 $expectedConfigurationSha256 = '__LOGCOLLECTOR_CONFIGURATION_SHA256__'
 if ($expectedConfigurationSha256 -notmatch '^[0-9A-F]{64}$') { exit 1 }
 try {
     $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-    Import-Module $coreManifest -MinimumVersion 1.11.0 -ErrorAction Stop
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
     $coreConfiguration = Get-LogCollectorEndpointConfiguration
 }
 catch { exit 1 }
@@ -16,10 +16,10 @@ $configPath = Join-Path $target 'Config.psd1'
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { exit 1 }
 if ((Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash -ne $expectedConfigurationSha256) { exit 1 }
 $config = Import-PowerShellDataFile -LiteralPath $configPath
-if ($config.PackageVersion -ne '1.9.0') { exit 1 }
+if ($config.PackageVersion -ne '1.9.1') { exit 1 }
 $versionPath = Join-Path $target 'Version'
 if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf) -or
-    [IO.File]::ReadAllText($versionPath).Trim() -ne '1.9.0') { exit 1 }
+    [IO.File]::ReadAllText($versionPath).Trim() -ne '1.9.1') { exit 1 }
 $names = @('LogCollector-CustomInventory', 'LogCollector-CustomInventory-Spool')
 $tasks = @(Get-ScheduledTask -ErrorAction Stop |
     Where-Object { $_.TaskPath -eq '\LogCollector\' -and $_.TaskName -in $names })
@@ -42,5 +42,5 @@ foreach ($file in @('Version', 'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Inventory
     'Inventory.Runtime.psm1', 'Inventory.Logging.psm1')) {
     if (-not (Test-Path -LiteralPath (Join-Path $target $file) -PathType Leaf)) { exit 1 }
 }
-Write-Output "Custom Inventory 1.9.0 installed; CoreSubmissionEnabled=$($coreConfiguration.SubmissionEnabled)."
+Write-Output "Custom Inventory 1.9.1 installed; CoreSubmissionEnabled=$($coreConfiguration.SubmissionEnabled)."
 exit 0

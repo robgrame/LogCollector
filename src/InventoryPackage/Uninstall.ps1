@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
-# Version 1.9.0. Logs lifecycle; removes only tasks, never retained data or logs.
+# Version 1.9.1. Logs lifecycle; removes only tasks, never retained data or logs.
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.9.0'
+$packageVersion = '1.9.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -13,7 +13,7 @@ try {
     $customerName = $null
     try {
         $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-        Import-Module $coreManifest -MinimumVersion 1.11.0 -ErrorAction Stop
+        Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
         $customerName = (Get-LogCollectorEndpointConfiguration).CustomerName
     }
     catch {
