@@ -2,7 +2,7 @@
 .SYNOPSIS
 Shared telemetry facade for independent Windows PowerShell scripts.
 .NOTES
-Version 1.9.0. Import the manifest; no authentication, I/O or network calls occur on import.
+Version 1.10.0. Import the manifest; no authentication, I/O or network calls occur on import.
 #>
 Set-StrictMode -Version Latest
 
@@ -21,9 +21,22 @@ function Get-LogCollectorSpoolPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [Uri] $FrontendUrl,
-        [string] $SpoolRoot = 'C:\ProgramData\LogCollector\SharedSpool'
+        [string] $SpoolRoot,
+        [string] $CustomerName
     )
     Assert-LogCollectorEndpoint -FrontendUrl $FrontendUrl
+    if (-not $SpoolRoot) {
+        if ($CustomerName) {
+            $SpoolRoot = Join-Path (Get-LogCollectorDataRoot -CustomerName $CustomerName) 'SharedSpool'
+        }
+        else {
+            try { $SpoolRoot = Join-Path (Get-LogCollectorDataRoot) 'SharedSpool' }
+            catch {
+                if ($_.Exception.Message -notlike 'LogCollector is not configured on this machine:*') { throw }
+                $SpoolRoot = Join-Path (Get-LogCollectorDataRoot -CustomerName 'LogCollector') 'SharedSpool'
+            }
+        }
+    }
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
         $bytes = [Text.Encoding]::UTF8.GetBytes($FrontendUrl.AbsoluteUri)
@@ -356,7 +369,8 @@ function Send-LogCollectorData {
         [string[]] $PkiRootCaSubjects = @(),
         [string[]] $PkiIntermediateCaThumbprints = @(),
         [string[]] $PkiIntermediateCaSubjects = @(),
-        [string] $SpoolRoot = 'C:\ProgramData\LogCollector\SharedSpool',
+        [string] $SpoolRoot,
+        [string] $CustomerName,
         [ValidateRange(1, 10)] [int] $MaxAttempts = 3,
         [ValidateRange(1, 300)] [int] $TimeoutSeconds = 30,
         [ValidateRange(1, 900)] [int] $MaxDelaySeconds = 60,
@@ -370,7 +384,7 @@ function Send-LogCollectorData {
         [scriptblock] $DiagnosticSink
     )
     Assert-LogCollectorCaseCollisions -Records $Records -Properties $Properties
-    $spool = Get-LogCollectorSpoolPath -FrontendUrl $FrontendUrl -SpoolRoot $SpoolRoot
+    $spool = Get-LogCollectorSpoolPath -FrontendUrl $FrontendUrl -SpoolRoot $SpoolRoot -CustomerName $CustomerName
     $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
     $envelopeVersion = if ($FrontendUrl.AbsolutePath -ceq '/api/submit') {
         'LOGCOLLECTOR-TELEMETRY-V1'
@@ -428,7 +442,8 @@ function Sync-LogCollectorSpool {
         [string[]] $PkiRootCaSubjects = @(),
         [string[]] $PkiIntermediateCaThumbprints = @(),
         [string[]] $PkiIntermediateCaSubjects = @(),
-        [string] $SpoolRoot = 'C:\ProgramData\LogCollector\SharedSpool',
+        [string] $SpoolRoot,
+        [string] $CustomerName,
         [ValidateRange(1, 500)] [int] $MaxEntriesPerRun = 10,
         [ValidateRange(1, 10)] [int] $MaxAttemptsPerEntry = 2,
         [ValidateRange(1, 300)] [int] $TimeoutSeconds = 30,
@@ -438,7 +453,7 @@ function Sync-LogCollectorSpool {
         [ValidateRange(1, 2147483647)] [int] $MaxSpoolTotalBytes = 67108864,
         [scriptblock] $DiagnosticSink
     )
-    $spool = Get-LogCollectorSpoolPath -FrontendUrl $FrontendUrl -SpoolRoot $SpoolRoot
+    $spool = Get-LogCollectorSpoolPath -FrontendUrl $FrontendUrl -SpoolRoot $SpoolRoot -CustomerName $CustomerName
     $null = Initialize-SpoolDirectory -SpoolDirectory $spool
     $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
     if ($DiagnosticSink) { $null = & $DiagnosticSink 'CertificateSelectionStarted' @{ EntraDeviceId = $identity.EntraDeviceId } }
@@ -623,6 +638,9 @@ function Send-LogAnalyticsData {
     if ($Properties) { $arguments['Properties'] = $Properties }
     if ($queueOnly) { $arguments['QueueOnly'] = $true }
     if ($DiagnosticSink) { $arguments['DiagnosticSink'] = $DiagnosticSink }
+    if ($configuration -and $configuration.PSObject.Properties['DataRoot'] -and $configuration.DataRoot) {
+        $arguments['SpoolRoot'] = Join-Path $configuration.DataRoot 'SharedSpool'
+    }
     foreach ($setting in @('CertificateThumbprint', 'CertificateSubjectLike', 'CertificateIssuerLike',
             'PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
         if ($configuration -and $configuration.PSObject.Properties[$setting] -and $configuration.$setting) {
@@ -723,4 +741,4 @@ function Send-LogCollectorOperationalEvent {
 Export-ModuleMember -Function Get-DeviceIdentitySnapshot, Get-ClientCertificate, New-SignedInventoryRequest, `
     New-InventoryEnvelope, Get-LogCollectorSpoolPath, Export-LogCollectorSchema, Send-LogCollectorData, `
     Sync-LogCollectorSpool, Send-LogAnalyticsData, Send-LogCollectorOperationalEvent, Get-LogCollectorEndpointConfiguration, `
-    Get-LogCollectorConfigurationPath, Write-CMTraceLog, Get-CMTraceLogPath, Get-CMTraceCustomerName
+    Get-LogCollectorConfigurationPath, Get-LogCollectorDataRoot, Write-CMTraceLog, Get-CMTraceLogPath, Get-CMTraceCustomerName

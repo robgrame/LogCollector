@@ -43,13 +43,13 @@ Describe 'Shared client facade' {
     }
 
     It 'exports the documented public surface' {
-        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.9.0'
+        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.10.0'
         $commands = @(Get-Command -Module LogCollector.Client).Name | Sort-Object
         $expected = @('Get-DeviceIdentitySnapshot', 'Get-ClientCertificate', 'New-SignedInventoryRequest',
             'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Export-LogCollectorSchema',
             'Send-LogCollectorData', 'Sync-LogCollectorSpool', 'Send-LogAnalyticsData',
             'Send-LogCollectorOperationalEvent',
-            'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath',
+            'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath', 'Get-LogCollectorDataRoot',
             'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName') | Sort-Object
         ($commands -join ',') | Should -BeExactly ($expected -join ',')
     }
@@ -241,6 +241,20 @@ Describe 'Shared client facade' {
         $generic = Get-LogCollectorSpoolPath -FrontendUrl 'https://example.invalid/api/submit' -SpoolRoot $script:Root
         $generic | Should -Not -Be $first
         Test-Path -LiteralPath $script:Root | Should -BeFalse
+    }
+
+    It 'uses the canonical fallback customer when an explicit endpoint has no installed Core configuration' {
+        Mock -ModuleName LogCollector.Client Get-LogCollectorDataRoot {
+            param($CustomerName)
+            if (-not $CustomerName) {
+                throw "LogCollector is not configured on this machine: 'missing' does not exist."
+            }
+            Join-Path $TestDrive "$CustomerName\LogCollector"
+        }
+
+        $path = Get-LogCollectorSpoolPath -FrontendUrl $script:Endpoint
+
+        $path | Should -BeLike (Join-Path $TestDrive 'LogCollector\LogCollector\SharedSpool\*')
     }
 
     It 'preserves noninventory records through the <Path> submission pipeline' -TestCases @(
@@ -458,7 +472,7 @@ Describe 'Shared module packaging' {
         $result.ModuleVersion | Should -BeExactly $expectedVersion
         $result.PackageSha256 | Should -Match '^[A-F0-9]{64}$'
         $manifest = Test-ModuleManifest (Join-Path $result.ModulePath 'LogCollector.Client.psd1')
-        $manifest.ExportedFunctions.Count | Should -Be 15
+        $manifest.ExportedFunctions.Count | Should -Be 16
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($result.PackagePath)
         try {

@@ -3,12 +3,12 @@
 .SYNOPSIS
 Runs custom inventory using the destinations supplied in Config.psd1.
 .NOTES
-Version 1.7.0. Protected metadata-only diagnostics for each run.
+Version 1.8.0. Protected metadata-only diagnostics for each run.
 #>
 [CmdletBinding()]
 param([switch] $Preview, [switch] $QueueOnly)
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.7.0'
+$packageVersion = '1.8.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()

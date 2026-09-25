@@ -3,7 +3,7 @@
 .SYNOPSIS
 Creates a customer-neutral inventory folder with the shared client and deployment configuration.
 .NOTES
-Version 1.4.7. No customer source, device inventory, certificates or Azure credentials are read.
+Version 1.5.0. No customer source, device inventory, certificates or Azure credentials are read.
 #>
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
 param(
@@ -70,7 +70,9 @@ $files = @('Version', 'Config.psd1', 'Inventory.Collection.psm1', 'Inventory.Run
     'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'README.md')
 $client = Join-Path $repo 'src\Client'
 Import-Module (Join-Path $client 'LogCollector.Client.psd1') -ErrorAction Stop
-$null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl
+$validationSpoolRoot = Join-Path (Join-Path (Join-Path $env:ProgramData $config.CustomerName) `
+        'LogCollector') 'SharedSpool'
+$null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl -SpoolRoot $validationSpoolRoot
 $manifestPath = Join-Path $client 'LogCollector.Client.psd1'
 $manifestData = Import-PowerShellDataFile -LiteralPath $manifestPath
 $null = Test-ModuleManifest -Path $manifestPath -ErrorAction Stop

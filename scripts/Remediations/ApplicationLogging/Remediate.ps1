@@ -7,7 +7,7 @@ Intended for Intune Remediations. The script imports LogCollector.Client only fr
 machine-wide Program Files module tree, submits one non-sensitive operational event to
 LogCollectorOperations_CL, and records local success only after the intake accepts it.
 .NOTES
-Version 1.0.0. Run as SYSTEM in 64-bit PowerShell.
+Version 1.1.0. Run as SYSTEM in 64-bit PowerShell.
 #>
 [CmdletBinding()]
 param(
@@ -22,8 +22,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$minimumModuleVersion = [version] '1.8.2'
-$scriptVersion = '1.0.0'
+$minimumModuleVersion = [version] '1.10.0'
+$scriptVersion = '1.1.0'
 
 if (-not [Environment]::Is64BitProcess) {
     throw 'Application logging remediation requires 64-bit PowerShell.'
@@ -31,14 +31,6 @@ if (-not [Environment]::Is64BitProcess) {
 if (-not $PSBoundParameters.ContainsKey('ModuleRoot')) {
     $ModuleRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) `
         'WindowsPowerShell\Modules\LogCollector.Client'
-}
-if (-not $PSBoundParameters.ContainsKey('StatePath')) {
-    $StatePath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-        'LogCollector\State\ApplicationLoggingRemediation.json'
-}
-if (-not $PSBoundParameters.ContainsKey('SpoolRoot')) {
-    $SpoolRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-        'LogCollector\SharedSpool'
 }
 if (-not (Test-Path -LiteralPath $ModuleRoot -PathType Container)) {
     throw "LogCollector Core is not installed: module root not found at '$ModuleRoot'."
@@ -77,6 +69,12 @@ if (-not $FrontendUrl) {
 }
 elseif (Test-Path -LiteralPath (Get-LogCollectorConfigurationPath) -PathType Leaf) {
     $configuration = Get-LogCollectorEndpointConfiguration
+}
+if (-not $PSBoundParameters.ContainsKey('StatePath')) {
+    $StatePath = Join-Path (Get-LogCollectorDataRoot) 'State\ApplicationLoggingRemediation.json'
+}
+if (-not $PSBoundParameters.ContainsKey('SpoolRoot')) {
+    $SpoolRoot = Join-Path (Get-LogCollectorDataRoot) 'SharedSpool'
 }
 if ($configuration -and -not $configuration.SubmissionEnabled) {
     throw 'LogCollector Core submission is disabled; enable the protected endpoint configuration before running this remediation.'

@@ -1,5 +1,5 @@
 @{
-    PackageVersion = '1.7.0'
+    PackageVersion = '1.8.0'
     CustomerName = 'LogCollector'
     Environment = ''
     FrontendUrl = ''

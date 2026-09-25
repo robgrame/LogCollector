@@ -25,10 +25,10 @@ workspace-wide write access.
 
 Install the **LogCollector Core** Win32 app on the device (see `src/CorePackage/README.md`).
 It puts `LogCollector.Client` on the machine `PSModulePath` and writes the endpoint to
-`%ProgramData%\LogCollector\Config\Endpoint.psd1`.
+`%ProgramData%\<CustomerName>\LogCollector\Config\Endpoint.psd1`.
 
 The calling script must run **as SYSTEM or elevated**. The shared spool under
-`%ProgramData%\LogCollector\SharedSpool` is writable only by SYSTEM and Administrators, by
+`%ProgramData%\<CustomerName>\LogCollector\SharedSpool` is writable only by SYSTEM and Administrators, by
 design: a spool that an unprivileged user could write to would let that user forge records
 attributed to the device. A script running in a normal user context fails when it tries to
 retain a batch. Run migrated scripts from a scheduled task under `NT AUTHORITY\SYSTEM`, or
@@ -120,7 +120,7 @@ records are retained on disk and retried later; reporting `200` for data that is
 Analytics yet would turn a delivery failure into a silent one.
 
 Records are not lost when submission fails. They are written to the shared spool under
-`%ProgramData%\LogCollector\SharedSpool` and drained by a later run.
+`%ProgramData%\<CustomerName>\LogCollector\SharedSpool` and drained by a later run.
 
 ### If your inline sender returned `$true` / `$false`
 

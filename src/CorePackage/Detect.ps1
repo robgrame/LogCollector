@@ -11,7 +11,7 @@ Detection deliberately imports the module rather than only checking that files e
 package's promise is that `Import-Module LogCollector.Client` works for any script, and a
 present-but-unimportable module would otherwise be reported as a healthy install.
 .NOTES
-Version 1.9.0.
+Version 1.10.0.
 #>
 [CmdletBinding()]
 param()
@@ -69,7 +69,7 @@ function Test-ExpectedLogCollectorConfiguration {
 }
 
 try {
-    $version = '1.9.0'
+    $version = '1.10.0'
     $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "WindowsPowerShell\Modules\LogCollector.Client\$version"
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
         Write-CoreDetectionFailure -Reason 'ModuleDirectoryMissing'
@@ -131,14 +131,9 @@ try {
         }
     }
 
-    $configuration = Join-Path $env:ProgramData 'LogCollector\Config\Endpoint.psd1'
-    if (-not (Test-Path -LiteralPath $configuration -PathType Leaf)) {
-        Write-CoreDetectionFailure -Reason 'EndpointConfigurationMissing'
-    }
-
     Import-Module $manifestPath -Force -ErrorAction Stop
     foreach ($command in @('Send-LogAnalyticsData', 'Send-LogCollectorData', 'Get-LogCollectorEndpointConfiguration',
-            'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName')) {
+            'Get-LogCollectorDataRoot', 'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName')) {
         if (-not (Get-Command $command -Module LogCollector.Client -ErrorAction SilentlyContinue)) {
             Write-CoreDetectionFailure -Reason 'ModuleCommandMissing'
         }
@@ -146,6 +141,14 @@ try {
     # Reads through the ACL check, so a configuration a user could have rewritten is not
     # reported as installed and Intune remediates it.
     $installedConfiguration = Get-LogCollectorEndpointConfiguration
+    if (-not (Test-Path -LiteralPath $installedConfiguration.ConfigurationPath -PathType Leaf)) {
+        Write-CoreDetectionFailure -Reason 'EndpointConfigurationMissing'
+    }
+    $expectedPath = Join-Path $installedConfiguration.DataRoot 'Config\Endpoint.psd1'
+    if (-not [string]::Equals($installedConfiguration.ConfigurationPath, $expectedPath,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        Write-CoreDetectionFailure -Reason 'EndpointConfigurationPathMismatch'
+    }
     if ($expectedConfigurationBase64 -notlike '__LOGCOLLECTOR_*__') {
         $expectedJson = [Text.Encoding]::UTF8.GetString(
             [Convert]::FromBase64String($expectedConfigurationBase64))

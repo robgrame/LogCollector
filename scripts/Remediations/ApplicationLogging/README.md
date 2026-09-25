@@ -39,7 +39,7 @@ The detection is compliant for 24 hours after the last accepted probe. When stal
 the remediation sends the complete bounded batch set and updates:
 
 ```text
-%ProgramData%\LogCollector\State\ApplicationLoggingRemediation.json
+%ProgramData%\<CustomerName>\LogCollector\State\ApplicationLoggingRemediation.json
 ```
 
 An HTTP acceptance is not treated as complete Log Analytics verification. Confirm the row:

@@ -252,9 +252,14 @@ does not automatically make an old envelope valid, and the module never reattrib
 
 ## Spool isolation, bounds and operational limits
 
-The default root is `C:\ProgramData\LogCollector\SharedSpool`. An SHA-256 directory derived from the
+The default root is `C:\ProgramData\<CustomerName>\LogCollector\SharedSpool`. The customer name is
+read from the protected Core configuration. An SHA-256 directory derived from the
 normalized endpoint URL isolates each destination. All scripts targeting the same endpoint/root
 share that bucket; changing endpoints does not redirect old records.
+
+Explicit-endpoint callers can pass `-CustomerName` or `-SpoolRoot`. If Core is not installed
+and neither is supplied, the compatibility customer name `LogCollector` is used, producing
+`C:\ProgramData\LogCollector\LogCollector\SharedSpool`.
 
 Switching from `/api/inventory` to `/api/submit` creates a different bucket even on the same
 host. There is **no silent spool migration**: drain the old bucket explicitly with

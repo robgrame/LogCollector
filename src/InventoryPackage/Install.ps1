@@ -4,13 +4,13 @@
 .SYNOPSIS
 Installs the complete custom inventory package and its two SYSTEM tasks without touching legacy tasks.
 .NOTES
-Version 1.7.0. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
+Version 1.8.0. Protected lifecycle diagnostics; tasks follow SubmissionEnabled.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$packageVersion = '1.7.0'
+$packageVersion = '1.8.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()

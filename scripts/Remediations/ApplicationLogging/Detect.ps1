@@ -3,7 +3,7 @@
 .SYNOPSIS
 Detects whether the application-logging remediation recently reached LogCollector.
 .NOTES
-Version 1.0.0. Run as SYSTEM in 64-bit PowerShell through Intune Remediations.
+Version 1.1.0. Run as SYSTEM in 64-bit PowerShell through Intune Remediations.
 #>
 [CmdletBinding()]
 param(
@@ -18,13 +18,37 @@ if (-not [Environment]::Is64BitProcess) {
     Write-Output 'Application logging probe requires 64-bit PowerShell.'
     exit 1
 }
-if (-not $PSBoundParameters.ContainsKey('StatePath')) {
-    $usingDefaultStatePath = $true
-    $StatePath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
-        'LogCollector\State\ApplicationLoggingRemediation.json'
+try {
+    if (-not $PSBoundParameters.ContainsKey('StatePath')) {
+        $usingDefaultStatePath = $true
+        $moduleRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) `
+            'WindowsPowerShell\Modules\LogCollector.Client'
+        $selected = @(
+            foreach ($directory in @(Get-ChildItem -LiteralPath $moduleRoot -Directory -ErrorAction Stop)) {
+                $version = $null
+                if (-not [version]::TryParse($directory.Name, [ref] $version) -or $version -lt [version] '1.10.0') {
+                    continue
+                }
+                $manifest = Join-Path $directory.FullName 'LogCollector.Client.psd1'
+                if (Test-Path -LiteralPath $manifest -PathType Leaf) {
+                    [pscustomobject]@{ Version = $version; Manifest = $manifest }
+                }
+            }
+        ) | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $selected) {
+            Write-Output 'Application logging probe requires LogCollector Core 1.10.0 or later.'
+            exit 1
+        }
+        Import-Module -Name $selected.Manifest -Force -ErrorAction Stop
+        $StatePath = Join-Path (Get-LogCollectorDataRoot) 'State\ApplicationLoggingRemediation.json'
+    }
+    else {
+        $usingDefaultStatePath = $false
+    }
 }
-else {
-    $usingDefaultStatePath = $false
+catch {
+    Write-Output "Application logging probe could not resolve its customer-scoped state path: $($_.Exception.Message)"
+    exit 1
 }
 
 try {

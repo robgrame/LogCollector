@@ -13,7 +13,7 @@ from the device entirely.
 .PARAMETER RemoveSpool
 Also remove the shared spool, discarding any records not yet delivered.
 .NOTES
-Version 1.9.0.
+Version 1.10.0.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -23,9 +23,26 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.9.0'
+$packageVersion = '1.10.0'
 Import-Module (Join-Path $PSScriptRoot 'Core.Provisioning.psm1') -Force -ErrorAction Stop
 $target = Get-LogCollectorModuleRoot -Version $packageVersion
+$endpointModulePath = @(
+    (Join-Path $PSScriptRoot 'EndpointConfiguration.psm1'),
+    (Join-Path $PSScriptRoot 'Modules\EndpointConfiguration.psm1')
+) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+$endpointModule = if ($endpointModulePath) {
+    Import-Module $endpointModulePath -PassThru -Force -ErrorAction Stop
+} else { $null }
+$configuration = $null
+$dataRoot = $null
+try {
+    if (-not $endpointModule) { throw 'EndpointConfiguration.psm1 was not found beside the uninstaller or under Modules.' }
+    $configuration = & $endpointModule { Get-LogCollectorEndpointConfiguration }
+    $dataRoot = [string] $configuration.DataRoot
+}
+catch {
+    Write-Warning "The installed endpoint configuration could not be resolved: $($_.Exception.Message)"
+}
 
 if (Test-Path -LiteralPath $target -PathType Container) {
     if ($PSCmdlet.ShouldProcess($target, 'Remove the LogCollector core module')) {
@@ -47,18 +64,22 @@ if ((Test-Path -LiteralPath $parent -PathType Container) -and
 }
 
 if ($RemoveConfiguration) {
-    $configuration = Join-Path $env:ProgramData 'LogCollector\Config\Endpoint.psd1'
-    if (Test-Path -LiteralPath $configuration -PathType Leaf) {
-        if ($PSCmdlet.ShouldProcess($configuration, 'Remove the machine-wide endpoint configuration')) {
-            Remove-Item -LiteralPath $configuration -Force -ErrorAction Stop
-            Write-Output "Removed $configuration."
+    $configurationPath = if ($configuration) { [string] $configuration.ConfigurationPath } else {
+        Join-Path $env:ProgramData 'LogCollector\Config\Endpoint.psd1'
+    }
+    if (Test-Path -LiteralPath $configurationPath -PathType Leaf) {
+        if ($PSCmdlet.ShouldProcess($configurationPath, 'Remove the machine-wide endpoint configuration')) {
+            Remove-Item -LiteralPath $configurationPath -Force -ErrorAction Stop
+            Write-Output "Removed $configurationPath."
             Write-Warning 'Any other LogCollector script on this device now has no endpoint until the core package is reinstalled.'
         }
     }
 }
 
 if ($RemoveSpool) {
-    $spool = Join-Path $env:ProgramData 'LogCollector\SharedSpool'
+    $spool = if ($dataRoot) { Join-Path $dataRoot 'SharedSpool' } else {
+        Join-Path $env:ProgramData 'LogCollector\SharedSpool'
+    }
     if (Test-Path -LiteralPath $spool -PathType Container) {
         $pending = @(Get-ChildItem -LiteralPath $spool -Recurse -File -ErrorAction SilentlyContinue).Count
         if ($PSCmdlet.ShouldProcess($spool, "Remove the shared spool, discarding $pending queued file(s)")) {

@@ -19,7 +19,7 @@ Folder under which a versioned deliverable folder is created. Defaults to '<repo
 Bicep parameter file bundled as the deployment default. Defaults to
 'infra\logcollector.bicepparam'.
 .NOTES
-Version 1.2.0. Builds via dotnet publish; makes no changes to Azure resources and never
+Version 1.3.0. Builds via dotnet publish; makes no changes to Azure resources and never
 overwrites an existing deliverable.
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -275,7 +275,8 @@ The returned configuration must show the expected ``FrontendUrl``, ``Environment
 submission from the pilot version of an application package, not from Core installation.
 
 ``````powershell
-Get-Content "`$env:ProgramData\LogCollector\Config\Endpoint.psd1"
+`$configuration = Get-LogCollectorEndpointConfiguration
+Get-Content `$configuration.ConfigurationPath
 ``````
 
 ## 5. Troubleshooting

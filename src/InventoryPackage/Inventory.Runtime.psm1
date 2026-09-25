@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.7.0. Optional metadata-only diagnostics; no activity on import.
+# Version 1.8.0. Optional metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Collection.psm1') -ErrorAction Stop
@@ -45,7 +45,15 @@ function Get-InventoryConfiguration {
         throw "CustomerName '$($config.CustomerName)' is a reserved Windows device name."
     }
     if ([string]::IsNullOrWhiteSpace($config.FrontendUrl)) { throw 'Configure FrontendUrl for the destination deployment.' }
-    $null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl
+    $installedConfigurationPath = Get-LogCollectorConfigurationPath
+    $dataRoot = if (Test-Path -LiteralPath $installedConfigurationPath -PathType Leaf) {
+        Get-LogCollectorDataRoot
+    } else {
+        Join-Path (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $config.CustomerName) 'LogCollector'
+    }
+    $spoolRoot = Join-Path $dataRoot 'SharedSpool'
+    $null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl -SpoolRoot $spoolRoot
+    $config['SpoolRoot'] = $spoolRoot
     if ($config.MaxAttempts -isnot [int] -or $config.MaxAttempts -lt 1 -or $config.MaxAttempts -gt 10) {
         throw 'MaxAttempts must be an integer between 1 and 10.'
     }
@@ -137,6 +145,7 @@ function Invoke-InventoryRun {
             -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
             -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
             -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
+            -SpoolRoot $config.SpoolRoot `
             -MaxAttempts $config.MaxAttempts -TimeoutSeconds $config.TimeoutSeconds -QueueOnly:$QueueOnly -SkipDrain -DiagnosticSink $DiagnosticSink
         [pscustomobject]@{
             TableName = $batch.TableName; Records = $batch.Records.Count
@@ -165,6 +174,7 @@ function Invoke-InventoryDrain {
         -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
         -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
         -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
+        -SpoolRoot $config.SpoolRoot `
         -TimeoutSeconds $config.TimeoutSeconds -MaxAttemptsPerEntry $config.MaxAttempts -DiagnosticSink $DiagnosticSink
 }
 

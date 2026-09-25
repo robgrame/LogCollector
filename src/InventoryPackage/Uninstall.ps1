@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
-# Version 1.7.0. Logs lifecycle; removes only tasks, never retained data or logs.
+# Version 1.8.0. Logs lifecycle; removes only tasks, never retained data or logs.
 [CmdletBinding(SupportsShouldProcess)]
 param()
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.7.0'
+$packageVersion = '1.8.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()

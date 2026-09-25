@@ -1,9 +1,9 @@
 #Requires -Version 5.1
-# Version 1.7.0. Protected metadata-only spool diagnostics; no new collection.
+# Version 1.8.0. Protected metadata-only spool diagnostics; no new collection.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.7.0'
+$packageVersion = '1.8.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()

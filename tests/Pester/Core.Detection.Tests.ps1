@@ -37,7 +37,7 @@ BeforeAll {
         Environment                   = 'Production'
         CustomerName                  = 'Example'
         SubmissionEnabled             = $true
-        PackageVersion                = '1.9.0'
+        PackageVersion                = '1.10.0'
         CertificateThumbprint         = ''
         CertificateSubjectLike        = ''
         CertificateIssuerLike         = ''
@@ -127,6 +127,16 @@ Describe 'Core package configuration-bound detection' {
         $text | Should -Match "Write-CoreDetectionFailure -Reason 'ConfigurationMismatch'"
         $text | Should -Match "Write-CoreDetectionFailure -Reason 'ModuleDirectoryAclMismatch'"
         $text | Should -Not -Match 'Write-CoreDetectionFailure -Reason .*(FrontendUrl|CertificateThumbprint)'
+    }
+
+    It 'verifies the new installation before migrating legacy data' {
+        $install = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'src\CorePackage\Install.ps1') -Raw
+        $install.IndexOf("`$installPhase = 'VerifyInstallation'") |
+            Should -BeLessThan $install.LastIndexOf("`$installPhase = 'MigrateLegacyData'")
+        $install | Should -Match 'Assert-LogCollectorConfigurationTrust -Path \$Path'
+        $install | Should -Match ([regex]::Escape("Get-LogCollectorEndpointConfiguration -Path '`$endpointPath'"))
+        $install | Should -Match 'configurationBackup'
+        $install | Should -Match 'configurationCreated'
     }
 
     It 'matches the exact generated configuration' {
