@@ -71,15 +71,16 @@ PkiIntermediateCaThumbprints = @()
 PkiIntermediateCaSubjects = @()
 ```
 
-Per ricavare i valori dai certificati **pubblici** della propria PKI:
+Per ricavare i valori dai certificati **pubblici** della propria PKI e inserirli
+nel package Core:
 
 ```powershell
 $root = [Security.Cryptography.X509Certificates.X509Certificate2]::new('C:\PKI\RootCA.cer')
 $sub = [Security.Cryptography.X509Certificates.X509Certificate2]::new('C:\PKI\IssuingCA.cer')
 try {
-    .\scripts\Publish-InventoryPackage.ps1 `
+    .\scripts\New-IntunePackage.ps1 `
         -FrontendUrl 'https://your-intake.azurewebsites.net/api/inventory' `
-        -Environment 'Lab' `
+        -Environment 'Lab' -CustomerName 'Contoso' `
         -PkiRootCaThumbprints @($root.Thumbprint) -PkiRootCaSubjects @($root.Subject) `
         -PkiIntermediateCaThumbprints @($sub.Thumbprint) -PkiIntermediateCaSubjects @($sub.Subject)
 }
@@ -89,7 +90,8 @@ finally {
 }
 ```
 
-Il builder non importa certificati negli store Windows e non include chiavi private.
+Il builder Core non importa certificati negli store Windows e non include chiavi private.
+Inventory e gli altri package leggono questi criteri dalla configurazione protetta del Core.
 Provisionare prima le CA sul dispositivo con i normali meccanismi PKI/Intune/GPO:
 Root fidate in `LocalMachine\Root`, intermedi in `LocalMachine\CA`.
 La costruzione della catena puo recuperare intermedi via AIA con timeout limitato.

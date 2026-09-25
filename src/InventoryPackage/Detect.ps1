@@ -1,19 +1,25 @@
 #Requires -Version 5.1
-# Version 1.8.0. Customer-neutral Intune detection: installed does not mean live ingestion is enabled.
+# Version 1.9.0. Resolves shared settings from the protected LogCollector Core configuration.
 $ErrorActionPreference = 'Stop'
 $expectedConfigurationSha256 = '__LOGCOLLECTOR_CONFIGURATION_SHA256__'
-$customerName = '__LOGCOLLECTOR_CUSTOMER_NAME__'
 if ($expectedConfigurationSha256 -notmatch '^[0-9A-F]{64}$') { exit 1 }
-if ($customerName -like '__LOGCOLLECTOR_*') { exit 1 }
+try {
+    $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
+    Import-Module $coreManifest -MinimumVersion 1.11.0 -ErrorAction Stop
+    $coreConfiguration = Get-LogCollectorEndpointConfiguration
+}
+catch { exit 1 }
+$customerName = [string] $coreConfiguration.CustomerName
+if (-not $customerName -or $coreConfiguration.SubmissionEnabled -isnot [bool]) { exit 1 }
 $target = Join-Path (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) $customerName) 'CustomInventory'
 $configPath = Join-Path $target 'Config.psd1'
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { exit 1 }
 if ((Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash -ne $expectedConfigurationSha256) { exit 1 }
 $config = Import-PowerShellDataFile -LiteralPath $configPath
-if ($config.PackageVersion -ne '1.8.0' -or $config.CustomerName -ne $customerName) { exit 1 }
+if ($config.PackageVersion -ne '1.9.0') { exit 1 }
 $versionPath = Join-Path $target 'Version'
 if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf) -or
-    [IO.File]::ReadAllText($versionPath).Trim() -ne '1.8.0') { exit 1 }
+    [IO.File]::ReadAllText($versionPath).Trim() -ne '1.9.0') { exit 1 }
 $names = @('LogCollector-CustomInventory', 'LogCollector-CustomInventory-Spool')
 $tasks = @(Get-ScheduledTask -ErrorAction Stop |
     Where-Object { $_.TaskPath -eq '\LogCollector\' -and $_.TaskName -in $names })
@@ -23,7 +29,7 @@ for ($i = 0; $i -lt $names.Count; $i++) {
     $task = @($tasks | Where-Object TaskName -eq $names[$i])
     if ($task.Count -ne 1) { exit 1 }
     $task = $task[0]
-    if ($task.Settings.Enabled -ne $config.SubmissionEnabled) { exit 1 }
+    if ($task.Settings.Enabled -ne $coreConfiguration.SubmissionEnabled) { exit 1 }
     if ($task.Principal.UserId -notin @('SYSTEM', 'NT AUTHORITY\SYSTEM', 'S-1-5-18') -or
         $task.Principal.LogonType -ne 'ServiceAccount' -or $task.Principal.RunLevel -ne 'Highest') { exit 1 }
     $actions = @($task.Actions)
@@ -33,10 +39,8 @@ for ($i = 0; $i -lt $names.Count; $i++) {
         $actions[0].Arguments -ne $expectedArguments) { exit 1 }
 }
 foreach ($file in @('Version', 'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Inventory.Collection.psm1',
-    'Inventory.Runtime.psm1', 'Inventory.Logging.psm1', 'Modules\LogCollector.Client.psd1', 'Modules\LogCollector.Client.psm1',
-    'Modules\EndpointConfiguration.psm1', 'Modules\CMTraceLogging.psm1', 'Modules\DeviceIdentity.psm1', 'Modules\RequestSigning.psm1',
-    'Modules\InventoryClient.psm1', 'Modules\InventorySpool.psm1')) {
+    'Inventory.Runtime.psm1', 'Inventory.Logging.psm1')) {
     if (-not (Test-Path -LiteralPath (Join-Path $target $file) -PathType Leaf)) { exit 1 }
 }
-Write-Output "Custom Inventory 1.8.0 installed; SubmissionEnabled=$($config.SubmissionEnabled)."
+Write-Output "Custom Inventory 1.9.0 installed; CoreSubmissionEnabled=$($coreConfiguration.SubmissionEnabled)."
 exit 0

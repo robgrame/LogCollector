@@ -245,22 +245,22 @@ Package the six-file, versioned module with **`scripts\Publish-ClientModule.ps1`
 See **[shared-client.md](docs/shared-client.md)** for installation, examples, return values,
 endpoint-isolated spool and limits.
 
-**Universal inventory package.** Build a self-contained folder for any deployment:
+**Universal inventory package.** Build the Core-dependent collector package; endpoint,
+customer identity and certificate policy are read from the protected Core configuration:
 
 ```powershell
-.\scripts\Publish-InventoryPackage.ps1 `
-    -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
-    -Environment 'MSLabs'
+.\scripts\Publish-InventoryPackage.ps1
 ```
 
 For a complete `.intunewin` release, use `scripts\Publish-IntuneWin32Package.ps1`
 with a local Microsoft `IntuneWinAppUtil.exe`. See
 [Intune Win32 deployment](docs/intune-win32-deployment.md) for the laboratory build
 command, install/uninstall commands, detection settings and requirements.
-The generated detection script pins the final configuration SHA256 and checks task
-actions, SYSTEM identity and enablement. For configuration-only updates, replace
+The generated detection script pins the collector configuration SHA256, requires
+LogCollector Core 1.11.0, and checks task actions, SYSTEM identity and enablement
+against the Core configuration. For collector-only updates, replace
 both the app content and its generated detection script in the same Required app;
-Intune can reapply the desired configuration without uninstalling first.
+endpoint/customer/PKI changes require updating Core only.
 Package **1.4.5** also writes protected, bounded JSONL lifecycle, inventory and
 spool logs under `C:\ProgramData\<CustomerName>\CustomInventory\Logs`, using selected
 metadata rather than a transcript of payloads or HTTP response bodies.

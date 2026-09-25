@@ -380,8 +380,16 @@ Describe 'Core package provisioning' {
     }
 
     It 'installs under a path that both PowerShell editions already search' {
-        $root = Get-LogCollectorModuleRoot -Version '1.6.0'
-        $root | Should -BeLike '*\WindowsPowerShell\Modules\LogCollector.Client\1.6.0'
+        $root = Get-LogCollectorModuleRoot
+        $root | Should -BeLike '*\WindowsPowerShell\Modules\LogCollector.Client'
+        Split-Path $root -Leaf | Should -BeExactly 'LogCollector.Client'
+    }
+
+    It 'allows inherited ACLs only when validating the shared module parent' {
+        (Get-Command Assert-LogCollectorMachineAcl).Parameters.Keys |
+            Should -Contain 'AllowInheritedRules'
+        (Get-Command Set-LogCollectorMachineAcl).Parameters.Keys |
+            Should -Not -Contain 'AllowInheritedRules'
     }
 
     It 'emits a configuration the client can read back' {

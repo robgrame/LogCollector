@@ -1,6 +1,6 @@
 @{
     RootModule = 'LogCollector.Client.psm1'
-    ModuleVersion = '1.10.2'
+    ModuleVersion = '1.11.0'
     GUID = '4ca10d53-456c-4ce0-a860-14d4b6644db9'
     Author = 'LogCollector'
     Description = 'Shared certificate-authenticated telemetry client for Windows PowerShell scripts.'
@@ -19,6 +19,7 @@
         'Get-LogCollectorEndpointConfiguration'
         'Get-LogCollectorConfigurationPath'
         'Get-LogCollectorDataRoot'
+        'Assert-LogCollectorApplicationFiles'
         'Write-CMTraceLog'
         'Get-CMTraceLogPath'
         'Get-CMTraceCustomerName'

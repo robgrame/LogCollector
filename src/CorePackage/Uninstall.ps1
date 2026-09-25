@@ -4,7 +4,7 @@
 .SYNOPSIS
 Removes the machine-wide LogCollector core module.
 .DESCRIPTION
-Removes this version's module directory. The endpoint configuration and the shared spool
+Removes the stable module directory. The endpoint configuration and the shared spool
 are kept by default: other packages and scripts on the device depend on them, and spooled
 records that have not reached Log Analytics yet would otherwise be destroyed.
 .PARAMETER RemoveConfiguration
@@ -12,20 +12,38 @@ Also remove the machine-wide endpoint configuration. Use only when retiring LogC
 from the device entirely.
 .PARAMETER RemoveSpool
 Also remove the shared spool, discarding any records not yet delivered.
+.PARAMETER ExpectedVersion
+Removes the module only when its manifest still has this version. Intune supplies the
+version from the app being removed, so an obsolete uninstall command cannot remove a newer
+Core release that has already replaced it at the stable path.
 .NOTES
-Version 1.10.2.
+Version 1.11.0.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [switch] $RemoveConfiguration,
-    [switch] $RemoveSpool
+    [switch] $RemoveSpool,
+    [version] $ExpectedVersion = '1.11.0'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.10.2'
 Import-Module (Join-Path $PSScriptRoot 'Core.Provisioning.psm1') -Force -ErrorAction Stop
-$target = Get-LogCollectorModuleRoot -Version $packageVersion
+$target = Get-LogCollectorModuleRoot
+$installedManifestPath = Join-Path $target 'LogCollector.Client.psd1'
+if (Test-Path -LiteralPath $installedManifestPath -PathType Leaf) {
+    try {
+        $installedVersion = [version] (Import-PowerShellDataFile -LiteralPath $installedManifestPath -ErrorAction Stop).ModuleVersion
+        if ($installedVersion -ne $ExpectedVersion) {
+            Write-Output ("LogCollector core {0} is installed at {1}; requested removal of {2} is already satisfied." -f
+                $installedVersion, $target, $ExpectedVersion)
+            return
+        }
+    }
+    catch {
+        Write-Warning "The installed module manifest is unreadable; removing the damaged Core installation: $($_.Exception.Message)"
+    }
+}
 $endpointModulePath = @(
     (Join-Path $PSScriptRoot 'EndpointConfiguration.psm1'),
     (Join-Path $PSScriptRoot 'Modules\EndpointConfiguration.psm1')
@@ -47,20 +65,11 @@ catch {
 if (Test-Path -LiteralPath $target -PathType Container) {
     if ($PSCmdlet.ShouldProcess($target, 'Remove the LogCollector core module')) {
         Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
-        Write-Output "Removed LogCollector core $packageVersion from $target."
+        Write-Output "Removed LogCollector core $ExpectedVersion from $target."
     }
 }
 else {
-    Write-Output "LogCollector core $packageVersion is not installed at $target."
-}
-
-# Drop the now-empty parent so PSModulePath does not keep advertising an empty module.
-$parent = Split-Path $target -Parent
-if ((Test-Path -LiteralPath $parent -PathType Container) -and
-    -not (Get-ChildItem -LiteralPath $parent -Force)) {
-    if ($PSCmdlet.ShouldProcess($parent, 'Remove the empty module root')) {
-        Remove-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue
-    }
+    Write-Output "LogCollector core $ExpectedVersion is not installed at $target."
 }
 
 if ($RemoveConfiguration) {

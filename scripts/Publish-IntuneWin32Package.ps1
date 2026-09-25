@@ -3,16 +3,19 @@
 .SYNOPSIS
 Builds a complete inventory Win32 package using Microsoft's local content prep tool.
 .NOTES
-Version 1.5.0. Does not install tasks, collect inventory, upload content or change Azure.
+Version 1.7.0. Does not install tasks, collect inventory, upload content or change Azure.
 #>
-[CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Endpoint')]
+[CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Settings')]
 param(
     [string] $IntuneWinAppUtilPath,
-    [Parameter(Mandatory, ParameterSetName = 'Endpoint')] [Uri] $FrontendUrl,
-    [Parameter(ParameterSetName = 'Endpoint')] [string] $Environment = '',
-    [Parameter(ParameterSetName = 'Endpoint')]
-    [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')]
-    [string] $CustomerName = 'LogCollector',
+    [Parameter(ParameterSetName = 'Settings')]
+    [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $DeviceTableName = 'DeviceInventory_CL',
+    [Parameter(ParameterSetName = 'Settings')]
+    [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $AppTableName = 'AppInventory_CL',
+    [Parameter(ParameterSetName = 'Settings')] [bool] $CollectDeviceInventory = $true,
+    [Parameter(ParameterSetName = 'Settings')] [bool] $CollectAppInventory = $true,
+    [Parameter(ParameterSetName = 'Settings')] [ValidateRange(1, 10)] [int] $MaxAttempts = 3,
+    [Parameter(ParameterSetName = 'Settings')] [ValidateRange(1, 300)] [int] $TimeoutSeconds = 30,
     [Parameter(Mandatory, ParameterSetName = 'Configuration')] [string] $ConfigurationPath,
     [ValidateNotNullOrEmpty()] [string] $OutputRoot
 )
@@ -69,9 +72,12 @@ if ($configurationFile) {
     $buildParameters.ConfigurationPath = $configurationFile
 }
 else {
-    $buildParameters.FrontendUrl = $FrontendUrl
-    $buildParameters.Environment = $Environment
-    $buildParameters.CustomerName = $CustomerName
+    $buildParameters.DeviceTableName = $DeviceTableName
+    $buildParameters.AppTableName = $AppTableName
+    $buildParameters.CollectDeviceInventory = $CollectDeviceInventory
+    $buildParameters.CollectAppInventory = $CollectAppInventory
+    $buildParameters.MaxAttempts = $MaxAttempts
+    $buildParameters.TimeoutSeconds = $TimeoutSeconds
 }
 $package = & (Join-Path $PSScriptRoot 'Publish-InventoryPackage.ps1') @buildParameters
 $output = Join-Path $release 'Output'
@@ -93,10 +99,15 @@ Copy-Item -LiteralPath (Join-Path $repo 'docs\intune-win32-deployment.md') -Dest
     SourcePath = $package.PackagePath
     DetectionScript = Join-Path $release 'Detect.ps1'
     DeploymentGuide = Join-Path $release 'Intune-Deployment.md'
-    SubmissionEnabled = $package.SubmissionEnabled
-    CustomerName = $package.CustomerName
     ConfigurationSha256 = $package.ConfigurationSha256
+    MinimumCoreVersion = $package.MinimumCoreVersion
     InstallCommand = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"'
     UninstallCommand = ('"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ' +
-        '-ExecutionPolicy Bypass -File "%ProgramW6432%\' + $package.CustomerName + '\CustomInventory\Uninstall.ps1"')
+        '-ExecutionPolicy Bypass -Command "& { $names = @(''LogCollector-CustomInventory'', ' +
+        '''LogCollector-CustomInventory-Spool''); $tasks = @(Get-ScheduledTask -ErrorAction Stop | ' +
+        'Where-Object { $_.TaskPath -eq ''\LogCollector\'' -and $_.TaskName -in $names }); ' +
+        'if (@($tasks | Where-Object State -eq ''Running'').Count -gt 0) { ' +
+        'throw ''Let the running inventory package task finish before uninstalling.'' }; ' +
+        'foreach ($task in $tasks) { Unregister-ScheduledTask -TaskPath $task.TaskPath ' +
+        '-TaskName $task.TaskName -Confirm:$false -ErrorAction Stop } }"')
 }

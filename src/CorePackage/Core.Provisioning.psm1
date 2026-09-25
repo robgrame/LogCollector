@@ -8,7 +8,7 @@ by administrators: a user-writable module directory is arbitrary code execution 
 and a user-writable configuration redirects the fleet's telemetry. The hardening is done
 here once so the installer and the uninstaller cannot drift apart.
 .NOTES
-Version 1.7.0.
+Version 1.8.0.
 #>
 Set-StrictMode -Version Latest
 
@@ -44,18 +44,18 @@ function Assert-LogCollectorNoReparseHierarchy {
 function Get-LogCollectorModuleRoot {
     <#
     .SYNOPSIS
-    Returns the machine-wide module directory for a given core package version.
+    Returns the stable machine-wide module directory.
     .DESCRIPTION
     Windows PowerShell 5.1 and PowerShell 7 both carry this path in PSModulePath, so
     installing here is what makes `Import-Module LogCollector.Client` work from any script
-    without the script knowing an install path. The version subfolder is the standard
-    layout, which lets a new version be staged beside the old one.
+    without the script knowing an install path. The package version belongs in the module
+    manifest, not in the physical path: upgrades atomically replace this stable directory.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $Version)
+    param()
 
-    $base = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client'
-    return (Join-Path $base $Version)
+    return (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) `
+        'WindowsPowerShell\Modules\LogCollector.Client')
 }
 
 function New-LogCollectorMachineAcl {
@@ -146,14 +146,17 @@ function Assert-LogCollectorMachineAcl {
     own ACLs; and the owner must be trusted, because an owner can always rewrite the DACL.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $Path)
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [switch] $AllowInheritedRules
+    )
 
     $allowed = @($script:SystemSid.Value, $script:AdministratorsSid.Value, $script:TrustedInstallerSid)
     $writeRights = [Security.AccessControl.FileSystemRights] ('WriteData, AppendData, WriteAttributes, ' +
         'WriteExtendedAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership')
     $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
 
-    if (-not $acl.AreAccessRulesProtected) {
+    if (-not $AllowInheritedRules -and -not $acl.AreAccessRulesProtected) {
         throw "'$Path' still inherits access rules after hardening, so its permissions are not self-contained."
     }
     foreach ($rule in $acl.Access) {

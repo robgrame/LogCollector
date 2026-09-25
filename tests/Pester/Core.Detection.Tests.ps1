@@ -37,7 +37,7 @@ BeforeAll {
         Environment                   = 'Production'
         CustomerName                  = 'Example'
         SubmissionEnabled             = $true
-        PackageVersion                = '1.10.2'
+        PackageVersion                = '1.11.0'
         CertificateThumbprint         = ''
         CertificateSubjectLike        = ''
         CertificateIssuerLike         = ''
@@ -200,6 +200,16 @@ Describe 'Core package configuration-bound detection' {
         $install | Should -Match ([regex]::Escape("Get-LogCollectorEndpointConfiguration -Path '`$endpointPath'"))
         $install | Should -Match 'configurationBackup'
         $install | Should -Match 'configurationCreated'
+        $install | Should -Match '\$target = Get-LogCollectorModuleRoot\b'
+        $install | Should -Not -Match 'Get-LogCollectorModuleRoot -Version'
+    }
+
+    It 'guards the stable uninstall path against obsolete Intune removal commands' {
+        $uninstall = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'src\CorePackage\Uninstall.ps1') -Raw
+        $uninstall | Should -Match '\[version\] \$ExpectedVersion'
+        $uninstall | Should -Match '\$installedVersion -ne \$ExpectedVersion'
+        $uninstall | Should -Not -Match "Remove the empty module root"
+        $script:GeneratorText | Should -Match 'LogCollector\.Client\\Uninstall\.ps1" -ExpectedVersion \{0\}'
     }
 
     It 'matches the exact generated configuration' {

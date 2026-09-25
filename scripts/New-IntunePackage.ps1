@@ -256,6 +256,6 @@ Copy-Item -LiteralPath (Join-Path $coreStaging 'Detect.ps1') -Destination (Join-
     ConfigurationSha256 = (Get-FileHash -LiteralPath $coreConfigPath -Algorithm SHA256).Hash
     InstallCommand      = '"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"'
     UninstallCommand    = ('"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' +
-        '"%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\{0}\Uninstall.ps1"') -f $coreVersion
+        '"%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\Uninstall.ps1" -ExpectedVersion {0}') -f $coreVersion
     ContentPrepTool     = $tool.FullName
 }

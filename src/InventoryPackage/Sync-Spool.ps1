@@ -1,16 +1,18 @@
 #Requires -Version 5.1
-# Version 1.8.0. Protected metadata-only spool diagnostics; no new collection.
+# Version 1.9.0. Protected metadata-only spool diagnostics; no new collection.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
-$packageVersion = '1.8.0'
+$packageVersion = '1.9.0'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     $configPath = Join-Path $PSScriptRoot 'Config.psd1'
-    $customerName = Get-InventoryLogCustomerName -ConfigPath $configPath
+    $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
+    Import-Module $coreManifest -MinimumVersion 1.11.0 -ErrorAction Stop
+    $customerName = (Get-LogCollectorEndpointConfiguration).CustomerName
     if ($customerName) {
         $log = Initialize-InventoryLogContext -Component Spool -PackageVersion $packageVersion `
             -CustomerName $customerName

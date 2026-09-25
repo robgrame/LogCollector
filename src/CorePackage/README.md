@@ -1,6 +1,6 @@
 # LogCollector Core — shared telemetry dependency
 
-Version 1.10.2
+Version 1.11.0
 
 This package installs **LogCollector.Client** machine-wide. It is a *dependency*: it
 registers no scheduled task and collects nothing by itself. Install it on every device that
@@ -122,7 +122,8 @@ for data that is not in Log Analytics yet would be a false success.
 
 Requires elevation and 64-bit Windows PowerShell. It:
 
-1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.10.2`,
+1. atomically replaces the module at the stable path
+   `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client`,
    which is on `PSModulePath` for both Windows PowerShell 5.1 and PowerShell 7;
 2. writes `%ProgramData%\<CustomerName>\LogCollector\Config\Endpoint.psd1`;
 3. migrates the compatible legacy `SharedSpool` and `State` folders from
@@ -196,10 +197,17 @@ In both layouts, the utility must have a valid Microsoft Authenticode signature.
 ## Uninstall
 
 ```powershell
-.\Uninstall.ps1                        # module only
-.\Uninstall.ps1 -RemoveConfiguration   # also drop the endpoint, retiring the device
-.\Uninstall.ps1 -RemoveSpool           # also discard records not yet delivered
+.\Uninstall.ps1 -ExpectedVersion 1.11.0                      # module only
+.\Uninstall.ps1 -ExpectedVersion 1.11.0 -RemoveConfiguration # also drop the endpoint
+.\Uninstall.ps1 -ExpectedVersion 1.11.0 -RemoveSpool         # also discard pending records
 ```
+
+The Intune command always passes the package version. If a newer Core is already installed
+at the stable path, an older uninstall request reports success without removing it.
+
+For the one-time 1.10.2 to 1.11.0 migration, update the existing Intune app or use
+supersedence with **Uninstall previous version = No**. Releases before 1.11.0 used a
+versioned uninstall path and do not yet have the expected-version guard.
 
 The configuration and the shared spool survive by default: other scripts depend on the
 former, and the latter may still hold records that have not reached Log Analytics.

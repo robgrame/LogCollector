@@ -2,7 +2,7 @@
 .SYNOPSIS
 Shared telemetry facade for independent Windows PowerShell scripts.
 .NOTES
-Version 1.10.2. Import the manifest; no authentication, I/O or network calls occur on import.
+Version 1.11.0. Import the manifest; no authentication, I/O or network calls occur on import.
 #>
 Set-StrictMode -Version Latest
 
@@ -29,6 +29,7 @@ function Get-LogCollectorSpoolPath {
         if ($CustomerName) {
             $SpoolRoot = Join-Path (Get-LogCollectorDataRoot -CustomerName $CustomerName) 'SharedSpool'
         }
+
         else {
             try { $SpoolRoot = Join-Path (Get-LogCollectorDataRoot) 'SharedSpool' }
             catch {
@@ -44,6 +45,41 @@ function Get-LogCollectorSpoolPath {
     }
     finally { $sha.Dispose() }
     return (Join-Path $SpoolRoot $bucket)
+}
+
+function Assert-LogCollectorApplicationFiles {
+    <#
+    .SYNOPSIS
+    Creates or verifies an administrators-writable application directory and its files.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Directory,
+        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string[]] $FileName,
+        [switch] $CreateDirectory,
+        [switch] $AllowMissing
+    )
+
+    foreach ($name in $FileName) {
+        if ([IO.Path]::GetFileName($name) -cne $name) {
+            throw "FileName must contain leaf names only: '$name'."
+        }
+    }
+    $filesystem = Get-Module -All -Name InventorySpool |
+        Where-Object ModuleBase -eq $PSScriptRoot |
+        Select-Object -First 1
+    if (-not $filesystem) { throw 'The LogCollector filesystem hardening module is not loaded.' }
+    & $filesystem {
+        param($Root, $Names, $CreateRoot, $PermitMissing)
+        $arguments = @{ Path = $Root; Directory = $true }
+        if ($CreateRoot) { $arguments.Create = $true }
+        $null = Assert-SpoolHierarchy @arguments
+        foreach ($name in $Names) {
+            $arguments = @{ Path = (Join-Path $Root $name) }
+            if ($PermitMissing) { $arguments.AllowMissing = $true }
+            $null = Assert-SpoolHierarchy @arguments
+        }
+    } $Directory $FileName $CreateDirectory.IsPresent $AllowMissing.IsPresent
 }
 
 function Resolve-LogCollectorCertificate {
@@ -741,4 +777,5 @@ function Send-LogCollectorOperationalEvent {
 Export-ModuleMember -Function Get-DeviceIdentitySnapshot, Get-ClientCertificate, New-SignedInventoryRequest, `
     New-InventoryEnvelope, Get-LogCollectorSpoolPath, Export-LogCollectorSchema, Send-LogCollectorData, `
     Sync-LogCollectorSpool, Send-LogAnalyticsData, Send-LogCollectorOperationalEvent, Get-LogCollectorEndpointConfiguration, `
-    Get-LogCollectorConfigurationPath, Get-LogCollectorDataRoot, Write-CMTraceLog, Get-CMTraceLogPath, Get-CMTraceCustomerName
+    Get-LogCollectorConfigurationPath, Get-LogCollectorDataRoot, Assert-LogCollectorApplicationFiles, `
+    Write-CMTraceLog, Get-CMTraceLogPath, Get-CMTraceCustomerName

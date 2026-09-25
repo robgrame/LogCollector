@@ -11,7 +11,7 @@ Detection deliberately imports the module rather than only checking that files e
 package's promise is that `Import-Module LogCollector.Client` works for any script, and a
 present-but-unimportable module would otherwise be reported as a healthy install.
 .NOTES
-Version 1.10.2.
+Version 1.11.0.
 #>
 [CmdletBinding()]
 param()
@@ -69,8 +69,8 @@ function Test-ExpectedLogCollectorConfiguration {
 }
 
 try {
-    $version = '1.10.2'
-    $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "WindowsPowerShell\Modules\LogCollector.Client\$version"
+    $version = '1.11.0'
+    $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client'
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
         Write-CoreDetectionFailure -Reason 'ModuleDirectoryMissing'
     }
@@ -79,7 +79,10 @@ try {
     # only administrators can have written it BEFORE loading anything. The check is inlined
     # rather than imported from the directory under scrutiny, which would defeat the point.
     function Test-TrustedPath {
-        param([string] $Path)
+        param(
+            [string] $Path,
+            [switch] $AllowInheritedRules
+        )
         $allowed = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
         $writeRights = [Security.AccessControl.FileSystemRights] ('WriteData, AppendData, WriteAttributes, ' +
             'WriteExtendedAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership')
@@ -87,7 +90,7 @@ try {
         # The installer protects every path it creates, and Assert-LogCollectorMachineAcl
         # rejects anything unprotected. Detection must agree, otherwise it reports healthy a
         # path that currently inherits safe rights but can silently gain a writable ACE.
-        if (-not $acl.AreAccessRulesProtected) { return $false }
+        if (-not $AllowInheritedRules -and -not $acl.AreAccessRulesProtected) { return $false }
         foreach ($rule in $acl.Access) {
             if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
             if (($rule.FileSystemRights -band $writeRights) -eq 0) { continue }
@@ -100,9 +103,9 @@ try {
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
         return ($allowed -contains $owner)
     }
-    # The parent is included: create/delete-child rights there allow the whole version
-    # directory to be swapped for another, whatever the version directory's own ACL says.
-    if (-not (Test-TrustedPath -Path (Split-Path $root -Parent))) {
+    # The shared parent is controlled by Windows and may inherit its ACL. It still must not
+    # grant write or takeover rights to an untrusted principal.
+    if (-not (Test-TrustedPath -Path (Split-Path $root -Parent) -AllowInheritedRules)) {
         Write-CoreDetectionFailure -Reason 'ModuleParentAclMismatch'
     }
     if (-not (Test-TrustedPath -Path $root)) {

@@ -22,7 +22,7 @@ Overrides the customer folder in Config.psd1. This is the <CustomerName> in
 %ProgramData%\<CustomerName>\<ApplicationName>\Logs, where Write-CMTraceLog writes.
 Intended for a single-machine test install.
 .NOTES
-Version 1.10.2.
+Version 1.11.0.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -32,7 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.10.2'
+$packageVersion = '1.11.0'
 
 $logCustomerName = 'LogCollector'
 $logApplicationName = 'LogCollectorCore'
@@ -177,24 +177,23 @@ foreach ($file in $rootFiles) {
     }
 }
 
-$target = Get-LogCollectorModuleRoot -Version $packageVersion
+$target = Get-LogCollectorModuleRoot
 if ([IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') -eq $target.TrimEnd('\')) {
     throw 'Run Install.ps1 from the distribution folder, not the installed directory.'
 }
 
 if ($PSCmdlet.ShouldProcess($target, 'Install the LogCollector core module machine-wide')) {
     $installPhase = 'PrepareModuleRoot'
-    # Harden the parent too. Protecting only the version directory is not enough: a principal
-    # holding create/delete-child rights on the parent can rename it away and put its own
-    # directory at the same path, which SYSTEM-scheduled work would then import.
+    # The shared WindowsPowerShell\Modules directory is managed by Windows and may contain
+    # unrelated modules, so do not replace its ACL. Verify that it is not writable by an
+    # untrusted principal, then fully protect the LogCollector.Client directory we own.
     $moduleRoot = Split-Path $target -Parent
     if (-not (Test-Path -LiteralPath $moduleRoot -PathType Container)) {
         $null = New-Item -ItemType Directory -Path $moduleRoot -Force -ErrorAction Stop
     }
-    Set-LogCollectorMachineAcl -Path $moduleRoot
-    Assert-LogCollectorMachineAcl -Path $moduleRoot
+    Assert-LogCollectorMachineAcl -Path $moduleRoot -AllowInheritedRules
 
-    # Stage the complete version beside the live one and swap by rename, so a failure part
+    # Stage the complete module beside the live one and swap by rename, so a failure part
     # way through never leaves an importable but incomplete module on the device.
     $stage = '{0}.staging-{1}' -f $target, ([guid]::NewGuid().ToString('N'))
     $retired = $null
@@ -387,8 +386,7 @@ Write-Output `$installedConfiguration.FrontendUrl
         }
     }
     # Only now, with the new version verified end to end, is the previous installation
-    # redundant. A leftover `.retired-*` directory is inert: PSModulePath only considers
-    # child directories whose name parses as a version.
+    # redundant. A leftover `.retired-*` directory has a different module name and is inert.
     if ($retired -and (Test-Path -LiteralPath $retired)) {
         Remove-Item -LiteralPath $retired -Recurse -Force -ErrorAction SilentlyContinue
     }

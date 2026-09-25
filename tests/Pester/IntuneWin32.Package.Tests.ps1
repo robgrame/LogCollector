@@ -5,6 +5,15 @@ BeforeAll {
     $null = New-Item -ItemType Directory -Path (Split-Path $script:Tool -Parent)
     Set-Content -LiteralPath $script:Tool -Value 'Never executed: Start-Process is mocked.'
     $script:Version = (Import-PowerShellDataFile (Join-Path $script:Repo 'src\InventoryPackage\Config.psd1')).PackageVersion
+    $script:OriginalModulePath = $env:PSModulePath
+    $moduleRoot = Join-Path $TestDrive 'PowerShellModules\LogCollector.Client'
+    $null = New-Item -ItemType Directory -Path $moduleRoot -Force
+    $manifest = Import-PowerShellDataFile (Join-Path $script:Repo 'src\Client\LogCollector.Client.psd1')
+    foreach ($file in $manifest.FileList) {
+        Copy-Item -LiteralPath (Join-Path $script:Repo "src\Client\$file") -Destination (Join-Path $moduleRoot $file)
+    }
+    $env:PSModulePath = (Split-Path $moduleRoot -Parent) +
+        [IO.Path]::PathSeparator + $env:PSModulePath
 }
 
 AfterAll {
@@ -12,6 +21,7 @@ AfterAll {
         'InventoryClient', 'InventorySpool', 'DeviceIdentity', 'RequestSigning')) {
         Get-Module -All -Name $name | Remove-Module -Force -ErrorAction Stop
     }
+    $env:PSModulePath = $script:OriginalModulePath
 }
 
 Describe 'Intune Win32 package generation' {
@@ -35,17 +45,22 @@ Describe 'Intune Win32 package generation' {
 
     It 'packages all files using separated paths and exposes the matching detection and guide' {
         $result = & $script:Builder -IntuneWinAppUtilPath $script:Tool `
-            -FrontendUrl 'https://example.invalid/api/inventory' -Environment 'TestLab' -OutputRoot $script:Output
+            -OutputRoot $script:Output
         $result.PackageVersion | Should -BeExactly $script:Version
-        $result.SubmissionEnabled | Should -BeFalse
+        $result.MinimumCoreVersion | Should -BeExactly '1.11.0'
+        $result.UninstallCommand | Should -Match 'Get-ScheduledTask'
+        $result.UninstallCommand | Should -Match 'Unregister-ScheduledTask'
+        $result.UninstallCommand | Should -Not -Match 'Get-LogCollectorEndpointConfiguration'
+        $result.UninstallCommand | Should -Not -Match 'CustomInventory\\Uninstall\.ps1'
+        $result.UninstallCommand | Should -Not -Match '-File "\.\\Uninstall\.ps1"'
         $result.PackageSha256 | Should -Match '^[0-9A-F]{64}$'
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.SourcePath 'Config.psd1')).Hash
-        @(Get-ChildItem -LiteralPath $result.SourcePath -Recurse -File).Count | Should -Be 19
+        @(Get-ChildItem -LiteralPath $result.SourcePath -Recurse -File).Count | Should -Be 11
         (Get-FileHash $result.DetectionScript).Hash |
             Should -BeExactly (Get-FileHash (Join-Path $result.SourcePath 'Detect.ps1')).Hash
         Test-Path -LiteralPath $result.DeploymentGuide | Should -BeTrue
         $config = Import-PowerShellDataFile (Join-Path $result.SourcePath 'Config.psd1')
-        $config.Environment | Should -BeExactly 'TestLab'
+        $config.ContainsKey('FrontendUrl') | Should -BeFalse
         $config.DeviceTableName | Should -BeExactly 'DeviceInventory_CL'
         $config.AppTableName | Should -BeExactly 'AppInventory_CL'
         Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
@@ -54,8 +69,7 @@ Describe 'Intune Win32 package generation' {
             $ArgumentList[1].EndsWith('"') -and $ArgumentList[3] -eq 'Install.ps1' -and
             $ArgumentList[5].StartsWith('"') -and $ArgumentList[6] -eq '-qq'
         }
-        { & $script:Builder -IntuneWinAppUtilPath $script:Tool `
-            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output } |
+        { & $script:Builder -IntuneWinAppUtilPath $script:Tool -OutputRoot $script:Output } |
             Should -Throw '*already exists*'
         Should -Invoke Start-Process -Times 1 -Exactly
     }
@@ -63,16 +77,33 @@ Describe 'Intune Win32 package generation' {
     It 'preserves a deliberately configured pilot without copying adjacent files' {
         $custom = Join-Path $TestDrive 'Custom.psd1'
         (Get-Content (Join-Path $script:Repo 'src\InventoryPackage\Config.psd1') -Raw).
-            Replace("FrontendUrl = ''", "FrontendUrl = 'https://pilot.invalid/api/inventory'").
-            Replace('SubmissionEnabled = $false', 'SubmissionEnabled = $true').
-            Replace("CertificateThumbprint = ''", ("CertificateThumbprint = '" + ('A' * 40) + "'")) |
+            Replace('CollectAppInventory = $true', 'CollectAppInventory = $false').
+            Replace('TimeoutSeconds = 30', 'TimeoutSeconds = 45') |
             Set-Content $custom
         $result = & $script:Builder -IntuneWinAppUtilPath $script:Tool -ConfigurationPath $custom -OutputRoot $script:Output
-        $result.SubmissionEnabled | Should -BeTrue
+        $result.MinimumCoreVersion | Should -BeExactly '1.11.0'
         (Get-Content $result.DetectionScript -Raw) | Should -Match $result.ConfigurationSha256
         (Get-Content $result.DetectionScript -Raw) | Should -Not -Match '__LOGCOLLECTOR_CONFIGURATION_SHA256__'
         (Get-FileHash (Join-Path $result.SourcePath 'Config.psd1')).Hash | Should -BeExactly (Get-FileHash $custom).Hash
-        @(Get-ChildItem -LiteralPath $result.SourcePath -File -Recurse).Count | Should -Be 19
+        @(Get-ChildItem -LiteralPath $result.SourcePath -File -Recurse).Count | Should -Be 11
+    }
+
+    It 'removes only the global tasks without executing retained package scripts' {
+        $result = & $script:Builder -IntuneWinAppUtilPath $script:Tool -OutputRoot $script:Output
+        Mock Get-ScheduledTask {
+            @(
+                [pscustomobject]@{ TaskPath = '\LogCollector\'; TaskName = 'LogCollector-CustomInventory'; State = 'Ready' },
+                [pscustomobject]@{ TaskPath = '\LogCollector\'; TaskName = 'LogCollector-CustomInventory-Spool'; State = 'Ready' }
+            )
+        }
+        Mock Unregister-ScheduledTask {}
+        $prefix = '-Command "'
+        $start = $result.UninstallCommand.IndexOf($prefix, [StringComparison]::Ordinal)
+        $start | Should -BeGreaterOrEqual 0
+        $body = $result.UninstallCommand.Substring($start + $prefix.Length)
+        $body = $body.Substring(0, $body.Length - 1)
+        & ([scriptblock]::Create($body))
+        Should -Invoke Unregister-ScheduledTask -Times 2 -Exactly
     }
 
     It 'rejects mismatched configuration versions before writing output' {
@@ -88,8 +119,7 @@ Describe 'Intune Win32 package generation' {
     It 'validates configuration with the runtime before running the tool' {
         $custom = Join-Path $TestDrive 'Invalid.psd1'
         (Get-Content (Join-Path $script:Repo 'src\InventoryPackage\Config.psd1') -Raw).
-            Replace("FrontendUrl = ''", "FrontendUrl = 'https://pilot.invalid/api/inventory'").
-            Replace('SubmissionEnabled = $false', "SubmissionEnabled = 'false'") | Set-Content $custom
+            Replace('CollectAppInventory = $true', "CollectAppInventory = 'false'") | Set-Content $custom
         { & $script:Builder -IntuneWinAppUtilPath $script:Tool -ConfigurationPath $custom -OutputRoot $script:Output } |
             Should -Throw '*Boolean*'
         Should -Invoke Start-Process -Times 0 -Exactly
@@ -97,8 +127,7 @@ Describe 'Intune Win32 package generation' {
 
     It 'propagates tool failure rather than reporting successful packaging' {
         Mock Start-Process { [pscustomobject]@{ ExitCode = 9 } }
-        { & $script:Builder -IntuneWinAppUtilPath $script:Tool `
-            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output } |
+        { & $script:Builder -IntuneWinAppUtilPath $script:Tool -OutputRoot $script:Output } |
             Should -Throw '*exit code 9*'
     }
 
@@ -111,8 +140,7 @@ Describe 'Intune Win32 package generation' {
                 }
             }
         }
-        { & $script:Builder -IntuneWinAppUtilPath $script:Tool `
-            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output } |
+        { & $script:Builder -IntuneWinAppUtilPath $script:Tool -OutputRoot $script:Output } |
             Should -Throw '*valid Microsoft Corporation Authenticode signature*'
         Should -Invoke Start-Process -Times 0 -Exactly
     }
@@ -127,21 +155,19 @@ Describe 'Intune Win32 package generation' {
             }
             [pscustomobject]@{ ExitCode = 0 }
         }
-        { & $script:Builder -IntuneWinAppUtilPath $script:Tool `
-            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output } |
+        { & $script:Builder -IntuneWinAppUtilPath $script:Tool -OutputRoot $script:Output } |
             Should -Throw '*no nonempty Install.intunewin*'
     }
 
     It 'does not create folders or start a process under WhatIf' {
-        & $script:Builder -IntuneWinAppUtilPath $script:Tool `
-            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output -WhatIf
+        & $script:Builder -IntuneWinAppUtilPath $script:Tool -OutputRoot $script:Output -WhatIf
         Test-Path $script:Output | Should -BeFalse
         Should -Invoke Start-Process -Times 0 -Exactly
     }
 
     It 'does not require the content prep utility under WhatIf' {
         & $script:Builder -IntuneWinAppUtilPath (Join-Path $TestDrive 'missing.exe') `
-            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output -WhatIf
+            -OutputRoot $script:Output -WhatIf
         Test-Path $script:Output | Should -BeFalse
         Should -Invoke Get-AuthenticodeSignature -Times 0 -Exactly
         Should -Invoke Start-Process -Times 0 -Exactly
@@ -149,7 +175,7 @@ Describe 'Intune Win32 package generation' {
 
     It 'requires an existing exe before producing output' {
         { & $script:Builder -IntuneWinAppUtilPath (Join-Path $TestDrive 'missing.exe') `
-            -FrontendUrl 'https://example.invalid/api/inventory' -OutputRoot $script:Output } | Should -Throw
+            -OutputRoot $script:Output } | Should -Throw
         Test-Path $script:Output | Should -BeFalse
         Should -Invoke Start-Process -Times 0 -Exactly
     }
@@ -162,7 +188,7 @@ Describe 'Intune Win32 package generation' {
         Copy-Item -LiteralPath $script:Builder -Destination $scripts
         Copy-Item -LiteralPath (Join-Path $script:Repo 'src\InventoryPackage\Config.psd1') -Destination $configSource
         $result = & powershell.exe -NoProfile -File (Join-Path $scripts 'Publish-IntuneWin32Package.ps1') `
-            -IntuneWinAppUtilPath $script:Tool -FrontendUrl 'https://example.invalid/api/inventory' -WhatIf
+            -IntuneWinAppUtilPath $script:Tool -WhatIf
         $LASTEXITCODE | Should -Be 0
         ($result -join "`n") | Should -Match ([regex]::Escape((Join-Path $sandbox "out\IntuneWin32\$script:Version")))
         Test-Path (Join-Path $sandbox 'out') | Should -BeFalse

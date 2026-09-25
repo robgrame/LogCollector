@@ -1,47 +1,26 @@
 # Custom Inventory - pacchetto Windows universale
 
-Versione **1.8.0**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
-La cartella generata e autosufficiente: non richiede la repository, OneDrive,
-PowerShell Gallery, Workspace ID/Primary Key o Function key sul dispositivo.
-Codice, nomi dei task e percorsi di installazione non dipendono da un cliente.
+Versione **1.9.0**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
+Il pacchetto richiede **LogCollector Core 1.11.0 o successivo** come dipendenza Intune.
+Non richiede repository, OneDrive, PowerShell Gallery, Workspace ID/Primary Key o
+Function key sul dispositivo. Codice e nomi dei task non dipendono da un cliente;
+endpoint, cliente e criteri certificato provengono dalla configurazione protetta del Core.
 
 ## Configurazione e destinazioni
 
-`Config.psd1` contiene i parametri del singolo deployment:
+`Config.psd1` contiene soltanto i parametri specifici del collector:
 
 | Parametro | Significato |
 |---|---|
-| FrontendUrl | Endpoint HTTPS /api/submit oppure alias compatibile /api/inventory |
-| Environment | Etichetta diagnostica facoltativa, non una prova di autenticazione |
 | DeviceTableName | Tabella hardware; default DeviceInventory_CL |
 | AppTableName | Tabella software; default AppInventory_CL |
-| SubmissionEnabled | Invio abilitato; default false |
 | CollectDeviceInventory / CollectAppInventory | Aree da raccogliere |
-| CertificateThumbprint / CertificateIssuerLike | Selezione facoltativa del certificato |
-| PkiRootCaThumbprints / PkiRootCaSubjects | Liste facoltative per la Root CA della catena PKI validata |
-| PkiIntermediateCaThumbprints / PkiIntermediateCaSubjects | Liste facoltative per almeno una SubCA della catena PKI validata |
 | MaxAttempts / TimeoutSeconds | Tentativi e timeout per singola richiesta |
 
-Per riusare il pacchetto in un altro tenant si cambia la configurazione, non il codice.
-Il server deve fidarsi dei certificati previsti e, nel percorso Intune, autorizza
-soltanto device Entra abilitati nel proprio tenant. Cambiare Environment non cambia
-tenant o autorizzazioni. Non inserire credenziali o chiavi private nella configurazione.
-
-I quattro parametri Pki* sono array di stringhe, vuoti per default. Usare Subject DN
-completi (non Friendly Name) e thumbprint SHA1 di 40 cifre esadecimali. Root e SubCA
-sono ruoli distinti: se entrambi sono configurati devono essere presenti entrambi.
-Quando nomi e impronte sono configurati per un ruolo, devono combaciare sullo
-stesso certificato CA. Il leaf non soddisfa un vincolo CA e la Root non e una SubCA.
-Un pin malformato e un errore, non un motivo per ignorare la configurazione.
-
-I vincoli si applicano alla selezione PKI sia per l'invio sia per lo spool, anche
-con un leaf esplicito. Le CA devono gia essere disponibili negli store Windows;
-il pacchetto non le installa. La selezione locale valida la catena senza revoca:
-i controlli CRL/OCSP restano autorevoli nell'Intake. Il fallback Intune resta indipendente.
-Configurare gli stessi vincoli nell'Intake con il prefisso ClientCert__, per esempio
-ClientCert__PkiRootCaThumbprints. Lato server i nomi sono separati da pipe, le
-impronte da virgola/punto e virgola/pipe. Servono comunque gli ancoraggi pubblici
-TrustedRootCertificates e gli eventuali TrustedIntermediateCertificates.
+`FrontendUrl`, `Environment`, `CustomerName`, `SubmissionEnabled`, selezione del
+certificato e vincoli PKI vengono letti con `Get-LogCollectorEndpointConfiguration`.
+Per cambiare questi valori si aggiorna esclusivamente il package Core; Inventory
+adotta la nuova configurazione alla successiva esecuzione senza essere rigenerato.
 
 I valori iniziali **DeviceInventory_CL** e **AppInventory_CL** conservano i nomi delle
 tabelle esistenti. Non vengono rinominate o sostituite con InventoryWindows_CL.
@@ -53,18 +32,18 @@ HKU caricato; non monta gli hive degli utenti offline.
 Prima dell'invio riprodurre gli schemi effettivi, compresi suffissi tipizzati
 (`_s`, `_b`, ecc.), tipi, campi annidati e trasformazioni DCR.
 Il client conserva i nomi JSON originari; non inventa suffissi.
-Il pacchetto non crea tabelle ne modifica Azure. Abilitare SubmissionEnabled
-solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake sia nel worker.
+Il pacchetto non crea tabelle ne modifica Azure. Impostare `SubmissionEnabled` nel
+Core solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake sia nel worker.
 
 ## Contenuto
 
 - `Run-Inventory.ps1`: raccolta e invio separato alle destinazioni configurate.
 - `Sync-Spool.ps1`: ritrasmissione senza nuova raccolta.
 - `Inventory.Collection.psm1` / `Inventory.Runtime.psm1`: raccolta e integrazione.
-- `Modules`: i file del modulo condiviso LogCollector.Client 1.10.2.
+- dipendenza esterna: LogCollector Core installa `LogCollector.Client` 1.11.0 o successivo.
 - `Inventory.Logging.psm1`: logger locale protetto, condiviso dalle entry point.
 - `Install.ps1`, `Uninstall.ps1`, `Detect.ps1`: gestione Intune Win32.
-- `Config.psd1`: configurazione del deployment.
+- `Config.psd1`: sole opzioni specifiche del collector.
 
 ## Installazione / Intune
 
@@ -84,8 +63,8 @@ e' stata installata anche se il pacchetto Intune viene poi aggiornato.
 Caricare `Detect.ps1` GENERATO insieme al pacchetto come regola di detection, con esecuzione a 32 bit su
 client a 64 bit impostata a **No**.
 
-La detection contiene lo SHA256 del Config.psd1 finale e controlla anche azione,
-principal SYSTEM e abilitazione dei task. Per applicare una nuova configurazione
+La detection contiene lo SHA256 del Config.psd1 finale, richiede Core 1.11.0 e controlla
+azione, principal SYSTEM e abilitazione dei task rispetto al Core. Per applicare una nuova configurazione
 senza disinstallare, aggiornare nella stessa app Intune sia il contenuto .intunewin
 sia il relativo Detect.ps1, con assegnazione Required. La configurazione precedente
 non soddisfa la nuova detection: Intune riesegue l'installer. Non usare il template
@@ -100,7 +79,7 @@ C:\Program Files\<CustomerName>\CustomInventory
 ```
 
 Il percorso non contiene la versione. Il file `Version` nella directory installata
-contiene la versione del package (`1.8.0`) ed è verificato dalla detection.
+contiene la versione del package (`1.9.0`) ed è verificato dalla detection.
 
 Il percorso viene protetto per SYSTEM/amministratori; percorsi preesistenti non
 attendibili o reparse point vengono rifiutati, non riparati automaticamente.
@@ -116,7 +95,7 @@ Sono registrati due task dedicati sotto `\LogCollector\`:
 | LogCollector-CustomInventory | Mercoledi/sabato 09:00, RandomDelay PT2H |
 | LogCollector-CustomInventory-Spool | Ogni ora, senza rieseguire il collector |
 
-Entrambi sono **disabilitati** quando SubmissionEnabled=false.
+Entrambi seguono il valore `SubmissionEnabled` configurato nel Core.
 I task preesistenti di altri collector non vengono modificati.
 Detection positiva significa installato, non ingestione attiva o completata.
 La disinstallazione rimuove solo questi task e conserva file e spool, evitando
@@ -136,7 +115,7 @@ C:\ProgramData\<CustomerName>\CustomInventory\Logs\
 Se un percorso log creato da una release precedente non supera i controlli ACL correnti,
 nessuna entry point lo ripara o vi scrive. Installazione, disinstallazione, raccolta e drain
 usano invece il fallback protetto
-`C:\ProgramData\LogCollectorInventory\<CustomerName>\CustomInventory-Fallback-1.8.0\Logs\`,
+`C:\ProgramData\LogCollectorInventory\<CustomerName>\CustomInventory-Fallback-1.9.0\Logs\`,
 separato dall'albero ACL cliente primario; se anche il fallback non è
 disponibile, il logging diagnostico viene disabilitato senza bloccare l'operazione principale.
 
@@ -189,12 +168,12 @@ Nel percorso installato, da Windows PowerShell a 64 bit elevato o SYSTEM:
 
 Preview raccoglie e restituisce soltanto conteggi: nessun invio, spool o ricerca
 certificato. QueueOnly accoda dati locali protetti senza HTTP.
-Entrambi richiedono identita Entra valida e configurazione endpoint esplicita.
+Entrambi richiedono identita Entra valida e configurazione Core installata.
 Non stampare payload, firme o credenziali nei log di distribuzione.
 
-Dopo la preparazione delle destinazioni Azure impostare SubmissionEnabled=true
-in una copia di Config.psd1, rigenerare il pacchetto con -ConfigurationPath e
-aggiornare contenuto e detection nell'app Intune. L'installer riabilita i task.
+Dopo la preparazione delle destinazioni Azure distribuire un Core con
+`SubmissionEnabled=true`. Aggiornare Inventory solo se cambiano tabelle, aree di
+raccolta, retry o timeout; endpoint e criteri PKI non richiedono un nuovo package Inventory.
 Per una prova immediata, senza attendere il trigger con ritardo casuale:
 
 ```powershell

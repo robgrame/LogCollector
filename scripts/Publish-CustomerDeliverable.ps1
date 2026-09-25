@@ -227,12 +227,11 @@ Install command:
 "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"
 ``````
 
-Uninstall command (pinned to the version actually installed, not whatever this Intune app's
-current package content contains after a later update; ``Uninstall.ps1`` is copied there by
-``Install.ps1`` for exactly this reason):
+Uninstall command (the expected-version guard makes an old Intune uninstall a no-op after
+a newer Core release has replaced the stable module directory):
 
 ``````text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\$coreVersion\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\Uninstall.ps1" -ExpectedVersion $coreVersion
 ``````
 
 ``Sysnative`` prevents Intune Management Extension from redirecting to 32-bit PowerShell,
@@ -273,6 +272,12 @@ Get-LogCollectorEndpointConfiguration
 The returned configuration must show the expected ``FrontendUrl``, ``Environment`` and
 ``CustomerName``. Core itself performs no collection and registers no task. Test data
 submission from the pilot version of an application package, not from Core installation.
+
+For the one-time transition from Core 1.10.2's versioned directory to 1.11.0's stable
+directory, update the existing Intune app or configure supersedence with **Uninstall
+previous version = No**. The old 1.10.2 uninstall command points inside the versioned
+directory that the 1.11.0 migration replaces; the expected-version guard protects upgrades
+from 1.11.0 onward.
 
 ``````powershell
 `$configuration = Get-LogCollectorEndpointConfiguration

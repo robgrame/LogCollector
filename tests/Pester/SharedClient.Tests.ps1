@@ -43,14 +43,15 @@ Describe 'Shared client facade' {
     }
 
     It 'exports the documented public surface' {
-        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.10.2'
+        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.11.0'
         $commands = @(Get-Command -Module LogCollector.Client).Name | Sort-Object
         $expected = @('Get-DeviceIdentitySnapshot', 'Get-ClientCertificate', 'New-SignedInventoryRequest',
             'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Export-LogCollectorSchema',
             'Send-LogCollectorData', 'Sync-LogCollectorSpool', 'Send-LogAnalyticsData',
             'Send-LogCollectorOperationalEvent',
             'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath', 'Get-LogCollectorDataRoot',
-            'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName') | Sort-Object
+            'Assert-LogCollectorApplicationFiles', 'Write-CMTraceLog', 'Get-CMTraceLogPath',
+            'Get-CMTraceCustomerName') | Sort-Object
         ($commands -join ',') | Should -BeExactly ($expected -join ',')
     }
 
@@ -91,6 +92,21 @@ Describe 'Shared client facade' {
         Should -Invoke -ModuleName LogCollector.Client Get-DeviceIdentitySnapshot -Times 0 -Exactly
         Should -Invoke -ModuleName LogCollector.Client Get-ClientCertificate -Times 0 -Exactly
         Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 0 -Exactly
+    }
+
+    It 'rejects nested names in the public application hardening contract' {
+        { Assert-LogCollectorApplicationFiles -Directory $TestDrive -FileName 'nested\file.ps1' } |
+            Should -Throw '*leaf names only*'
+    }
+
+    It 'executes application hardening through the loaded filesystem module' {
+        $directory = Join-Path $TestDrive 'ProtectedApplication'
+        Assert-LogCollectorApplicationFiles -Directory $directory -FileName 'Run.ps1' `
+            -CreateDirectory -AllowMissing
+        Test-Path -LiteralPath $directory -PathType Container | Should -BeTrue
+        Set-Content -LiteralPath (Join-Path $directory 'Run.ps1') -Value '# test'
+        { Assert-LogCollectorApplicationFiles -Directory $directory -FileName 'Run.ps1' } |
+            Should -Not -Throw
     }
 
     It 'limits schema records and refuses accidental overwrite' {
@@ -472,7 +488,7 @@ Describe 'Shared module packaging' {
         $result.ModuleVersion | Should -BeExactly $expectedVersion
         $result.PackageSha256 | Should -Match '^[A-F0-9]{64}$'
         $manifest = Test-ModuleManifest (Join-Path $result.ModulePath 'LogCollector.Client.psd1')
-        $manifest.ExportedFunctions.Count | Should -Be 16
+        $manifest.ExportedFunctions.Count | Should -Be 17
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($result.PackagePath)
         try {
