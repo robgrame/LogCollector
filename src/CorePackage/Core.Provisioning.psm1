@@ -8,7 +8,7 @@ by administrators: a user-writable module directory is arbitrary code execution 
 and a user-writable configuration redirects the fleet's telemetry. The hardening is done
 here once so the installer and the uninstaller cannot drift apart.
 .NOTES
-Version 1.6.0.
+Version 1.8.0.
 #>
 Set-StrictMode -Version Latest
 
@@ -17,21 +17,45 @@ $script:AdministratorsSid = [Security.Principal.SecurityIdentifier] 'S-1-5-32-54
 $script:UsersSid = [Security.Principal.SecurityIdentifier] 'S-1-5-32-545'
 $script:TrustedInstallerSid = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
 
+function Assert-LogCollectorNoReparseHierarchy {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $programData = [IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\')
+    if ($fullPath.StartsWith($programData + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($fullPath, $programData, [StringComparison]::OrdinalIgnoreCase)) {
+        $current = $programData
+        $relative = $fullPath.Substring($programData.Length).TrimStart('\')
+    }
+    else {
+        $current = [IO.Path]::GetPathRoot($fullPath)
+        $relative = $fullPath.Substring($current.Length)
+    }
+    foreach ($segment in @($relative.Split([char[]]'\', [StringSplitOptions]::RemoveEmptyEntries))) {
+        $current = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $current)) { break }
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $item.LinkType) {
+            throw "LogCollector does not trust symbolic links, junctions or other reparse points: '$current'."
+        }
+    }
+}
+
 function Get-LogCollectorModuleRoot {
     <#
     .SYNOPSIS
-    Returns the machine-wide module directory for a given core package version.
+    Returns the stable machine-wide module directory.
     .DESCRIPTION
     Windows PowerShell 5.1 and PowerShell 7 both carry this path in PSModulePath, so
     installing here is what makes `Import-Module LogCollector.Client` work from any script
-    without the script knowing an install path. The version subfolder is the standard
-    layout, which lets a new version be staged beside the old one.
+    without the script knowing an install path. The package version belongs in the module
+    manifest, not in the physical path: upgrades atomically replace this stable directory.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $Version)
+    param()
 
-    $base = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client'
-    return (Join-Path $base $Version)
+    return (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) `
+        'WindowsPowerShell\Modules\LogCollector.Client')
 }
 
 function New-LogCollectorMachineAcl {
@@ -88,6 +112,24 @@ function Set-LogCollectorMachineAcl {
     Set-Acl -LiteralPath $Path -AclObject (New-LogCollectorMachineAcl -Path $Path -Directory:$isDirectory) -ErrorAction Stop
 }
 
+function Set-LogCollectorPrivateDataAcl {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) {
+        if (-not $rule.IsInherited) { $null = $acl.RemoveAccessRuleSpecific($rule) }
+    }
+    $acl.SetOwner($script:AdministratorsSid)
+    $inheritance = if ($item.PSIsContainer) { 'ContainerInherit, ObjectInherit' } else { 'None' }
+    foreach ($sid in @($script:SystemSid, $script:AdministratorsSid)) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+                    $sid, 'FullControl', $inheritance, 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+}
+
 function Assert-LogCollectorMachineAcl {
     <#
     .SYNOPSIS
@@ -104,14 +146,17 @@ function Assert-LogCollectorMachineAcl {
     own ACLs; and the owner must be trusted, because an owner can always rewrite the DACL.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $Path)
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [switch] $AllowInheritedRules
+    )
 
     $allowed = @($script:SystemSid.Value, $script:AdministratorsSid.Value, $script:TrustedInstallerSid)
     $writeRights = [Security.AccessControl.FileSystemRights] ('WriteData, AppendData, WriteAttributes, ' +
         'WriteExtendedAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership')
     $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
 
-    if (-not $acl.AreAccessRulesProtected) {
+    if (-not $AllowInheritedRules -and -not $acl.AreAccessRulesProtected) {
         throw "'$Path' still inherits access rules after hardening, so its permissions are not self-contained."
     }
     foreach ($rule in $acl.Access) {
@@ -147,16 +192,28 @@ function Write-LogCollectorEndpointConfiguration {
     )
 
     $directory = Split-Path $Path -Parent
-    if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
-        $null = New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop
-    }
-    # Both levels, not just the leaf: create/delete-child rights on either directory let an
+    $dataRoot = Split-Path $directory -Parent
+    $customerRoot = Split-Path $dataRoot -Parent
+    Assert-LogCollectorNoReparseHierarchy -Path $customerRoot
+    # Every customer-scoped level, not just the leaf: create/delete-child rights on either directory let an
     # unprivileged user replace Endpoint.psd1 outright, whatever the file's own ACL says,
     # and the endpoint decides where every script on the machine sends its telemetry.
-    foreach ($level in @((Split-Path $directory -Parent), $directory)) {
-        Set-LogCollectorMachineAcl -Path $level
-        if (-not $WhatIfPreference) { Assert-LogCollectorMachineAcl -Path $level }
+    foreach ($level in @($customerRoot, $dataRoot, $directory)) {
+        if (Test-Path -LiteralPath $level) {
+            Assert-LogCollectorNoReparseHierarchy -Path $level
+            if (-not $WhatIfPreference) { Assert-LogCollectorMachineAcl -Path $level }
+        }
+        else {
+            if (-not $PSCmdlet.ShouldProcess($level, 'Create protected LogCollector configuration directory')) {
+                continue
+            }
+            $null = New-Item -ItemType Directory -Path $level -ErrorAction Stop
+            Set-LogCollectorMachineAcl -Path $level
+            Assert-LogCollectorMachineAcl -Path $level
+        }
     }
+    Assert-LogCollectorNoReparseHierarchy -Path $directory
+    if (Test-Path -LiteralPath $Path) { Assert-LogCollectorNoReparseHierarchy -Path $Path }
 
     $lines = New-Object Collections.Generic.List[string]
     $lines.Add('# Generated by the LogCollector core package installer. Do not edit by hand.')
@@ -179,6 +236,7 @@ function Write-LogCollectorEndpointConfiguration {
     try {
         Set-Content -LiteralPath $temporary -Value $lines -Encoding UTF8 -ErrorAction Stop
         Set-LogCollectorMachineAcl -Path $temporary
+        Assert-LogCollectorNoReparseHierarchy -Path $Path
         Move-Item -LiteralPath $temporary -Destination $Path -Force -ErrorAction Stop
     }
     finally {
@@ -188,5 +246,78 @@ function Write-LogCollectorEndpointConfiguration {
     Assert-LogCollectorMachineAcl -Path $Path
 }
 
+function Move-LogCollectorLegacyData {
+    <#
+    .SYNOPSIS
+    Moves compatible legacy shared state into the customer-scoped data root.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string] $LegacyRoot,
+        [Parameter(Mandatory)] [string] $DestinationRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $LegacyRoot -PathType Container)) { return }
+    Assert-LogCollectorNoReparseHierarchy -Path $LegacyRoot
+    Assert-LogCollectorMachineAcl -Path $LegacyRoot
+    foreach ($sourceName in @('SharedSpool', 'State')) {
+        $source = Join-Path $LegacyRoot $sourceName
+        if (-not (Test-Path -LiteralPath $source -PathType Container)) { continue }
+        Assert-LogCollectorNoReparseHierarchy -Path $source
+        Assert-LogCollectorMachineAcl -Path $source
+        foreach ($item in @(Get-ChildItem -LiteralPath $source -Recurse -Force -ErrorAction Stop)) {
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $item.LinkType) {
+                throw "Legacy LogCollector data contains a reparse point and cannot be migrated safely: $($item.FullName)"
+            }
+            Assert-LogCollectorMachineAcl -Path $item.FullName
+        }
+        Assert-LogCollectorNoReparseHierarchy -Path $source
+        Assert-LogCollectorMachineAcl -Path $source
+
+        $destination = Join-Path $DestinationRoot $sourceName
+        if (-not (Test-Path -LiteralPath $destination -PathType Container)) {
+            if ($PSCmdlet.ShouldProcess($source, "Move legacy $sourceName to $destination")) {
+                Move-Item -LiteralPath $source -Destination $destination -ErrorAction Stop
+            }
+        }
+        else {
+            $sourceFiles = @(Get-ChildItem -LiteralPath $source -Recurse -File -Force -ErrorAction Stop)
+            foreach ($file in $sourceFiles) {
+                $relative = $file.FullName.Substring($source.Length).TrimStart('\')
+                $target = Join-Path $destination $relative
+                if (Test-Path -LiteralPath $target) {
+                    throw "Legacy LogCollector data migration would overwrite '$target'."
+                }
+            }
+            foreach ($file in $sourceFiles) {
+                $relative = $file.FullName.Substring($source.Length).TrimStart('\')
+                $target = Join-Path $destination $relative
+                $targetDirectory = Split-Path $target -Parent
+                if (-not (Test-Path -LiteralPath $targetDirectory -PathType Container)) {
+                    $null = New-Item -ItemType Directory -Path $targetDirectory -Force -ErrorAction Stop
+                }
+                if ($PSCmdlet.ShouldProcess($file.FullName, "Move legacy data to $target")) {
+                    Move-Item -LiteralPath $file.FullName -Destination $target -ErrorAction Stop
+                }
+            }
+        }
+
+        if (Test-Path -LiteralPath $destination -PathType Container) {
+            $migratedItems = @((Get-Item -LiteralPath $destination -Force)) +
+                @(Get-ChildItem -LiteralPath $destination -Recurse -Force -ErrorAction Stop)
+            foreach ($item in $migratedItems) {
+                Set-LogCollectorPrivateDataAcl -Path $item.FullName
+                Assert-LogCollectorMachineAcl -Path $item.FullName
+            }
+        }
+        foreach ($directory in @(Get-ChildItem -LiteralPath $source -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending) + @((Get-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue))) {
+            if ($directory -and -not (Get-ChildItem -LiteralPath $directory.FullName -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $directory.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 Export-ModuleMember -Function Get-LogCollectorModuleRoot, Set-LogCollectorMachineAcl, `
-    Assert-LogCollectorMachineAcl, Write-LogCollectorEndpointConfiguration
+    Assert-LogCollectorMachineAcl, Write-LogCollectorEndpointConfiguration, Move-LogCollectorLegacyData

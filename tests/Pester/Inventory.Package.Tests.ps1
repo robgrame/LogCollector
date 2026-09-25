@@ -8,31 +8,51 @@ BeforeAll {
     }
     $script:Repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:Source = Join-Path $script:Repo 'src\InventoryPackage'
-    $script:DefaultConfigText = (Get-Content (Join-Path $script:Source 'Config.psd1') -Raw).
-        Replace("FrontendUrl = ''", "FrontendUrl = 'https://example.invalid/api/inventory'").
-        Replace("Environment = ''", "Environment = 'TestLab'")
+    $script:OriginalModulePath = $env:PSModulePath
+    $moduleRoot = Join-Path $TestDrive 'PowerShellModules\LogCollector.Client'
+    $null = New-Item -ItemType Directory -Path $moduleRoot -Force
+    $manifest = Import-PowerShellDataFile (Join-Path $script:Repo 'src\Client\LogCollector.Client.psd1')
+    foreach ($file in $manifest.FileList) {
+        Copy-Item -LiteralPath (Join-Path $script:Repo "src\Client\$file") -Destination (Join-Path $moduleRoot $file)
+    }
+    $env:PSModulePath = (Split-Path $moduleRoot -Parent) +
+        [IO.Path]::PathSeparator + $env:PSModulePath
+    Import-Module LogCollector.Client -RequiredVersion 1.11.1 -Force -ErrorAction Stop
+    $script:DefaultConfigText = Get-Content (Join-Path $script:Source 'Config.psd1') -Raw
     $script:Fixture = Join-Path $TestDrive 'Package'
-    $null = New-Item -ItemType Directory -Path (Join-Path $script:Fixture 'Modules') -Force
-    foreach ($file in @('Config.psd1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1', 'Run-Inventory.ps1', 'Sync-Spool.ps1',
+    $null = New-Item -ItemType Directory -Path $script:Fixture -Force
+    foreach ($file in @('Version', 'Config.psd1', 'Inventory.Runtime.psm1', 'Inventory.Logging.psm1', 'Run-Inventory.ps1', 'Sync-Spool.ps1',
         'Uninstall.ps1', 'Detect.ps1', 'README.md')) {
         Copy-Item -LiteralPath (Join-Path $script:Source $file) -Destination (Join-Path $script:Fixture $file)
     }
-    $manifest = Import-PowerShellDataFile (Join-Path $script:Repo 'src\Client\LogCollector.Client.psd1')
-    foreach ($file in $manifest.FileList) {
-        Copy-Item -LiteralPath (Join-Path $script:Repo "src\Client\$file") -Destination (Join-Path $script:Fixture "Modules\$file")
+    $coreManifestAssignment = '$coreManifest = Join-Path ([Environment]::GetFolderPath(''ProgramFiles'')) ''WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'''
+    $fixtureManifestAssignment = '$coreManifest = ''' + (Join-Path $moduleRoot 'LogCollector.Client.psd1').Replace("'", "''") + ''''
+    foreach ($file in @('Inventory.Runtime.psm1', 'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Uninstall.ps1', 'Detect.ps1')) {
+        $path = Join-Path $script:Fixture $file
+        (Get-Content -LiteralPath $path -Raw).Replace($coreManifestAssignment, $fixtureManifestAssignment) |
+            Set-Content -LiteralPath $path
     }
     'function Get-Inventory { param($Identity, $CollectDeviceInventory, $CollectAppInventory, $DiagnosticSink) }; Export-ModuleMember -Function Get-Inventory' |
         Set-Content (Join-Path $script:Fixture 'Inventory.Collection.psm1')
     # A missed mock must fail rather than create real ProgramData logs on the test host.
     @'
 function New-InventoryLogContext { param($Component); throw 'Logger must be mocked in lifecycle tests.' }
+function Get-InventoryLogCustomerName { param($ConfigPath); throw 'Logger configuration must be mocked in lifecycle tests.' }
+function Initialize-InventoryLogContext { param($Component, $PackageVersion, $CustomerName); throw 'Logger bootstrap must be mocked in lifecycle tests.' }
 function Write-InventoryLog { param($Context, $Event, $Data, $Level); throw 'Logger must be mocked in lifecycle tests.' }
 function Write-InventoryLogFailure { param($Context, $ErrorRecord, $Stage); throw 'Logger must be mocked in lifecycle tests.' }
 function New-InventoryDiagnosticSink { param($Context); throw 'Logger must be mocked in lifecycle tests.' }
-Export-ModuleMember -Function New-InventoryLogContext, Write-InventoryLog, Write-InventoryLogFailure, New-InventoryDiagnosticSink
+Export-ModuleMember -Function Get-InventoryLogCustomerName, Initialize-InventoryLogContext, New-InventoryLogContext, Write-InventoryLog, `
+    Write-InventoryLogFailure, New-InventoryDiagnosticSink
 '@ | Set-Content (Join-Path $script:Fixture 'Inventory.Logging.psm1')
     # Only the elevation directive is removed in this isolated fixture. All system mutations are mocked.
-    (Get-Content (Join-Path $script:Source 'Install.ps1') -Raw).Replace('#Requires -RunAsAdministrator', '') |
+    $script:Installed = Join-Path $TestDrive 'Installed'
+    (Get-Content (Join-Path $script:Source 'Install.ps1') -Raw).
+        Replace('#Requires -RunAsAdministrator', '').
+        Replace($coreManifestAssignment, $fixtureManifestAssignment).
+        Replace(
+            '$target = Join-Path (Join-Path ([Environment]::GetFolderPath(''ProgramFiles'')) $config.CustomerName) ''CustomInventory''',
+            ('$target = ''' + $script:Installed.Replace("'", "''") + '''')) |
         Set-Content (Join-Path $script:Fixture 'Install.ps1')
     Import-Module (Join-Path $script:Fixture 'Inventory.Runtime.psm1') -Force -ErrorAction Stop
     Import-Module (Join-Path $script:Fixture 'Inventory.Logging.psm1') -Force -ErrorAction Stop
@@ -57,6 +77,22 @@ Describe 'Universal inventory package runtime' {
         Mock -ModuleName Inventory.Runtime Sync-LogCollectorSpool {
             [pscustomobject]@{ Delivered = 1; Quarantined = 0; Remaining = 0; Stopped = $false }
         }
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'
+                Environment = 'TestLab'
+                CustomerName = 'LogCollector'
+                SubmissionEnabled = $false
+                CertificateThumbprint = ''
+                CertificateSubjectLike = ''
+                CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @()
+                PkiRootCaSubjects = @()
+                PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @()
+                DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
     }
 
     It 'blocks live sends before identity or collection until original mappings are enabled' {
@@ -66,7 +102,14 @@ Describe 'Universal inventory package runtime' {
     }
 
     It 'forwards diagnostics through collection and transport without including inventory records' {
-        $script:DefaultConfigText.Replace('SubmissionEnabled = $false', 'SubmissionEnabled = $true') | Set-Content $script:ConfigPath
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $true; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
         $events = New-Object 'Collections.Generic.List[object]'
         $sink = { param($event, $data) $events.Add([pscustomobject]@{ Event = $event; Data = $data }) }.GetNewClosure()
         $result = @(Invoke-InventoryRun -ConfigPath $script:ConfigPath -DiagnosticSink $sink)
@@ -136,14 +179,28 @@ Describe 'Universal inventory package runtime' {
 
     It 'only drains after explicit activation, without collecting' {
         { Invoke-InventoryDrain -ConfigPath $script:ConfigPath } | Should -Throw '*disabled*'
-        (Get-Content $script:ConfigPath -Raw).Replace('SubmissionEnabled = $false', 'SubmissionEnabled = $true') | Set-Content $script:ConfigPath
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $true; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
         $result = Invoke-InventoryDrain -ConfigPath $script:ConfigPath
         $result.Delivered | Should -Be 1
         Should -Invoke -ModuleName Inventory.Runtime Get-Inventory -Times 0 -Exactly
     }
 
-    It 'does not treat string false as a Boolean enable switch' {
-        (Get-Content $script:ConfigPath -Raw).Replace('SubmissionEnabled = $false', "SubmissionEnabled = 'false'") | Set-Content $script:ConfigPath
+    It 'does not treat a Core string false as a Boolean enable switch' {
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = 'false'; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
         { Invoke-InventoryRun -ConfigPath $script:ConfigPath } | Should -Throw '*Boolean*'
     }
 
@@ -153,7 +210,14 @@ Describe 'Universal inventory package runtime' {
     }
 
     It 'passes bounded live transport settings after explicit activation' {
-        (Get-Content $script:ConfigPath -Raw).Replace('SubmissionEnabled = $false', 'SubmissionEnabled = $true') | Set-Content $script:ConfigPath
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $true; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
         $result = @(Invoke-InventoryRun -ConfigPath $script:ConfigPath)
         $result.Count | Should -Be 2
         Should -Invoke -ModuleName Inventory.Runtime Send-LogCollectorData -Times 2 -Exactly -ParameterFilter {
@@ -169,21 +233,32 @@ Describe 'Universal inventory package runtime' {
         $result.TableName | Should -Be @('HardwareLab_CL', 'SoftwareLab_CL')
     }
 
-    It 'rejects unconfigured endpoints and invalid destinations before collection' {
-        $script:DefaultConfigText.Replace('https://example.invalid/api/inventory', '') | Set-Content $script:ConfigPath
-        { Invoke-InventoryRun -ConfigPath $script:ConfigPath -Preview } | Should -Throw '*Configure FrontendUrl*'
+    It 'requires the protected Core configuration and rejects invalid destinations before collection' {
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration { throw 'Core configuration missing' }
+        { Invoke-InventoryRun -ConfigPath $script:ConfigPath -Preview } | Should -Throw '*Core configuration missing*'
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = ''; CustomerName = 'LogCollector'
+                SubmissionEnabled = $true; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
         $script:DefaultConfigText.Replace('DeviceInventory_CL', 'bad/table') | Set-Content $script:ConfigPath
         { Invoke-InventoryRun -ConfigPath $script:ConfigPath -Preview } | Should -Throw '*custom table name*'
         Should -Invoke -ModuleName Inventory.Runtime Get-Inventory -Times 0 -Exactly
     }
 
-    It 'forwards the same root and intermediate policy to submission and spool drain' {
-        $text = $script:DefaultConfigText.Replace('SubmissionEnabled = $false', 'SubmissionEnabled = $true').
-            Replace('PkiRootCaThumbprints = @()', "PkiRootCaThumbprints = @('$('A' * 40)')").
-            Replace('PkiRootCaSubjects = @()', "PkiRootCaSubjects = @('CN=Root, O=Example')").
-            Replace('PkiIntermediateCaThumbprints = @()', "PkiIntermediateCaThumbprints = @('$('B' * 40)')").
-            Replace('PkiIntermediateCaSubjects = @()', "PkiIntermediateCaSubjects = @('CN=Issuing, O=Example')")
-        $text | Set-Content $script:ConfigPath
+    It 'forwards the same Core root and intermediate policy to submission and spool drain' {
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $true; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @('A' * 40); PkiRootCaSubjects = @('CN=Root, O=Example')
+                PkiIntermediateCaThumbprints = @('B' * 40); PkiIntermediateCaSubjects = @('CN=Issuing, O=Example')
+                DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
         $null = Invoke-InventoryRun -ConfigPath $script:ConfigPath
         $null = Invoke-InventoryDrain -ConfigPath $script:ConfigPath
         Should -Invoke -ModuleName Inventory.Runtime Send-LogCollectorData -Times 2 -Exactly -ParameterFilter {
@@ -195,17 +270,6 @@ Describe 'Universal inventory package runtime' {
         }
     }
 
-    It 'rejects malformed policy data before identity or collection' -TestCases @(
-        @{ Value = "'not-a-thumbprint'" }
-        @{ Value = "'   '" }
-        @{ Value = '$null' }
-    ) {
-        param($Value)
-        $script:DefaultConfigText.Replace('PkiRootCaThumbprints = @()', "PkiRootCaThumbprints = @($Value)") |
-            Set-Content $script:ConfigPath
-        { Invoke-InventoryRun -ConfigPath $script:ConfigPath -Preview } | Should -Throw '*PkiRootCaThumbprints*'
-        Should -Invoke -ModuleName Inventory.Runtime Get-DeviceIdentitySnapshot -Times 0 -Exactly
-    }
 }
 
 Describe 'inventory package installer' {
@@ -222,10 +286,33 @@ Describe 'inventory package installer' {
         }
         Mock Disable-ScheduledTask {}
         Mock Copy-Item {}
-        Mock -ModuleName InventorySpool Assert-SpoolHierarchy { $true }
+        Mock Assert-LogCollectorApplicationFiles {
+            param($Directory, $FileName, $CreateDirectory, $AllowMissing)
+            if ($CreateDirectory) { $null = New-Item -ItemType Directory -Path $Directory -Force }
+        }
         Mock New-InventoryLogContext { [pscustomobject]@{ RunId = 'test-run' } }
+        Mock Get-InventoryLogCustomerName { 'LogCollector' }
+        Mock Initialize-InventoryLogContext {
+            [pscustomobject]@{ RunId = 'test-run'; FallbackUsed = $false }
+        }
         Mock Write-InventoryLog {}
         Mock Write-InventoryLogFailure {}
+        Mock Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $false; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $false; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
     }
 
     It 'registers disabled SYSTEM tasks with two-hour spread and hourly independent drain' {
@@ -238,8 +325,11 @@ Describe 'inventory package installer' {
         $inventory.Triggers[0].DaysOfWeek | Should -Be 72
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory-Spool'].Triggers[0].Repetition.Interval | Should -Be 'PT1H'
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory-Spool'].Actions[0].Arguments | Should -Match 'Sync-Spool.ps1'
-        Should -Invoke Copy-Item -Times 18 -Exactly
+        Should -Invoke Copy-Item -Times 11 -Exactly
         Should -Invoke Write-InventoryLog -Times 2 -Exactly -ParameterFilter { $Event -eq 'TasksRegistered' -and -not $Data.Enabled }
+        Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly -ParameterFilter {
+            $CustomerName -eq 'LogCollector'
+        }
     }
 
     AfterAll {
@@ -253,11 +343,11 @@ Describe 'inventory package installer' {
         & (Join-Path $script:Fixture 'Install.ps1') -WhatIf
         Should -Invoke Register-ScheduledTask -Times 0 -Exactly
         Should -Invoke Copy-Item -Times 0 -Exactly
-        Should -Invoke New-InventoryLogContext -Times 0 -Exactly
+        Should -Invoke Initialize-InventoryLogContext -Times 0 -Exactly
     }
 
     It 'rejects an old configuration version before installation' {
-        $script:DefaultConfigText.Replace("PackageVersion = '1.5.0'", "PackageVersion = '1.0.0'") |
+        $script:DefaultConfigText.Replace("PackageVersion = '1.9.1'", "PackageVersion = '1.0.0'") |
             Set-Content $script:ConfigPath
         { & (Join-Path $script:Fixture 'Install.ps1') } | Should -Throw '*must match package version*'
         Should -Invoke Write-InventoryLogFailure -Times 1 -Exactly -ParameterFilter { $Stage -eq 'LoadConfiguration' }
@@ -266,10 +356,50 @@ Describe 'inventory package installer' {
     }
 
     It 'enables both tasks only when explicitly configured' {
-        (Get-Content $script:ConfigPath -Raw).Replace('SubmissionEnabled = $false', 'SubmissionEnabled = $true') | Set-Content $script:ConfigPath
+        Mock Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $true; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
+        Mock -ModuleName Inventory.Runtime Get-LogCollectorEndpointConfiguration {
+            [pscustomobject]@{
+                FrontendUrl = 'https://example.invalid/api/inventory'; Environment = 'TestLab'; CustomerName = 'LogCollector'
+                SubmissionEnabled = $true; CertificateThumbprint = ''; CertificateSubjectLike = ''; CertificateIssuerLike = ''
+                PkiRootCaThumbprints = @(); PkiRootCaSubjects = @(); PkiIntermediateCaThumbprints = @()
+                PkiIntermediateCaSubjects = @(); DataRoot = Join-Path $TestDrive 'ProgramData\LogCollector'
+            }
+        }
         & (Join-Path $script:Fixture 'Install.ps1')
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory'].Settings.Enabled | Should -BeTrue
         $global:InventoryPackageTestTasks['LogCollector-CustomInventory-Spool'].Settings.Enabled | Should -BeTrue
+    }
+
+    It 'continues installation when lifecycle logging is unavailable' {
+        Mock Initialize-InventoryLogContext { $null }
+        & (Join-Path $script:Fixture 'Install.ps1') -WarningAction SilentlyContinue
+        $global:InventoryPackageTestTasks.Count | Should -Be 2
+        Should -Invoke Initialize-InventoryLogContext -Times 1 -Exactly
+        Should -Invoke Write-InventoryLog -Times 0 -Exactly
+        Should -Invoke Write-InventoryLogFailure -Times 0 -Exactly
+    }
+
+    It 'records fallback metadata without changing the install mode' {
+        Mock Initialize-InventoryLogContext {
+            [pscustomobject]@{
+                RunId = 'fallback-run'; FallbackUsed = $true
+                PrimaryExceptionType = 'System.UnauthorizedAccessException'; PrimaryHResult = -2147024891
+            }
+        }
+        & (Join-Path $script:Fixture 'Install.ps1') -WarningAction SilentlyContinue
+        Should -Invoke Write-InventoryLog -Times 1 -Exactly -ParameterFilter {
+            $Event -eq 'RunStarted' -and $Data.Mode -eq 'Install' -and
+            $Data.Stage -eq 'FallbackLog' -and
+            $Data.ExceptionType -eq 'System.UnauthorizedAccessException' -and
+            $Data.HResult -eq -2147024891
+        }
     }
 
     It 'does not register tasks if package copying fails' {
@@ -303,54 +433,56 @@ Describe 'inventory package installer' {
 }
 
 Describe 'inventory distribution builder' {
-    It 'creates exactly the complete portable file set and refuses overwrites' {
+    It 'keeps the minimum Core dependency consistent across every entry point' {
+        $minimum = '1.11.1'
+        foreach ($file in @('Install.ps1', 'Detect.ps1', 'Inventory.Runtime.psm1',
+                'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Uninstall.ps1')) {
+            Get-Content -LiteralPath (Join-Path $script:Source $file) -Raw |
+                Should -Match ("-MinimumVersion\s+{0}\b" -f [regex]::Escape($minimum))
+        }
+        Get-Content -LiteralPath (Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1') -Raw |
+            Should -Match ("MinimumCoreVersion\s*=\s*'{0}'" -f [regex]::Escape($minimum))
+    }
+
+    It 'creates the Core-dependent portable file set and refuses overwrites' {
         $builder = Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1'
         $output = Join-Path $TestDrive 'Distribution'
-        $result = & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory'
-        $result.FileCount | Should -Be 18
-        $result.PackageVersion | Should -BeExactly '1.5.0'
-        $result.SubmissionEnabled | Should -BeFalse
+        $result = & $builder -OutputRoot $output
+        $result.FileCount | Should -Be 11
+        $result.PackageVersion | Should -BeExactly '1.9.1'
+        $result.MinimumCoreVersion | Should -BeExactly '1.11.1'
+        (Get-Content (Join-Path $result.PackagePath 'Version') -Raw).Trim() | Should -BeExactly '1.9.1'
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.PackagePath 'Config.psd1')).Hash
         (Get-Content (Join-Path $result.PackagePath 'Detect.ps1') -Raw) | Should -Match $result.ConfigurationSha256
-        Test-Path (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1') | Should -BeTrue
-        { & $builder -OutputRoot $output -FrontendUrl 'https://example.invalid/api/inventory' } | Should -Throw '*already exists*'
+        Test-Path (Join-Path $result.PackagePath 'Modules') | Should -BeFalse
+        { & $builder -OutputRoot $output } | Should -Throw '*already exists*'
         $copied = Import-PowerShellDataFile (Join-Path $result.PackagePath 'Config.psd1')
         $copied.DeviceTableName | Should -BeExactly 'DeviceInventory_CL'
         $copied.AppTableName | Should -BeExactly 'AppInventory_CL'
-        $copied.FrontendUrl | Should -BeExactly 'https://example.invalid/api/inventory'
-        @($copied.PkiRootCaThumbprints).Count | Should -Be 0
-        (Import-PowerShellDataFile (Join-Path $result.PackagePath 'Modules\LogCollector.Client.psd1')).ModuleVersion |
-            Should -BeExactly '1.8.0'
+        $copied.ContainsKey('FrontendUrl') | Should -BeFalse
+        $copied.ContainsKey('CustomerName') | Should -BeFalse
+        $copied.ContainsKey('PkiRootCaThumbprints') | Should -BeFalse
     }
 
-    It 'escapes deployment configuration as data and supports alternative tables' {
+    It 'supports alternative collector-specific settings' {
         $builder = Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1'
-        $label = "Lab'; throw 'must remain data"
         $result = & $builder -OutputRoot (Join-Path $TestDrive 'OtherDeployment') `
-            -FrontendUrl 'https://another.invalid/api/inventory' -Environment $label `
-            -DeviceTableName 'HardwareLab_CL' -AppTableName 'SoftwareLab_CL'
+            -DeviceTableName 'HardwareLab_CL' -AppTableName 'SoftwareLab_CL' `
+            -CollectAppInventory:$false -MaxAttempts 5 -TimeoutSeconds 45
         $copied = Import-PowerShellDataFile (Join-Path $result.PackagePath 'Config.psd1')
-        $copied.Environment | Should -BeExactly $label
         $copied.DeviceTableName | Should -BeExactly 'HardwareLab_CL'
         $copied.AppTableName | Should -BeExactly 'SoftwareLab_CL'
+        $copied.CollectAppInventory | Should -BeFalse
+        $copied.MaxAttempts | Should -Be 5
+        $copied.TimeoutSeconds | Should -Be 45
+        $detection = Get-Content (Join-Path $result.PackagePath 'Detect.ps1') -Raw
+        $detection | Should -Not -Match '__LOGCOLLECTOR_CONFIGURATION_SHA256__'
     }
+}
 
-    It 'preserves CA arrays and quotes as literal data in the generated configuration' {
-        $builder = Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1'
-        $subject = "CN=Root, O=Example's PKI"
-        $result = & $builder -OutputRoot (Join-Path $TestDrive 'PkiDeployment') `
-            -FrontendUrl 'https://example.invalid/api/inventory' -PkiRootCaThumbprints ('a' * 40) `
-            -PkiRootCaSubjects $subject -PkiIntermediateCaSubjects @('CN=Issuing A', 'CN=Issuing B')
-        $copied = Import-PowerShellDataFile (Join-Path $result.PackagePath 'Config.psd1')
-        $copied.PkiRootCaThumbprints | Should -Be @('a' * 40)
-        $copied.PkiRootCaSubjects | Should -Be @($subject)
-        $copied.PkiIntermediateCaSubjects | Should -Be @('CN=Issuing A', 'CN=Issuing B')
+AfterAll {
+    foreach ($name in $script:FixtureModuleNames) {
+        Get-Module -All -Name $name | Remove-Module -Force -ErrorAction SilentlyContinue
     }
-
-    It 'rejects malformed CA pins before creating package output' {
-        $output = Join-Path $TestDrive 'InvalidPki'
-        { & (Join-Path $script:Repo 'scripts\Publish-InventoryPackage.ps1') -OutputRoot $output `
-            -FrontendUrl 'https://example.invalid/api/inventory' -PkiRootCaThumbprints 'bad-pin' } | Should -Throw '*40 hexadecimal*'
-        Test-Path $output | Should -BeFalse
-    }
+    $env:PSModulePath = $script:OriginalModulePath
 }

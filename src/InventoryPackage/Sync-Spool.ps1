@@ -1,23 +1,42 @@
 #Requires -Version 5.1
-# Version 1.5.0. Protected metadata-only spool diagnostics; no new collection.
+# Version 1.9.1. Protected metadata-only spool diagnostics; no new collection.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
+$packageVersion = '1.9.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
-    $log = New-InventoryLogContext -Component Spool
-    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.5.0'; Mode = 'Drain' }
+    $configPath = Join-Path $PSScriptRoot 'Config.psd1'
+    $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
+    $customerName = (Get-LogCollectorEndpointConfiguration).CustomerName
+    if ($customerName) {
+        $log = Initialize-InventoryLogContext -Component Spool -PackageVersion $packageVersion `
+            -CustomerName $customerName
+    }
+    if ($log) {
+        $startData = @{ PackageVersion = $packageVersion; Mode = 'Drain' }
+        if ($log.FallbackUsed) {
+            $startData.Stage = 'FallbackLog'
+            $startData.ExceptionType = $log.PrimaryExceptionType
+            $startData.HResult = $log.PrimaryHResult
+        }
+        Write-InventoryLog -Context $log -Event RunStarted -Data $startData
+    }
     $stage = 'ImportRuntime'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
     $stage = 'Drain'
-    $result = Invoke-InventoryDrain -ConfigPath (Join-Path $PSScriptRoot 'Config.psd1') -DiagnosticSink (New-InventoryDiagnosticSink -Context $log)
+    $sink = if ($log) { New-InventoryDiagnosticSink -Context $log } else { $null }
+    $result = Invoke-InventoryDrain -ConfigPath $configPath -DiagnosticSink $sink
     $result
-    Write-InventoryLog -Context $log -Event RunCompleted -Data @{
-        Delivered = $result.Delivered; Quarantined = $result.Quarantined; Remaining = $result.Remaining
-        Stopped = $result.Stopped; DurationMs = $timer.ElapsedMilliseconds
+    if ($log) {
+        Write-InventoryLog -Context $log -Event RunCompleted -Data @{
+            Delivered = $result.Delivered; Quarantined = $result.Quarantined; Remaining = $result.Remaining
+            Stopped = $result.Stopped; DurationMs = $timer.ElapsedMilliseconds
+        }
     }
     if ($result.Stopped -or $result.Quarantined -gt 0) { exit 1 }
 }

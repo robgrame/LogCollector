@@ -151,12 +151,18 @@ For the Intune trust tier, `GraphDeviceAuthorizer` looks up the certificate-boun
 Only an existing, enabled device with the exact same device ID is accepted. A foreign-tenant
 certificate alone cannot satisfy this lookup. Missing devices and disabled devices return 403;
 Graph outages or missing application consent fail intake and leave the client's spool intact.
-There is no cache or bypass switch.
+This verification is enabled by default through `EntraDeviceValidation__Enabled=true`.
 
 The intended customer tenant must be the tenant hosting the frontend identity. Grant that identity
 Microsoft Graph `Device.Read.All` application permission when using Intune fallback. Keep shared
 Intune roots in the **Intune** trust configuration, never the enterprise PKI root list.
 Enterprise PKI roots must be customer-controlled with CA-enforced device identity templates.
+
+Customers that cannot grant the Graph permission may explicitly set
+`EntraDeviceValidation__Enabled=false`. Certificate-chain validation, request signing,
+anti-replay and exact certificate-to-device-ID binding still apply, but a certificate issued
+under a trusted shared Intune CA is no longer checked for membership in the customer's tenant.
+Treat this as a documented reduction in tenant-isolation assurance, not as an equivalent control.
 
 The `.5.25` extension mapping is inherited from the reference implementation, not a universal
 certificate-profile guarantee. During the pilot compare it with `dsregcmd` and the Entra device
@@ -199,8 +205,9 @@ queue, the worker does not rely on that:
 - `httpsOnly`, TLS 1.2 minimum, FTPS disabled on both apps.
 - `clientCertMode: Required` with **no** `clientCertExclusionPaths`, including health. Any
   exclusion enables TLS renegotiation and App Service's fixed 100 KB upload limit.
-  Use an external certificate-bearing health probe; liveness does not validate certificate trust
-  at the application layer and is not proof of authorization.
+  App Service Health Check invokes `/api/health`; external probes require a trusted client
+  certificate. Liveness does not validate certificate trust at the application layer and is
+  not proof of authorization.
 
 ## Client-side posture
 

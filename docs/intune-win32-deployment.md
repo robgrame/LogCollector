@@ -1,12 +1,9 @@
-# Custom Inventory 1.5.0 - distribuzione Intune Win32
+# Custom Inventory 1.9.1 - distribuzione Intune Win32
 
-Il pacchetto installa il collector hardware/software e tutti i moduli comuni.
-Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
-Gli script originali cliente non vengono letti o modificati. Il modulo condiviso
-è alla versione 1.5.0, supporta `/api/submit` e l'esportazione offline del campione schema.
-Il pacchetto inventory passa a **1.5.0** per l'aggiornamento della dipendenza;
-mantiene compatibili endpoint e tabelle precedenti. Il logging introdotto in 1.4.5
-resta invariato (versioning Major.Minor.Build).
+Il pacchetto installa il collector hardware/software e richiede **LogCollector Core
+1.11.1 o successivo** come dipendenza Intune. URL, ambiente, nome cliente,
+abilitazione e criteri certificato/PKI sono letti dalla configurazione protetta del
+Core. Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 
 ## 1. Preparazione del computer di packaging
 
@@ -14,17 +11,15 @@ Usare Windows con Windows PowerShell 5.1 o PowerShell 7 e .NET Framework 4.7.2
 o successivo per il tool Microsoft. Non sono necessari privilegi amministrativi.
 Scaricare `IntuneWinAppUtil.exe` dal repository ufficiale
 [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool),
-consultando licenza e requisiti. La release usata per questo pacchetto e **1.8.7**.
-Il wrapper richiede un eseguibile locale: non scarica/esegue aggiornamenti automatici
-e non aggiunge il tool al payload dei dispositivi.
+consultando licenza e requisiti, e copiarlo in
+`tools\IntuneWinAppUtil\IntuneWinAppUtil.exe`. Il wrapper non scarica aggiornamenti,
+non aggiunge il tool al payload e verifica la firma Authenticode Microsoft prima di eseguirlo.
 
 Dalla root della repository:
 
 ```powershell
 .\scripts\Publish-IntuneWin32Package.ps1 `
-    -IntuneWinAppUtilPath 'C:\Tools\IntuneWinAppUtil.exe' `
-    -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
-    -Environment 'MSLabs'
+    -OutputRoot '.\out\IntuneWin32-Production'
 ```
 
 La generazione NON installa task sul computer di packaging, NON crea log operativi, NON raccoglie
@@ -34,12 +29,12 @@ Output predefiniti:
 
 | File/cartella | Utilizzo |
 |---|---|
-| `out\IntuneWin32\1.5.0\Output\Install.intunewin` | File da caricare nell'app Win32 |
-| `out\IntuneWin32\1.5.0\Detect.ps1` | Script da caricare nella detection rule |
-| `out\IntuneWin32\1.5.0\Intune-Deployment.md` | Copia di questa guida |
-| `out\IntuneWin32\1.5.0\Source\1.5.0` | Tutti i 16 file inclusi nel payload, configurazione e logger compresi |
+| `out\IntuneWin32-Production\1.9.1\Output\Install.intunewin` | File da caricare nell'app Win32 |
+| `out\IntuneWin32-Production\1.9.1\Detect.ps1` | Script da caricare nella detection rule |
+| `out\IntuneWin32-Production\1.9.1\Intune-Deployment.md` | Copia di questa guida |
+| `out\IntuneWin32-Production\1.9.1\Source\1.9.1` | File inclusi nel payload e configurazione collector |
 
-Il comando restituisce SHA256 del pacchetto, ConfigurationSha256 e stato SubmissionEnabled. Source e Output
+Il comando restituisce SHA256 del pacchetto, ConfigurationSha256 e versione minima Core. Source e Output
 sono separati: il tool non ingloba il proprio eseguibile o il file .intunewin.
 Output gia esistenti sono rifiutati, anche dopo un tentativo fallito. Per un'altra
 build usare un nuovo `-OutputRoot`, ad esempio `out\IntuneWin32-Pilot02`.
@@ -48,37 +43,37 @@ non e un contenitore adatto a custodire segreti.
 
 ## 2. Configurazione del pilot
 
-Il comando precedente produce **SubmissionEnabled=false**. L'installazione crea
-entrambi i task disabilitati: consente di provare installazione, detection e
-raccolta locale, ma non l'ingestione end-to-end.
+Lo stato dei task segue `SubmissionEnabled` configurato nel Core.
 
 Nel laboratorio MSLabs, le destinazioni di questo collector sono
 **DeviceInventory_CL** e **AppInventory_CL**. Non sostituirle con
 InventoryWindows_CL: schemi, stream/DCR e allow-list/mapping di Intake e worker
 devono essere predisposti prima dell'invio. Questo script non modifica Azure.
 
-Per personalizzare endpoint, selezione certificato, CA, tabelle o attivazione:
+Endpoint, selezione certificato, CA, ambiente, nome cliente e attivazione si
+configurano esclusivamente nel Core. Per personalizzare le sole opzioni del collector:
 
 ```powershell
 .\scripts\Publish-InventoryPackage.ps1 `
-    -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
-    -Environment 'MSLabs' -OutputRoot '.\out\Inventory-PilotConfig'
+    -DeviceTableName 'DeviceInventory_CL' `
+    -AppTableName 'AppInventory_CL' `
+    -OutputRoot '.\out\Inventory-PilotConfig'
 
-# Modificare out\Inventory-PilotConfig\1.5.0\Config.psd1 con un editor.
-# Impostare SubmissionEnabled = $true SOLO dopo la preparazione lato Azure.
+# Facoltativo: modificare soltanto raccolte, retry e timeout.
 
 .\scripts\Publish-IntuneWin32Package.ps1 `
-    -IntuneWinAppUtilPath 'C:\Tools\IntuneWinAppUtil.exe' `
-    -ConfigurationPath '.\out\Inventory-PilotConfig\1.5.0\Config.psd1' `
+    -ConfigurationPath '.\out\Inventory-PilotConfig\1.9.1\Config.psd1' `
     -OutputRoot '.\out\IntuneWin32-Pilot02'
 ```
 
 ConfigurationPath importa solo dati PSD1, non gli script di quella cartella:
 il payload viene sempre costruito dai sorgenti correnti della repository.
-La versione della configurazione deve coincidere con 1.5.0. La configurazione
+Il `CustomerName` del Core determina sia `%ProgramFiles%\<CustomerName>\CustomInventory`
+sia `%ProgramData%\<CustomerName>\CustomInventory\Logs`. La versione della
+configurazione Inventory deve coincidere con 1.9.1. La configurazione
 viene validata dallo stesso runtime dell'installer prima di chiamare il tool.
-Non inserire chiavi private o credenziali. I certificati non vengono esportati.
-Per PKI vedere `docs\pki-ca-policy.md`: filtri Root/SubCA e trust server sono distinti.
+Non inserire endpoint, chiavi private o credenziali nel Config.psd1 Inventory.
+Per PKI vedere `docs\pki-ca-policy.md`: i criteri vengono distribuiti dal Core.
 
 **Modificare Source dopo la generazione non cambia il .intunewin gia prodotto.**
 Ricreare il pacchetto e aggiornare il contenuto dell'app in Intune. Cambiare
@@ -102,15 +97,16 @@ Config.psd1 dopo la generazione o sul dispositivo gestito.
 4. Mantenere l'assegnazione **Required** al gruppo pilot e avviare una sincronizzazione
    del dispositivo, oppure attendere il normale ciclo di rivalutazione IME.
 
-Le command line di Install/Uninstall sopra sono generiche (usano `.\<Script>.ps1` dalla
-cache IME) e non cambiano tra una versione e l'altra del pacchetto: non serve
-aggiornarle nel passaggio a una nuova versione.
+Le command line non cambiano tra una versione e l'altra; l'uninstall usa il
+`CustomerName` già scelto per il Core.
 
 La vecchia configurazione non soddisfa la nuova detection; Intune esegue di nuovo
 Install.ps1, che aggiorna i file nello stesso percorso e registra i due task con
 lo stato desiderato. La detection torna positiva quando configurazione e task
 corrispondono. Non serve una disinstallazione preventiva e lo spool resta invariato.
-Questo vale anche per true -> false, endpoint, filtri CA e altri parametri.
+Questo flusso serve soltanto per tabelle, aree di raccolta, retry e timeout.
+Endpoint, cliente, ambiente, `SubmissionEnabled` e filtri CA si aggiornano nel Core
+senza ricostruire Inventory.
 Se un task e in esecuzione l'installer segnala errore: attendere la fine e il retry,
 senza interrompere una raccolta in corso.
 
@@ -128,7 +124,7 @@ non garantisce di anticipare tutti i cicli IME. Riferimento:
 ## 3. Creazione dell'app
 
 Intune admin center > Apps > Windows > Add > **Windows app (Win32)**.
-Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inventory 1.5.0**.
+Caricare `Output\Install.intunewin`; nome suggerito: **MSLabs - LogCollector Custom Inventory**.
 
 | Impostazione Program | Valore |
 |---|---|
@@ -145,18 +141,25 @@ Caricare `Output\Install.intunewin`; nome suggerito: **LogCollector Custom Inven
 ```
 
 **Uninstall command** (una sola riga, dal percorso di installazione del pacchetto, non
-dalla cache IME: `Install.ps1` copia li' anche `Uninstall.ps1`, i moduli e `Config.psd1`,
+dalla cache IME: `Install.ps1` copia li' anche `Uninstall.ps1` e `Config.psd1`,
 cosi' una disinstallazione futura esegue sempre lo script della versione realmente
 installata anche se nel frattempo l'app in Intune e' stata aggiornata a un pacchetto
 piu' recente):
 
 ```text
-"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\LogCollector\CustomInventory\1.5.0\Uninstall.ps1"
+"%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $names = @('LogCollector-CustomInventory', 'LogCollector-CustomInventory-Spool'); $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskPath -eq '\LogCollector\' -and $_.TaskName -in $names }); if (@($tasks | Where-Object State -eq 'Running').Count -gt 0) { throw 'Let the running inventory package task finish before uninstalling.' }; foreach ($task in $tasks) { Unregister-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Confirm:$false -ErrorAction Stop } }"
 ```
 
-Aggiornare il numero di versione nel percorso a ogni release: l'Uninstall command deve
-puntare alla cartella versionata effettivamente installata (variabile `$target` in
-`Install.ps1`), non a `.\`.
+Il percorso non e' versionato (variabile `$target` in `Install.ps1`): l'Uninstall
+command sopra resta invariato tra una release e l'altra, non serve aggiornarlo
+a ogni pacchetto.
+
+Quando si migra da una release installata direttamente in
+`%ProgramFiles%\CustomInventory` (1.6.x) o da un percorso versionato precedente,
+aggiornare nella stessa app Intune contenuto, detection e Uninstall command. Il nuovo
+installer registra i task sul percorso cliente ma conserva i file legacy. Non eseguire
+il vecchio `Uninstall.ps1` dopo l'installazione 1.9.1: rimuoverebbe gli stessi task
+`\LogCollector\` appena registrati dalla nuova release.
 
 Sysnative evita la redirezione a PowerShell 32 bit da Intune Management Extension.
 Per prove manuali da una console gia a 64 bit usare System32 al posto di Sysnative
@@ -175,15 +178,16 @@ Caricare **Detect.ps1 della stessa release**, disponibile accanto alla guida.
 | Enforce script signature check | No per i sorgenti non firmati del laboratorio |
 | Esecuzione | Contesto System, coerente con Install behavior |
 
-Lo script controlla l'hash atteso di Config.psd1, PackageVersion, presenza dei file
-necessari e dei due task sotto `\LogCollector\`. Per ciascun task controlla
-abilitazione coerente con SubmissionEnabled, principal SYSTEM con privilegi elevati
+Lo script richiede Core 1.11.1, legge il relativo CustomerName e controlla l'hash
+atteso di Config.psd1, PackageVersion, presenza dei file necessari e dei due task
+sotto `\LogCollector\`. Per ciascun task controlla abilitazione coerente con
+`SubmissionEnabled` del Core, principal SYSTEM con privilegi elevati
 e l'unica azione PowerShell a 64 bit verso lo script della versione attesa.
 Restituisce **exit 0 e stdout non vuoto** se
 installato; exit 1 se non rilevato. Non usare la sola esistenza della cartella:
 la disinstallazione conserva file e spool ma rimuove i task.
-La detection puo essere positiva con task disabilitati SOLO se la configurazione
-attesa ha SubmissionEnabled=false; non certifica l'ingestione. L'hash e un controllo
+La detection puo essere positiva con task disabilitati solo se il Core ha
+`SubmissionEnabled=false`; non certifica l'ingestione. L'hash e un controllo
 di corrispondenza per il deployment, non una firma o un nuovo sistema di autenticazione.
 Per produzione, se si impone la firma, firmare gli script con il proprio processo
 di code signing dopo la generazione dei file finali e prima del wrapping .intunewin,
@@ -222,7 +226,8 @@ devono dichiarare LogCollector Core come dipendenza.
 | Rete per invio | HTTPS 443 all'Intake in contesto SYSTEM, senza interferenze TLS con mTLS; accesso PKI necessario secondo la catena |
 | Server | Trust CA, binding device, autorizzazione Entra per Intune, schemi/tabelle e mapping pronti |
 
-Nessuna dependency applicativa Intune e nessun requirement script aggiuntivo.
+Configurare **LogCollector Core 1.11.1 o successivo come dependency applicativa
+Intune**. Non serve un requirement script aggiuntivo.
 I prerequisiti di identita/certificato/rete sopra descritti sono operativi, non
 controlli automatici nella pagina Requirements. Non includere certificati o chiavi
 nel pacchetto. La verifica Graph e svolta dall'Intake: non servono credenziali Graph
@@ -231,15 +236,21 @@ SYSTEM, non soltanto come utente interattivo.
 
 ## 6. Comportamento installato e prova
 
-Percorso: `C:\Program Files\LogCollector\CustomInventory\1.5.0`
-(il codice usa il percorso Program Files del sistema, senza presupporre il disco C).
+Percorso: `C:\Program Files\<CustomerName>\CustomInventory`
+(il codice usa il percorso Program Files del sistema, senza presupporre il disco C;
+il percorso non e' versionato: un aggiornamento sovrascrive gli stessi file in place).
+Il file `Version` nel percorso installato contiene `1.9.1`; la detection verifica
+sia questo file sia la versione e l'hash della configurazione.
+Se `%ProgramFiles%\<CustomerName>` esiste già, deve impedire modifiche a utenti non
+amministrativi; una cartella cliente con ACL di scrittura non attendibili viene rifiutata,
+non corretta automaticamente.
 
 | Task SYSTEM in `\LogCollector\` | Azione |
 |---|---|
 | LogCollector-CustomInventory | Run-Inventory.ps1: raccolta e invio mercoledi/sabato alle 09:00 locali, ritardo casuale fino a 2 ore |
 | LogCollector-CustomInventory-Spool | Sync-Spool.ps1: retry della coda ogni ora, primo trigger circa 5 minuti dopo installazione |
 
-Con SubmissionEnabled=false entrambi sono disabilitati. L'installer non esegue
+Con `SubmissionEnabled=false` nel Core entrambi sono disabilitati. L'installer non esegue
 subito il collector. La disinstallazione rimuove solo questi task e conserva
 file/spool; attendere la fine di eventuali task in esecuzione prima di installare
 o disinstallare. Nessun task legacy viene modificato.
@@ -280,10 +291,17 @@ task in Task Scheduler. Evitare di esportare payload inventory nei log di suppor
 Dalla versione 1.4.5 i task e l'installer scrivono log propri, distinti dai log IME:
 
 ```text
-C:\ProgramData\LogCollector\Logs\CustomInventory\Install.log
-C:\ProgramData\LogCollector\Logs\CustomInventory\Inventory.log
-C:\ProgramData\LogCollector\Logs\CustomInventory\Spool.log
+C:\ProgramData\<CustomerName>\CustomInventory\Logs\Install.log
+C:\ProgramData\<CustomerName>\CustomInventory\Logs\Inventory.log
+C:\ProgramData\<CustomerName>\CustomInventory\Logs\Spool.log
 ```
+
+Durante un upgrade, un vecchio percorso log con ACL non più conformi non viene considerato
+attendibile né riparato automaticamente. Installazione, disinstallazione, raccolta e
+drain usano in quel caso il percorso protetto versionato
+`C:\ProgramData\LogCollectorFallback\<CustomerName>\CustomInventory\Logs\`,
+che non condivide l'albero ACL cliente primario rifiutato. Un problema di
+inizializzazione del logger locale non interrompe queste operazioni.
 
 Sono log JSONL con RunId, UTC, PID e metadati selezionati. Install.log registra
 anche la disinstallazione. I warning di raccolta sono identificati da fase/funzione
@@ -297,12 +315,13 @@ complessivi per i tre componenti, piu i lock. Log e spool restano dopo uninstall
 Accesso limitato a SYSTEM/amministratori; percorsi non attendibili sono rifiutati.
 
 Se i task non vengono eseguiti, aprire la sottocartella **LogCollector** di Task
-Scheduler e controllare prima Settings.Enabled e Config.psd1: con
-SubmissionEnabled=false i task sono presenti ma disabilitati. La detection
-positiva di una configurazione disabilitata e intenzionale.
+Scheduler e controllare `Settings.Enabled` e la configurazione Core: con
+`SubmissionEnabled=false` i task sono presenti ma disabilitati. La detection
+positiva in questo stato e intenzionale.
 I log di raccolta compaiono solo quando Run-Inventory.ps1 viene effettivamente
 eseguito; l'installazione da sola genera Install.log.
 
-La creazione/scrittura del log deve riuscire: gli errori non sono ignorati.
-Se il logger non puo essere inizializzato, consultare l'errore del processo nei
-log IME; il pacchetto non finge una diagnosi persistente che non ha potuto scrivere.
+Se né il percorso storico né quello versionato possono essere inizializzati, il processo
+continua senza diagnostic sink persistente e produce soltanto un warning con tipo di
+eccezione e HResult. Gli errori di scrittura successivi a un'inizializzazione riuscita
+restano invece espliciti e non vengono ignorati.

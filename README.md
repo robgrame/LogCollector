@@ -128,12 +128,12 @@ Six complementary controls run in a fixed, fail-closed order.
 | 5 | **Certificate ↔ device binding** | A valid device submitting inventory attributed to a *different* device (IDOR). The device id must be an exact GUID in the certificate; substrings are rejected. |
 | 6 | **Table → DCR stream allow-list** | A client choosing an arbitrary ingestion destination. An unmapped table name fails closed. |
 
-**Intune tenant authorization is mandatory before intake.** Microsoft Intune CA roots can be
-shared across tenants. A valid enrollment certificate therefore is not sufficient authorization.
-After signature and device binding, the frontend looks up the bound device in Microsoft Graph
-using its own managed identity and requires an enabled device in that identity's tenant.
-The frontend identity needs Graph **Device.Read.All (application)** permission with administrator
-consent for the Intune fallback. Graph failures never bypass this check.
+**Intune tenant authorization is enabled by default.** Microsoft Intune CA roots can be shared
+across tenants, so the frontend normally looks up the certificate-bound device in Microsoft
+Graph and requires an enabled device in its identity's tenant. This requires Graph
+**Device.Read.All (application)**. Customers unable to grant it can explicitly set
+`EntraDeviceValidation__Enabled=false`; mTLS, signing, anti-replay and certificate/device binding
+remain enforced, but tenant membership is no longer proven.
 
 Then, at the data layer, `TelemetryRowFactory` writes the server-asserted identity columns **after**
 copying client fields, so a record containing its own `EntraDeviceId` cannot spoof attribution.
@@ -245,29 +245,29 @@ Package the six-file, versioned module with **`scripts\Publish-ClientModule.ps1`
 See **[shared-client.md](docs/shared-client.md)** for installation, examples, return values,
 endpoint-isolated spool and limits.
 
-**Universal inventory package.** Build a self-contained folder for any deployment:
+**Universal inventory package.** Build the Core-dependent collector package; endpoint,
+customer identity and certificate policy are read from the protected Core configuration:
 
 ```powershell
-.\scripts\Publish-InventoryPackage.ps1 `
-    -FrontendUrl 'https://<your-intake>.azurewebsites.net/api/inventory' `
-    -Environment 'MSLabs'
+.\scripts\Publish-InventoryPackage.ps1
 ```
 
 For a complete `.intunewin` release, use `scripts\Publish-IntuneWin32Package.ps1`
 with a local Microsoft `IntuneWinAppUtil.exe`. See
 [Intune Win32 deployment](docs/intune-win32-deployment.md) for the laboratory build
 command, install/uninstall commands, detection settings and requirements.
-The generated detection script pins the final configuration SHA256 and checks task
-actions, SYSTEM identity and enablement. For configuration-only updates, replace
+The generated detection script pins the collector configuration SHA256, requires
+LogCollector Core 1.11.1, and checks task actions, SYSTEM identity and enablement
+against the Core configuration. For collector-only updates, replace
 both the app content and its generated detection script in the same Required app;
-Intune can reapply the desired configuration without uninstalling first.
+endpoint/customer/PKI changes require updating Core only.
 Package **1.4.5** also writes protected, bounded JSONL lifecycle, inventory and
-spool logs under `C:\ProgramData\LogCollector\Logs\CustomInventory`, using selected
+spool logs under `C:\ProgramData\<CustomerName>\CustomInventory\Logs`, using selected
 metadata rather than a transcript of payloads or HTTP response bodies.
 
-The current package source is **1.5.0** and includes shared client **1.5.0**, including schema-sample export.
+The current package source is **1.7.0** and includes shared client **1.9.0**, including schema-sample export.
 Existing installed packages remain compatible with their configured inventory endpoints and tables.
-The folder-only builder creates `out\Inventory\1.5.0`, ready for Intune Win32 packaging with `Install.ps1`
+The folder-only builder creates `out\Inventory\1.7.0`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
 environment and table names are supplied as configuration; `-DeviceTableName` and
 `-AppTableName` default to **DeviceInventory_CL** and **AppInventory_CL** to retain existing
@@ -421,8 +421,9 @@ az deployment group create `
 ```
 
 Record the outputs: `frontendIngestUrl`, `dataCollectionEndpoint`, `dataCollectionRuleImmutableId`.
-For Intune fallback, complete the administrator-operated Graph `Device.Read.All` grant in
-[the runbook](docs/operations.md#intune-fallback-grant-tenant-device-read-permission) before onboarding.
+For Intune fallback, either complete the administrator-operated Graph `Device.Read.All` grant or
+explicitly accept reduced tenant isolation as described in
+[the runbook](docs/operations.md#intune-fallback-entra-device-validation).
 
 **Naming and collisions:** the storage account and Function app names are globally unique
 across all of Azure. On a first-time deployment, set `customerPrefix` (e.g. `'aci'`) in the

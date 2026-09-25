@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Version 1.5.0. Protected, bounded metadata-only diagnostics; no activity on import.
+# Version 1.9.1. Protected, bounded metadata-only diagnostics; no activity on import.
 Set-StrictMode -Version Latest
 
 $script:LogGuard = $null
@@ -27,8 +27,26 @@ $script:LogBooleans = @('SubmissionEnabled', 'Stopped', 'Enabled')
 
 function Get-InventoryLogGuard {
     if ($null -eq $script:LogGuard) {
-        $script:LogGuard = Import-Module (Join-Path $PSScriptRoot 'Modules\InventorySpool.psm1') `
-            -PassThru -Scope Local -DisableNameChecking -ErrorAction Stop
+        $client = @(Get-Module -Name LogCollector.Client | Sort-Object Version -Descending |
+            Select-Object -First 1)
+        if ($client.Count -eq 0) {
+            throw 'LogCollector Core is not loaded; protected Inventory logging is unavailable.'
+        }
+        $script:LogGuard = Get-Module -All -Name InventorySpool |
+            Where-Object ModuleBase -eq $client[0].ModuleBase |
+            Select-Object -First 1
+        if (-not $script:LogGuard) {
+            throw 'LogCollector Core did not load its protected filesystem module.'
+        }
+        $missing = @(& $script:LogGuard {
+            param($Names)
+            @($Names | Where-Object {
+                    -not (Get-Command -Name $_ -CommandType Function -ErrorAction SilentlyContinue)
+                })
+        } @('Assert-SpoolHierarchy', 'New-SpoolSecurityDescriptor', 'New-SpoolFileStream', 'Get-SpoolFullPath'))
+        if ($missing.Count -gt 0) {
+            throw "LogCollector Core filesystem contract is incomplete: $($missing -join ', ')."
+        }
     }
     return $script:LogGuard
 }
@@ -247,7 +265,7 @@ function New-InventoryLogContext {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [ValidateSet('Install', 'Inventory', 'Spool')] [string] $Component,
-        [string] $Directory = 'C:\ProgramData\LogCollector\Logs\CustomInventory',
+        [Parameter(Mandatory)] [string] $Directory,
         [ValidateRange(1024, 20971520)] [int] $MaxFileBytes = 2097152,
         [ValidateRange(0, 32)] [int] $MaxArchives = 4,
         [ValidateRange(1, 365)] [int] $MaxAgeDays = 14
@@ -270,6 +288,85 @@ function New-InventoryLogContext {
     try { Invoke-InventoryLogMaintenance -Context $context }
     finally { $lock.Dispose() }
     return $context
+}
+
+function Get-InventoryLogCustomerName {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $ConfigPath)
+
+    try {
+        $config = Import-PowerShellDataFile -LiteralPath $ConfigPath -ErrorAction Stop
+        if (-not $config.ContainsKey('CustomerName') -or $config.CustomerName -isnot [string] -or
+            $config.CustomerName -notmatch '^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$') {
+            return $null
+        }
+        if (($config.CustomerName -split '\.')[0].ToUpperInvariant() -in @(
+                'CON', 'PRN', 'AUX', 'NUL', 'CLOCK$', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+                'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5',
+                'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
+            return $null
+        }
+        return $config.CustomerName
+    }
+    catch {
+        Write-Warning ("Inventory log configuration is unavailable; logging will be skipped. " +
+            "ExceptionType=$($_.Exception.GetType().FullName); HResult=$($_.Exception.HResult).")
+        return $null
+    }
+}
+
+function Initialize-InventoryLogContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('Install', 'Inventory', 'Spool')] [string] $Component,
+        [Parameter(Mandatory)] [ValidatePattern('^\d+\.\d+\.\d+$')] [string] $PackageVersion,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])$')]
+        [string] $CustomerName,
+        [string] $PrimaryDirectory,
+        [string] $FallbackDirectory
+    )
+
+    if (($CustomerName -split '\.')[0].ToUpperInvariant() -in @(
+            'CON', 'PRN', 'AUX', 'NUL', 'CLOCK$', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+            'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5',
+            'LPT6', 'LPT7', 'LPT8', 'LPT9')) {
+        throw "CustomerName '$CustomerName' is a reserved Windows device name."
+    }
+    if (-not $PSBoundParameters.ContainsKey('PrimaryDirectory')) {
+        $PrimaryDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+            "$CustomerName\CustomInventory\Logs"
+    }
+    if (-not $PSBoundParameters.ContainsKey('FallbackDirectory')) {
+        $FallbackDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) `
+            "LogCollectorFallback\$CustomerName\CustomInventory\Logs"
+    }
+    try {
+        $context = New-InventoryLogContext -Component $Component -Directory $PrimaryDirectory
+        $context | Add-Member -NotePropertyName FallbackUsed -NotePropertyValue $false
+        return $context
+    }
+    catch {
+        $primaryFailure = $_
+        try {
+            $context = New-InventoryLogContext -Component $Component -Directory $FallbackDirectory
+            $context | Add-Member -NotePropertyName FallbackUsed -NotePropertyValue $true
+            $context | Add-Member -NotePropertyName PrimaryExceptionType `
+                -NotePropertyValue $primaryFailure.Exception.GetType().FullName
+            $context | Add-Member -NotePropertyName PrimaryHResult `
+                -NotePropertyValue $primaryFailure.Exception.HResult
+            Write-Warning ("Primary inventory lifecycle log is unavailable; using the protected versioned fallback. " +
+                "ExceptionType=$($primaryFailure.Exception.GetType().FullName); " +
+                "HResult=$($primaryFailure.Exception.HResult).")
+            return $context
+        }
+        catch {
+            Write-Warning ("Inventory lifecycle logging is unavailable; the operation will continue. " +
+                "PrimaryExceptionType=$($primaryFailure.Exception.GetType().FullName); " +
+                "FallbackExceptionType=$($_.Exception.GetType().FullName); HResult=$($_.Exception.HResult).")
+            return $null
+        }
+    }
 }
 
 function Write-InventoryLog {
@@ -369,4 +466,5 @@ function Write-InventoryLogFailure {
     }
 }
 
-Export-ModuleMember -Function New-InventoryLogContext, Write-InventoryLog, New-InventoryDiagnosticSink, Write-InventoryLogFailure
+Export-ModuleMember -Function Get-InventoryLogCustomerName, Initialize-InventoryLogContext, `
+    New-InventoryLogContext, Write-InventoryLog, New-InventoryDiagnosticSink, Write-InventoryLogFailure

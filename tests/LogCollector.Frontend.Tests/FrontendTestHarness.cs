@@ -84,6 +84,7 @@ internal sealed class FrontendTestHarness : IDisposable
                 NullLogger<TelemetryPointerPublisher>.Instance),
             new IngestionStreamMap(config),
             options,
+            new EntraDeviceValidationOptions(config),
             new GraphDeviceAuthorizer(new TestCredential(intune), _graphHttp),
             NullLogger<TelemetryIngestFunction>.Instance);
     }

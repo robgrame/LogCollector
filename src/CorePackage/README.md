@@ -1,6 +1,6 @@
 # LogCollector Core — shared telemetry dependency
 
-Version 1.8.0
+Version 1.11.1
 
 This package installs **LogCollector.Client** machine-wide. It is a *dependency*: it
 registers no scheduled task and collects nothing by itself. Install it on every device that
@@ -122,16 +122,29 @@ for data that is not in Log Analytics yet would be a false success.
 
 Requires elevation and 64-bit Windows PowerShell. It:
 
-1. copies the module to `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client\1.8.0`,
+1. atomically replaces the module at the stable path
+   `%ProgramFiles%\WindowsPowerShell\Modules\LogCollector.Client`,
    which is on `PSModulePath` for both Windows PowerShell 5.1 and PowerShell 7;
-2. writes `%ProgramData%\LogCollector\Config\Endpoint.psd1`;
-3. restricts write access on both — **and on their parent directories** — to SYSTEM and
+2. writes `%ProgramData%\<CustomerName>\LogCollector\Config\Endpoint.psd1`;
+3. migrates the compatible legacy `SharedSpool` and `State` folders from
+   `%ProgramData%\LogCollector` without overwriting existing destination files;
+4. restricts write access on both — **and on their parent directories** — to SYSTEM and
    Administrators, removing any pre-existing explicit entry, then re-reads each security
    descriptor to confirm the DACL is protected, grants no untrusted principal write, delete
    or take-ownership rights, and is owned by an administrator;
-4. verifies the result from a clean child session by importing the module *by name*.
+5. verifies the result from a clean child session by importing the module *by name*.
 
 Both paths are readable by all users and hold **no secret**.
+
+The installer writes a persistent CMTrace diagnostic log, including its current phase and
+the complete PowerShell error location when installation fails:
+
+```text
+%ProgramData%\<CustomerName>\LogCollector\Logs\LogCollector.log
+```
+
+For the MSLabs package this resolves to
+`C:\ProgramData\MSLabs\LogCollector\Logs\LogCollector.log`.
 
 The ACL is not cosmetic. The module directory is imported by SYSTEM-scheduled work, so a
 user-writable copy would be code execution as SYSTEM; the configuration names the intake
@@ -153,7 +166,8 @@ For a single-machine test, override the endpoint without rebuilding:
 
 Use `Detect.ps1` as a custom detection script. It exits `0` with one line of output only
 when this exact version is installed, importable by name and configured; otherwise it exits
-`1` with no output.
+`1` with a non-sensitive reason code such as `ConfigurationMismatch` or
+`ModuleDirectoryAclMismatch`. The reason appears in the Intune Management Extension logs.
 
 The source template accepts any trusted non-empty configuration for direct development use.
 `New-IntunePackage.ps1` replaces its marker with a Base64-encoded expected configuration, so
@@ -183,10 +197,17 @@ In both layouts, the utility must have a valid Microsoft Authenticode signature.
 ## Uninstall
 
 ```powershell
-.\Uninstall.ps1                        # module only
-.\Uninstall.ps1 -RemoveConfiguration   # also drop the endpoint, retiring the device
-.\Uninstall.ps1 -RemoveSpool           # also discard records not yet delivered
+.\Uninstall.ps1 -ExpectedVersion 1.11.1                      # module only
+.\Uninstall.ps1 -ExpectedVersion 1.11.1 -RemoveConfiguration # also drop the endpoint
+.\Uninstall.ps1 -ExpectedVersion 1.11.1 -RemoveSpool         # also discard pending records
 ```
+
+The Intune command always passes the package version. If a newer Core is already installed
+at the stable path, an older uninstall request reports success without removing it.
+
+For the one-time 1.10.2 to 1.11.0 migration, update the existing Intune app or use
+supersedence with **Uninstall previous version = No**. Releases before 1.11.0 used a
+versioned uninstall path and do not yet have the expected-version guard.
 
 The configuration and the shared spool survive by default: other scripts depend on the
 former, and the latter may still hold records that have not reached Log Analytics.

@@ -6,6 +6,26 @@ namespace LogCollector.Frontend.Tests;
 
 public sealed class TelemetryIntakeOptionsTests
 {
+    [Fact]
+    public void EntraDeviceValidationDefaultsToEnabled()
+    {
+        var options = new EntraDeviceValidationOptions(TestCertificates.Config([]));
+
+        Assert.True(options.Enabled);
+    }
+
+    [Fact]
+    public void InvalidEntraDeviceValidationValueFailsStartup()
+    {
+        var config = TestCertificates.Config([("EntraDeviceValidation:Enabled", "sometimes")]);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => new EntraDeviceValidationOptions(config));
+
+        Assert.Contains("true", exception.Message);
+        Assert.Contains("false", exception.Message);
+    }
+
     [Theory]
     [InlineData("telemetry-ingestion", "legacy-ingestion", "telemetry-ingestion")]
     [InlineData("telemetry-ingestion", null, "telemetry-ingestion")]

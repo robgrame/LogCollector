@@ -335,6 +335,13 @@ Describe 'Get-LogCollectorEndpointConfiguration' {    It 'names the expected pat
         $config.ConfigurationPath | Should -Be $path
     }
 
+    It 'derives the canonical customer-scoped data and configuration paths' {
+        $dataRoot = Get-LogCollectorDataRoot -CustomerName 'Contoso'
+        $dataRoot | Should -Be (Join-Path (Join-Path $env:ProgramData 'Contoso') 'LogCollector')
+        Get-LogCollectorConfigurationPath -CustomerName 'Contoso' |
+            Should -Be (Join-Path $dataRoot 'Config\Endpoint.psd1')
+    }
+
     It 'refuses a configuration that an unprivileged user could rewrite' {
         $path = New-TestConfiguration -Path (Join-Path $TestDrive 'd\Endpoint.psd1') -Body "@{ FrontendUrl = 'https://x.invalid/api/inventory' }"
         $acl = Get-Acl -LiteralPath $path
@@ -343,6 +350,20 @@ Describe 'Get-LogCollectorEndpointConfiguration' {    It 'names the expected pat
             [Security.Principal.SecurityIdentifier]'S-1-5-32-545', 'Modify', 'Allow')))
         Set-Acl -LiteralPath $path -AclObject $acl
         { Get-LogCollectorEndpointConfiguration -Path $path } | Should -Throw '*cannot be trusted*'
+    }
+
+    It 'refuses a configuration reached through a junction' {
+        $target = Join-Path $TestDrive 'junction-target'
+        $link = Join-Path $TestDrive 'junction-link'
+        $path = New-TestConfiguration -Path (Join-Path $target 'Config\Endpoint.psd1') `
+            -Body "@{ FrontendUrl = 'https://x.invalid/api/inventory' }"
+        try { $null = New-Item -ItemType Junction -Path $link -Target $target -ErrorAction Stop }
+        catch {
+            Set-ItResult -Skipped -Because "Directory junctions are unavailable: $($_.Exception.Message)"
+            return
+        }
+        { Get-LogCollectorEndpointConfiguration -Path (Join-Path $link 'Config\Endpoint.psd1') } |
+            Should -Throw '*reparse point*'
     }
 }
 
@@ -355,11 +376,20 @@ Describe 'Core package provisioning' {
         # Hardening needs elevation; the subject here is the file the installer emits.
         Mock -ModuleName Core.Provisioning Set-LogCollectorMachineAcl {}
         Mock -ModuleName Core.Provisioning Assert-LogCollectorMachineAcl {}
+        Mock -ModuleName Core.Provisioning Set-LogCollectorPrivateDataAcl {}
     }
 
     It 'installs under a path that both PowerShell editions already search' {
-        $root = Get-LogCollectorModuleRoot -Version '1.6.0'
-        $root | Should -BeLike '*\WindowsPowerShell\Modules\LogCollector.Client\1.6.0'
+        $root = Get-LogCollectorModuleRoot
+        $root | Should -BeLike '*\WindowsPowerShell\Modules\LogCollector.Client'
+        Split-Path $root -Leaf | Should -BeExactly 'LogCollector.Client'
+    }
+
+    It 'allows inherited ACLs only when validating the shared module parent' {
+        (Get-Command Assert-LogCollectorMachineAcl).Parameters.Keys |
+            Should -Contain 'AllowInheritedRules'
+        (Get-Command Set-LogCollectorMachineAcl).Parameters.Keys |
+            Should -Not -Contain 'AllowInheritedRules'
     }
 
     It 'emits a configuration the client can read back' {
@@ -397,5 +427,53 @@ Describe 'Core package provisioning' {
         $path = Join-Path $TestDrive 'whatif\Endpoint.psd1'
         Write-LogCollectorEndpointConfiguration -Path $path -Configuration @{ FrontendUrl = 'https://intake.invalid/api/submit' } -WhatIf
         Test-Path -LiteralPath $path | Should -BeFalse
+    }
+
+    It 'migrates compatible legacy spool and state without losing files' {
+        $legacy = Join-Path $TestDrive 'legacy'
+        $destination = Join-Path $TestDrive 'customer\LogCollector'
+        $null = New-Item -ItemType Directory -Path (Join-Path $legacy 'SharedSpool\bucket') -Force
+        $null = New-Item -ItemType Directory -Path (Join-Path $legacy 'State') -Force
+        $null = New-Item -ItemType Directory -Path $destination -Force
+        Set-Content -LiteralPath (Join-Path $legacy 'SharedSpool\bucket\queued.json') -Value '{}'
+        Set-Content -LiteralPath (Join-Path $legacy 'State\probe.json') -Value '{}'
+
+        Move-LogCollectorLegacyData -LegacyRoot $legacy -DestinationRoot $destination
+
+        Test-Path -LiteralPath (Join-Path $destination 'SharedSpool\bucket\queued.json') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $destination 'State\probe.json') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $legacy 'SharedSpool') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $legacy 'State') | Should -BeFalse
+        Should -Invoke -ModuleName Core.Provisioning Set-LogCollectorPrivateDataAcl -Times 5
+    }
+
+    It 'refuses to overwrite an existing customer-scoped data file during migration' {
+        $legacy = Join-Path $TestDrive 'legacy-collision'
+        $destination = Join-Path $TestDrive 'customer-collision\LogCollector'
+        $relative = 'SharedSpool\bucket\queued.json'
+        $null = New-Item -ItemType Directory -Path (Split-Path (Join-Path $legacy $relative) -Parent) -Force
+        $null = New-Item -ItemType Directory -Path (Split-Path (Join-Path $destination $relative) -Parent) -Force
+        Set-Content -LiteralPath (Join-Path $legacy $relative) -Value '{"legacy":true}'
+        Set-Content -LiteralPath (Join-Path $destination $relative) -Value '{"current":true}'
+
+        { Move-LogCollectorLegacyData -LegacyRoot $legacy -DestinationRoot $destination } |
+            Should -Throw '*would overwrite*'
+        Get-Content -LiteralPath (Join-Path $legacy $relative) -Raw | Should -Match 'legacy'
+        Get-Content -LiteralPath (Join-Path $destination $relative) -Raw | Should -Match 'current'
+    }
+
+    It 'refuses to migrate a legacy root reached through a junction' {
+        $target = Join-Path $TestDrive 'migration-junction-target'
+        $link = Join-Path $TestDrive 'migration-junction-link'
+        $destination = Join-Path $TestDrive 'migration-junction-destination'
+        $null = New-Item -ItemType Directory -Path (Join-Path $target 'SharedSpool') -Force
+        $null = New-Item -ItemType Directory -Path $destination -Force
+        try { $null = New-Item -ItemType Junction -Path $link -Target $target -ErrorAction Stop }
+        catch {
+            Set-ItResult -Skipped -Because "Directory junctions are unavailable: $($_.Exception.Message)"
+            return
+        }
+        { Move-LogCollectorLegacyData -LegacyRoot $link -DestinationRoot $destination } |
+            Should -Throw '*reparse point*'
     }
 }

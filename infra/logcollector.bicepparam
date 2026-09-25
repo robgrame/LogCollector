@@ -259,6 +259,9 @@ param pkiIntermediateCaSubjects = ''
 param trustedIntuneRootCertificatesBase64 = loadTextContent('certificates/intune-root.base64')
 param trustedIntuneIntermediateCertificatesBase64 = loadTextContent('certificates/intune-intermediate.base64')
 param allowIntuneEnrollmentCertificateFallback = true
+// Set false only when the customer cannot grant Microsoft Graph Device.Read.All.
+// This preserves certificate binding but cannot prove tenant membership.
+param entraDeviceValidationEnabled = true
 param checkRevocation = true
 // The bundled Intune intermediate publishes no CRL/OCSP endpoints.
 // Disable/remove the Entra device to deny access; PKI revocation remains enabled.

@@ -43,14 +43,15 @@ Describe 'Shared client facade' {
     }
 
     It 'exports the documented public surface' {
-        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.8.0'
+        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.11.1'
         $commands = @(Get-Command -Module LogCollector.Client).Name | Sort-Object
         $expected = @('Get-DeviceIdentitySnapshot', 'Get-ClientCertificate', 'New-SignedInventoryRequest',
             'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Export-LogCollectorSchema',
             'Send-LogCollectorData', 'Sync-LogCollectorSpool', 'Send-LogAnalyticsData',
             'Send-LogCollectorOperationalEvent',
-            'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath',
-            'Write-CMTraceLog', 'Get-CMTraceLogPath', 'Get-CMTraceCustomerName') | Sort-Object
+            'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath', 'Get-LogCollectorDataRoot',
+            'Assert-LogCollectorApplicationFiles', 'Write-CMTraceLog', 'Get-CMTraceLogPath',
+            'Get-CMTraceCustomerName') | Sort-Object
         ($commands -join ',') | Should -BeExactly ($expected -join ',')
     }
 
@@ -91,6 +92,21 @@ Describe 'Shared client facade' {
         Should -Invoke -ModuleName LogCollector.Client Get-DeviceIdentitySnapshot -Times 0 -Exactly
         Should -Invoke -ModuleName LogCollector.Client Get-ClientCertificate -Times 0 -Exactly
         Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 0 -Exactly
+    }
+
+    It 'rejects nested names in the public application hardening contract' {
+        { Assert-LogCollectorApplicationFiles -Directory $TestDrive -FileName 'nested\file.ps1' } |
+            Should -Throw '*leaf names only*'
+    }
+
+    It 'executes application hardening through the loaded filesystem module' {
+        $directory = Join-Path $TestDrive 'ProtectedApplication'
+        Assert-LogCollectorApplicationFiles -Directory $directory -FileName 'Run.ps1' `
+            -CreateDirectory -AllowMissing
+        Test-Path -LiteralPath $directory -PathType Container | Should -BeTrue
+        Set-Content -LiteralPath (Join-Path $directory 'Run.ps1') -Value '# test'
+        { Assert-LogCollectorApplicationFiles -Directory $directory -FileName 'Run.ps1' } |
+            Should -Not -Throw
     }
 
     It 'limits schema records and refuses accidental overwrite' {
@@ -241,6 +257,20 @@ Describe 'Shared client facade' {
         $generic = Get-LogCollectorSpoolPath -FrontendUrl 'https://example.invalid/api/submit' -SpoolRoot $script:Root
         $generic | Should -Not -Be $first
         Test-Path -LiteralPath $script:Root | Should -BeFalse
+    }
+
+    It 'uses the canonical fallback customer when an explicit endpoint has no installed Core configuration' {
+        Mock -ModuleName LogCollector.Client Get-LogCollectorDataRoot {
+            param($CustomerName)
+            if (-not $CustomerName) {
+                throw "LogCollector is not configured on this machine: 'missing' does not exist."
+            }
+            Join-Path $TestDrive "$CustomerName\LogCollector"
+        }
+
+        $path = Get-LogCollectorSpoolPath -FrontendUrl $script:Endpoint
+
+        $path | Should -BeLike (Join-Path $TestDrive 'LogCollector\LogCollector\SharedSpool\*')
     }
 
     It 'preserves noninventory records through the <Path> submission pipeline' -TestCases @(
@@ -458,7 +488,7 @@ Describe 'Shared module packaging' {
         $result.ModuleVersion | Should -BeExactly $expectedVersion
         $result.PackageSha256 | Should -Match '^[A-F0-9]{64}$'
         $manifest = Test-ModuleManifest (Join-Path $result.ModulePath 'LogCollector.Client.psd1')
-        $manifest.ExportedFunctions.Count | Should -Be 15
+        $manifest.ExportedFunctions.Count | Should -Be 17
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($result.PackagePath)
         try {

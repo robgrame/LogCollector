@@ -1,33 +1,51 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Runs custom inventory using the destinations supplied in Config.psd1.
+Runs custom inventory using collector settings from Config.psd1 and the endpoint installed by LogCollector Core.
 .NOTES
-Version 1.5.0. Protected metadata-only diagnostics for each run.
+Version 1.9.1. Protected metadata-only diagnostics for each run.
 #>
 [CmdletBinding()]
 param([switch] $Preview, [switch] $QueueOnly)
 $ErrorActionPreference = 'Stop'
+$packageVersion = '1.9.1'
 $log = $null
 $stage = 'Initialize'
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
-    $log = New-InventoryLogContext -Component Inventory
+    $configPath = Join-Path $PSScriptRoot 'Config.psd1'
+    $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
+    $customerName = (Get-LogCollectorEndpointConfiguration).CustomerName
+    if ($customerName) {
+        $log = Initialize-InventoryLogContext -Component Inventory -PackageVersion $packageVersion `
+            -CustomerName $customerName
+    }
     $mode = if ($Preview) { 'Preview' } elseif ($QueueOnly) { 'QueueOnly' } else { 'Live' }
-    Write-InventoryLog -Context $log -Event RunStarted -Data @{ PackageVersion = '1.5.0'; Mode = $mode }
+    if ($log) {
+        $startData = @{ PackageVersion = $packageVersion; Mode = $mode }
+        if ($log.FallbackUsed) {
+            $startData.Stage = 'FallbackLog'
+            $startData.ExceptionType = $log.PrimaryExceptionType
+            $startData.HResult = $log.PrimaryHResult
+        }
+        Write-InventoryLog -Context $log -Event RunStarted -Data $startData
+    }
     if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell so both registry views are collected.' }
     $stage = 'ImportRuntime'
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Runtime.psm1') -ErrorAction Stop
-    $sink = New-InventoryDiagnosticSink -Context $log
+    $sink = if ($log) { New-InventoryDiagnosticSink -Context $log } else { $null }
     $stage = 'CollectAndSend'
-    $failed = $false
-    Invoke-InventoryRun -ConfigPath (Join-Path $PSScriptRoot 'Config.psd1') -Preview:$Preview -QueueOnly:$QueueOnly -DiagnosticSink $sink |
-        ForEach-Object {
-            $_
-            if ($_.Disposition -notin @('Delivered', 'Deferred', 'Preview')) { $failed = $true }
+    $results = @(Invoke-InventoryRun -ConfigPath $configPath `
+            -Preview:$Preview -QueueOnly:$QueueOnly -DiagnosticSink $sink)
+    $results | Write-Output
+    $failed = @($results | Where-Object Disposition -NotIn @('Delivered', 'Deferred', 'Preview')).Count -gt 0
+    if ($log) {
+        Write-InventoryLog -Context $log -Event RunCompleted -Data @{
+            Stopped = $failed; DurationMs = $timer.ElapsedMilliseconds
         }
-    Write-InventoryLog -Context $log -Event RunCompleted -Data @{ Stopped = $failed; DurationMs = $timer.ElapsedMilliseconds }
+    }
     if ($failed) { exit 1 }
 }
 catch {

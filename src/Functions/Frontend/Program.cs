@@ -72,6 +72,16 @@ builder.Services.AddSingleton<RequestSignatureVerifier>();
 builder.Services.AddSingleton<ClientCertValidator>();
 builder.Services.AddSingleton<IngestionStreamMap>();
 builder.Services.AddSingleton<TelemetryIntakeOptions>();
+builder.Services.AddSingleton(sp =>
+{
+    var options = new EntraDeviceValidationOptions(builder.Configuration);
+    if (!options.Enabled)
+    {
+        sp.GetRequiredService<ILogger<EntraDeviceValidationOptions>>().LogWarning(
+            "Entra device validation is disabled. Intune submissions will not be checked for tenant membership.");
+    }
+    return options;
+});
 builder.Services.AddSingleton<TelemetryPointerPublisher>();
 builder.Services.AddHostedService<NonceCleanupService>();
 builder.Services.AddHttpClient<GraphDeviceAuthorizer>(client => client.Timeout = TimeSpan.FromSeconds(20));

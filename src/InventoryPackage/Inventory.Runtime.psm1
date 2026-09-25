@@ -1,47 +1,52 @@
 #Requires -Version 5.1
-# Version 1.5.0. Optional metadata-only diagnostics; no activity on import.
+# Version 1.9.1. Uses the protected machine-wide configuration installed by LogCollector Core.
 Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'Modules\LogCollector.Client.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'Inventory.Collection.psm1') -ErrorAction Stop
 
 function Get-InventoryConfiguration {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $Path)
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [switch] $SkipCoreConfiguration
+    )
     $config = Import-PowerShellDataFile -LiteralPath $Path -ErrorAction Stop
-    foreach ($key in @('PackageVersion', 'Environment', 'FrontendUrl', 'DeviceTableName', 'AppTableName', 'SubmissionEnabled',
-        'CollectDeviceInventory', 'CollectAppInventory', 'CertificateThumbprint',
-        'CertificateIssuerLike', 'MaxAttempts', 'TimeoutSeconds')) {
+    foreach ($key in @('PackageVersion', 'DeviceTableName', 'AppTableName',
+        'CollectDeviceInventory', 'CollectAppInventory', 'MaxAttempts', 'TimeoutSeconds')) {
         if (-not $config.ContainsKey($key)) { throw "Missing package configuration: $key" }
     }
-    foreach ($key in @('SubmissionEnabled', 'CollectDeviceInventory', 'CollectAppInventory')) {
+    foreach ($key in @('CollectDeviceInventory', 'CollectAppInventory')) {
         if ($config[$key] -isnot [bool]) { throw "$key must be a Boolean." }
-    }
-    foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects', 'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
-        if (-not $config.ContainsKey($key)) { $config[$key] = @() }
-        if ($null -eq $config[$key] -or ($config[$key] -isnot [string] -and $config[$key] -isnot [array])) {
-            throw "$key must be an array of strings (use @() to disable the constraint)."
-        }
-        foreach ($entry in @($config[$key])) {
-            if ($entry -isnot [string] -or [string]::IsNullOrWhiteSpace($entry)) { throw "$key contains an invalid entry." }
-            if ($key -like '*Thumbprints' -and ($entry -replace '[\s:]', '') -notmatch '^[0-9a-fA-F]{40}$') {
-                throw "$key entries must be SHA1 certificate thumbprints (40 hexadecimal digits)."
-            }
-        }
-        $config[$key] = @($config[$key])
     }
     foreach ($key in @('DeviceTableName', 'AppTableName')) {
         if ($config[$key] -isnot [string] -or $config[$key] -notmatch '^[A-Za-z][A-Za-z0-9_]{0,96}_CL$') {
             throw "$key must be a valid custom table name ending in _CL."
         }
     }
-    if ([string]::IsNullOrWhiteSpace($config.FrontendUrl)) { throw 'Configure FrontendUrl for the destination deployment.' }
-    $null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl
     if ($config.MaxAttempts -isnot [int] -or $config.MaxAttempts -lt 1 -or $config.MaxAttempts -gt 10) {
         throw 'MaxAttempts must be an integer between 1 and 10.'
     }
     if ($config.TimeoutSeconds -isnot [int] -or $config.TimeoutSeconds -lt 1 -or $config.TimeoutSeconds -gt 300) {
         throw 'TimeoutSeconds must be an integer between 1 and 300.'
     }
+    if ($SkipCoreConfiguration) { return $config }
+    $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
+    $endpoint = Get-LogCollectorEndpointConfiguration
+    if ($endpoint.SubmissionEnabled -isnot [bool]) {
+        throw 'LogCollector Core configuration SubmissionEnabled must be a Boolean.'
+    }
+    foreach ($key in @('PkiRootCaThumbprints', 'PkiRootCaSubjects',
+            'PkiIntermediateCaThumbprints', 'PkiIntermediateCaSubjects')) {
+        if ($null -eq $endpoint.$key) { throw "LogCollector Core configuration $key must be an array." }
+        $config[$key] = @($endpoint.$key)
+    }
+    foreach ($key in @('FrontendUrl', 'Environment', 'CustomerName', 'SubmissionEnabled',
+            'CertificateThumbprint', 'CertificateSubjectLike', 'CertificateIssuerLike')) {
+        $config[$key] = $endpoint.$key
+    }
+    $spoolRoot = Join-Path $endpoint.DataRoot 'SharedSpool'
+    $null = Get-LogCollectorSpoolPath -FrontendUrl $config.FrontendUrl -SpoolRoot $spoolRoot
+    $config['SpoolRoot'] = $spoolRoot
     return $config
 }
 
@@ -124,9 +129,11 @@ function Invoke-InventoryRun {
     foreach ($batch in $batches) {
         $result = Send-LogCollectorData -FrontendUrl $config.FrontendUrl -TableName $batch.TableName `
             -Records $batch.Records -Source 'WindowsCustomInventory' -Properties $properties -CollectedAtUtc $collectedAt `
-            -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
+            -CertificateThumbprint $config.CertificateThumbprint -CertificateSubjectLike $config.CertificateSubjectLike `
+            -CertificateIssuerLike $config.CertificateIssuerLike `
             -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
             -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
+            -SpoolRoot $config.SpoolRoot `
             -MaxAttempts $config.MaxAttempts -TimeoutSeconds $config.TimeoutSeconds -QueueOnly:$QueueOnly -SkipDrain -DiagnosticSink $DiagnosticSink
         [pscustomobject]@{
             TableName = $batch.TableName; Records = $batch.Records.Count
@@ -152,9 +159,11 @@ function Invoke-InventoryDrain {
         throw 'Spool submission is disabled until the original table mappings are ready.'
     }
     Sync-LogCollectorSpool -FrontendUrl $config.FrontendUrl `
-        -CertificateThumbprint $config.CertificateThumbprint -CertificateIssuerLike $config.CertificateIssuerLike `
+        -CertificateThumbprint $config.CertificateThumbprint -CertificateSubjectLike $config.CertificateSubjectLike `
+        -CertificateIssuerLike $config.CertificateIssuerLike `
         -PkiRootCaThumbprints $config.PkiRootCaThumbprints -PkiRootCaSubjects $config.PkiRootCaSubjects `
         -PkiIntermediateCaThumbprints $config.PkiIntermediateCaThumbprints -PkiIntermediateCaSubjects $config.PkiIntermediateCaSubjects `
+        -SpoolRoot $config.SpoolRoot `
         -TimeoutSeconds $config.TimeoutSeconds -MaxAttemptsPerEntry $config.MaxAttempts -DiagnosticSink $DiagnosticSink
 }
 

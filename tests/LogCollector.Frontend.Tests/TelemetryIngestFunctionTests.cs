@@ -198,6 +198,23 @@ public sealed class TelemetryIngestFunctionTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisabledEntraDeviceValidationSkipsGraphLookup(bool legacy)
+    {
+        using var h = new FrontendTestHarness(
+            intune: true,
+            extraSettings: [("EntraDeviceValidation:Enabled", "false")]);
+        h.Graph.Status = HttpStatusCode.Forbidden;
+        var body = Body(version: legacy ? "LOGCOLLECTOR-INVENTORY-V1" : "LOGCOLLECTOR-TELEMETRY-V1");
+
+        var result = await h.Invoke(legacy, h.Request(legacy, body));
+
+        AssertPublished(h, result, body, "HealthChecks_CL", "IntuneEnrollment");
+        Assert.Equal(0, h.Graph.Calls);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
