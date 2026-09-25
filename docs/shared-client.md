@@ -17,7 +17,7 @@ request already accepted by the server. Do not use a callback that dumps caller
 variables or arbitrary exceptions into a log.
 
 `src\Client\LogCollector.Client.psd1` is the public module entry point for independent
-inventory, diagnostic and remediation scripts. Version **1.5.0** supports Windows PowerShell
+inventory, diagnostic and remediation scripts. Version **1.11.1** supports Windows PowerShell
 5.1 and PowerShell 7 on Windows and can export representative schema samples without contacting Azure. Import does not discover certificates, access Azure, install
 tasks or run collection/remediation.
 
@@ -30,17 +30,21 @@ $package = .\scripts\Publish-ClientModule.ps1
 $package | Format-List ModuleVersion, PackagePath, PackageSha256
 ```
 
-The ZIP contains exactly six source/manifest files under `LogCollector.Client\1.5.0`.
+The ZIP contains the eight files declared by the module manifest under
+`LogCollector.Client\1.11.1`.
 It contains no customer scripts, private keys, CA files, credentials or device inventory.
 The SHA-256 identifies the generated artifact; it is not a digital signature or proof of its source.
 
-Distribute it through the customer's trusted management channel to an administrator-controlled
-directory, for example:
+This ZIP is a standalone/manual distribution artifact. If it is used without the
+Core package, distribute it through the customer's trusted management channel to
+an administrator-controlled directory, for example:
 
 ```text
-C:\Program Files\LogCollector\Modules\LogCollector.Client\1.5.0\
+C:\Program Files\LogCollector\Modules\LogCollector.Client\1.11.1\
     LogCollector.Client.psd1
     LogCollector.Client.psm1
+    EndpointConfiguration.psm1
+    CMTraceLogging.psm1
     DeviceIdentity.psm1
     RequestSigning.psm1
     InventoryClient.psm1
@@ -53,8 +57,19 @@ Keep the import path valid for scheduled tasks, self-copies and post-upgrade hoo
 the current working directory to locate it.
 
 ```powershell
-Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.5.0\LogCollector.Client.psd1' -ErrorAction Stop
+Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.11.1\LogCollector.Client.psd1' -ErrorAction Stop
 ```
+
+The supported machine-wide **LogCollector Core** package uses a different,
+stable and non-versioned physical layout:
+
+```text
+%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1
+```
+
+Do not append a version directory to the Core installation path. See
+[paths-core-client.md](paths-core-client.md) for the complete installed layout,
+shared configuration, logs, spool and legacy migration paths.
 
 The high-level commands obtain their endpoint from an explicit parameter. No Function key,
 workspace key, workspace ID or Graph token is distributed with the module.

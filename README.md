@@ -169,6 +169,14 @@ would reintroduce exactly the shared secret this design exists to eliminate.
 
 Full rationale, threat model, and residual risks: **[docs/security.md](docs/security.md)**.
 
+### Windows path reference
+
+The complete Windows filesystem and Scheduled Task layouts are documented by component:
+
+- [LogCollector Core and shared Client paths](docs/paths-core-client.md)
+- [Custom Inventory paths](docs/paths-custom-inventory.md)
+- [Other scripts, remediations and build-output paths](docs/paths-other-scripts.md)
+
 ---
 
 ## The wire contract
