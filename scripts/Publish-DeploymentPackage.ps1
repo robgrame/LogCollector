@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.2.1. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.2.2. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -137,7 +137,7 @@ Optional path for the detailed deployment log. Defaults to a timestamped file un
 .\Logs next to this script. Console and file logging contain operational metadata only;
 subscription IDs are masked and Azure credentials or access tokens are never logged.
 .NOTES
-Version 1.3.1. Never mutates the caller's persisted `az` default subscription; every
+Version 1.3.2. Never mutates the caller's persisted `az` default subscription; every
 command is scoped with --subscription instead of `az account set`. Writes detailed,
 timestamped progress diagnostics to the console and a local log file.
 #>
@@ -217,6 +217,195 @@ function Write-DeploymentLog {
     }
 }
 
+function Get-DeploymentPropertyValue {
+    param(
+        [Parameter(Mandatory)] [object] $InputObject,
+        [Parameter(Mandatory)] [string] $Name,
+        $DefaultValue = $null
+    )
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $DefaultValue }
+    return $property.Value
+}
+
+function Wait-MainSiteDefaultAction {
+    param(
+        [Parameter(Mandatory)] [string] $AppName,
+        [Parameter(Mandatory)] [ValidateSet('Allow', 'Deny')] [string] $ExpectedAction,
+        [int] $TimeoutSeconds = 120
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $observedAction = [string](& $azCommand.Source webapp config access-restriction show `
+                --name $AppName `
+                --resource-group $ResourceGroup `
+                --query ipSecurityRestrictionsDefaultAction `
+                --output tsv `
+                --only-show-errors @subscriptionArgs)
+        if ($LASTEXITCODE -eq 0) {
+            if ([string]::IsNullOrWhiteSpace($observedAction)) { $observedAction = 'Allow' }
+            if ($observedAction.Trim() -eq $ExpectedAction) { return }
+        }
+        Start-Sleep -Seconds 5
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for the main-site access restriction default action '$ExpectedAction' on $AppName."
+}
+
+function Wait-ClientCertificateEnabled {
+    param(
+        [Parameter(Mandatory)] [string] $AppName,
+        [Parameter(Mandatory)] [bool] $ExpectedValue,
+        [int] $TimeoutSeconds = 120
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $observedValue = [string](& $azCommand.Source functionapp show `
+                --name $AppName `
+                --resource-group $ResourceGroup `
+                --query clientCertEnabled `
+                --output tsv `
+                --only-show-errors @subscriptionArgs)
+        if ($LASTEXITCODE -eq 0 -and $observedValue.Trim().ToLowerInvariant() -eq $ExpectedValue.ToString().ToLowerInvariant()) {
+            return
+        }
+        Start-Sleep -Seconds 5
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for client certificate enforcement '$ExpectedValue' on $AppName."
+}
+
+function Wait-FunctionAppState {
+    param(
+        [Parameter(Mandatory)] [string] $AppName,
+        [Parameter(Mandatory)] [ValidateSet('Running', 'Stopped')] [string] $ExpectedState,
+        [int] $TimeoutSeconds = 120
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $observedState = [string](& $azCommand.Source functionapp show `
+                --name $AppName `
+                --resource-group $ResourceGroup `
+                --query state `
+                --output tsv `
+                --only-show-errors @subscriptionArgs)
+        if ($LASTEXITCODE -eq 0 -and $observedState.Trim() -eq $ExpectedState) { return }
+        Start-Sleep -Seconds 5
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for Function App state '$ExpectedState' on $AppName."
+}
+
+function Set-MainSiteIpRestrictions {
+    param(
+        [Parameter(Mandatory)] [string] $AppResourceId,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Rules
+    )
+    $requestPath = Join-Path $env:TEMP ('LogCollector-ip-restrictions-{0}.json' -f ([guid]::NewGuid().ToString('N')))
+    try {
+        $requestBody = @{ properties = @{ ipSecurityRestrictions = @($Rules) } } | ConvertTo-Json -Depth 12
+        [IO.File]::WriteAllText($requestPath, $requestBody, [Text.UTF8Encoding]::new($false))
+        $configUrl = "$AppResourceId/config/web?api-version=2024-04-01"
+        & $azCommand.Source rest `
+            --method patch `
+            --url $configUrl `
+            --headers 'Content-Type=application/json' `
+            --body "@$requestPath" `
+            --only-show-errors `
+            --output none
+        if ($LASTEXITCODE -ne 0) { throw "Azure REST update failed (exit code $LASTEXITCODE)." }
+    }
+    finally {
+        Remove-Item -LiteralPath $requestPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Wait-MainSiteRulePresence {
+    param(
+        [Parameter(Mandatory)] [string] $AppName,
+        [Parameter(Mandatory)] [string] $RuleName,
+        [Parameter(Mandatory)] [bool] $ExpectedPresent,
+        [int] $TimeoutSeconds = 120
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $ruleNames = @(& $azCommand.Source webapp config access-restriction show `
+                --name $AppName `
+                --resource-group $ResourceGroup `
+                --query 'ipSecurityRestrictions[].name' `
+                --output tsv `
+                --only-show-errors @subscriptionArgs)
+        if ($LASTEXITCODE -eq 0 -and (($ruleNames -contains $RuleName) -eq $ExpectedPresent)) { return }
+        Start-Sleep -Seconds 5
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for access restriction rule '$RuleName' presence '$ExpectedPresent' on $AppName."
+}
+
+function Wait-MainSiteIpRestrictionActive {
+    param(
+        [Parameter(Mandatory)] [string] $HostName,
+        [int] $TimeoutSeconds = 120
+    )
+    $uri = "https://$HostName/api/health"
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        try {
+            $response = Invoke-WebRequest -Uri $uri -Method Get -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            Write-DeploymentLog -Level Warning -Message "Main-site lock probe unexpectedly returned HTTP $([int]$response.StatusCode); Uri=$uri."
+        }
+        catch {
+            $webResponse = $_.Exception.Response
+            if ($null -ne $webResponse -and [int]$webResponse.StatusCode -eq 403) {
+                $forbiddenIp = [string]$webResponse.Headers['x-ms-forbidden-ip']
+                $statusDescription = [string]$webResponse.StatusDescription
+                if (-not [string]::IsNullOrWhiteSpace($forbiddenIp) -or $statusDescription -eq 'Ip Forbidden') {
+                    Write-DeploymentLog -Message (
+                        "Main-site IP restriction verified at the data plane; Host=$HostName; " +
+                        "StatusCode=403; ForbiddenIpReported=$(-not [string]::IsNullOrWhiteSpace($forbiddenIp)).")
+                    return $forbiddenIp
+                }
+            }
+        }
+        Start-Sleep -Seconds 5
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for the main-site IP restriction to reject traffic at $uri."
+}
+
+function Wait-MainSiteClientCertificateRequired {
+    param(
+        [Parameter(Mandatory)] [string] $HostName,
+        [Parameter(Mandatory)] [string] $ExpectedCallerIp,
+        [int] $TimeoutSeconds = 120
+    )
+    $uri = "https://$HostName/api/health"
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        try {
+            $response = Invoke-WebRequest -Uri $uri -Method Get -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            Write-DeploymentLog -Level Warning -Message "mTLS probe unexpectedly returned HTTP $([int]$response.StatusCode); Uri=$uri."
+        }
+        catch {
+            $webResponse = $_.Exception.Response
+            if ($null -ne $webResponse -and [int]$webResponse.StatusCode -eq 403) {
+                $responseBody = if ($null -ne $_.ErrorDetails) { [string]$_.ErrorDetails.Message } else { '' }
+                $statusDescription = [string]$webResponse.StatusDescription
+                $forbiddenIp = [string]$webResponse.Headers['x-ms-forbidden-ip']
+                if (-not [string]::IsNullOrWhiteSpace($forbiddenIp) -or $statusDescription -eq 'Ip Forbidden') {
+                    if (-not [string]::IsNullOrWhiteSpace($forbiddenIp) -and $forbiddenIp -ne $ExpectedCallerIp) {
+                        throw "The mTLS probe was rejected by the IP restriction because the caller address changed. ExpectedIp=$ExpectedCallerIp; ReportedIp=$forbiddenIp"
+                    }
+                    Start-Sleep -Seconds 5
+                    continue
+                }
+                if ($responseBody -match 'Client Certificate Required' -or
+                    $statusDescription -eq 'Client Certificate Required') {
+                    Write-DeploymentLog -Message "Client certificate enforcement verified at the data plane; Host=$HostName; StatusCode=403."
+                    return
+                }
+            }
+        }
+        Start-Sleep -Seconds 5
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for the main site to require a client certificate at $uri."
+}
+
 trap {
     $failure = $_
     Write-DeploymentLog -Level Error -Message (
@@ -227,7 +416,7 @@ trap {
 }
 
 Write-DeploymentLog -Message (
-    "Deployment started; ScriptVersion=1.3.1; PowerShell=$($PSVersionTable.PSVersion); " +
+    "Deployment started; ScriptVersion=1.3.2; PowerShell=$($PSVersionTable.PSVersion); " +
     "ProcessId=$PID; LogPath=$LogPath.")
 Write-DeploymentLog -Message (
     "Requested scope; Subscription=$(Protect-DeploymentLogValue $SubscriptionId); " +
@@ -358,28 +547,134 @@ if (-not $SkipApps) {
         # The Frontend enforces mandatory client certificates (clientCertEnabled=true), which
         # also locks down its Kudu/SCM endpoint; config-zip deployment calls that endpoint
         # internally and fails with a non-JSON response ("Expecting value: line 1 column 1")
-        # if it cannot authenticate there. Deny all main-site traffic before changing mTLS;
-        # the rule does not apply to SCM. config-zip restarts the app, so the access restriction
-        # is the durable security boundary throughout the transaction. Restore mTLS before
-        # removing the restriction and starting the app.
-        $deploymentLockRule = 'LogCollectorDeploymentLock-{0}-{1}' -f $PID, (Get-Date -Format 'yyyyMMddHHmmss')
-        $deploymentLockMayExist = $false
+        # if it cannot authenticate there. Set the main site's default access action to Deny
+        # before changing mTLS; SCM has an independent default action. config-zip restarts the
+        # app, so this setting is the durable security boundary throughout the transaction.
+        # Restore mTLS before restoring the original default action and starting the app.
+        Write-DeploymentLog -Message "Reading current main-site and SCM access restriction configuration; App=$frontendAppNameResolved."
+        $accessRestrictionJson = & $azCommand.Source webapp config access-restriction show `
+            --name $frontendAppNameResolved `
+            --resource-group $ResourceGroup `
+            --output json `
+            --only-show-errors @subscriptionArgs
+        if ($LASTEXITCODE -ne 0) { throw "Failed to read the main-site access restriction default action for $frontendAppNameResolved (exit code $LASTEXITCODE)." }
+        $accessRestrictionState = $accessRestrictionJson | ConvertFrom-Json
+        $previousMainSiteDefaultAction = [string](Get-DeploymentPropertyValue `
+                -InputObject $accessRestrictionState `
+                -Name 'ipSecurityRestrictionsDefaultAction' `
+                -DefaultValue 'Allow')
+        if ([string]::IsNullOrWhiteSpace($previousMainSiteDefaultAction)) { $previousMainSiteDefaultAction = 'Allow' }
+        if ($previousMainSiteDefaultAction -ne 'Allow') {
+            throw "The main-site access restriction default action is already '$previousMainSiteDefaultAction' on $frontendAppNameResolved. Verify that no previous deployment lock remains and restore the intended configuration before retrying."
+        }
+
+        $scmUsesMain = [bool](Get-DeploymentPropertyValue `
+                -InputObject $accessRestrictionState `
+                -Name 'scmIpSecurityRestrictionsUseMain' `
+                -DefaultValue $false)
+        if ($scmUsesMain) {
+            throw "SCM currently uses the main-site access restrictions on $frontendAppNameResolved. Configure independent SCM restrictions before deploying so the temporary main-site lock does not block config-zip."
+        }
+
+        $mainSiteRulesValue = Get-DeploymentPropertyValue `
+                -InputObject $accessRestrictionState `
+                -Name 'ipSecurityRestrictions' `
+                -DefaultValue @()
+        $mainSiteRules = if ($null -eq $mainSiteRulesValue) { @() } else { @($mainSiteRulesValue) }
+        $explicitAllowRules = @($mainSiteRules | Where-Object {
+                $action = [string](Get-DeploymentPropertyValue -InputObject $_ -Name 'action')
+                $priority = Get-DeploymentPropertyValue -InputObject $_ -Name 'priority'
+                $ipAddress = [string](Get-DeploymentPropertyValue -InputObject $_ -Name 'ipAddress')
+                $name = [string](Get-DeploymentPropertyValue -InputObject $_ -Name 'name')
+                $action -eq 'Allow' -and -not (
+                    $priority -eq 2147483647 -and
+                    $ipAddress -eq 'Any' -and
+                    $name -eq 'Allow all')
+            })
+        if ($explicitAllowRules.Count -gt 0) {
+            $explicitAllowRuleNames = @($explicitAllowRules | ForEach-Object {
+                    $ruleName = [string](Get-DeploymentPropertyValue -InputObject $_ -Name 'name')
+                    if ([string]::IsNullOrWhiteSpace($ruleName)) { '<unnamed>' } else { $ruleName }
+                })
+            throw "Cannot create a deny-all deployment lock while the main site has explicit Allow restriction(s): $($explicitAllowRuleNames -join ', '). The deployment stopped before changing mTLS."
+        }
+        $frontendInitialState = [string](& $azCommand.Source functionapp show `
+                --name $frontendAppNameResolved `
+                --resource-group $ResourceGroup `
+                --query state `
+                --output tsv `
+                --only-show-errors @subscriptionArgs)
+        if ($LASTEXITCODE -ne 0) { throw "Failed to read the initial state of $frontendAppNameResolved (exit code $LASTEXITCODE)." }
+        $frontendWasRunning = $frontendInitialState.Trim() -eq 'Running'
+        $frontendDefaultHostName = [string](& $azCommand.Source functionapp show `
+                --name $frontendAppNameResolved `
+                --resource-group $ResourceGroup `
+                --query defaultHostName `
+                --output tsv `
+                --only-show-errors @subscriptionArgs)
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($frontendDefaultHostName)) {
+            throw "Failed to resolve the default hostname of $frontendAppNameResolved."
+        }
+        $frontendResourceId = [string](& $azCommand.Source functionapp show `
+                --name $frontendAppNameResolved `
+                --resource-group $ResourceGroup `
+                --query id `
+                --output tsv `
+                --only-show-errors @subscriptionArgs)
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($frontendResourceId)) {
+            throw "Failed to resolve the resource ID of $frontendAppNameResolved."
+        }
+        $mainSiteConfiguredRules = @($mainSiteRules | Where-Object {
+                -not (
+                    (Get-DeploymentPropertyValue -InputObject $_ -Name 'priority') -eq 2147483647 -and
+                    [string](Get-DeploymentPropertyValue -InputObject $_ -Name 'ipAddress') -eq 'Any' -and
+                    [string](Get-DeploymentPropertyValue -InputObject $_ -Name 'name') -eq 'Allow all')
+            })
+        $configuredPriorities = @($mainSiteConfiguredRules | ForEach-Object {
+                [int](Get-DeploymentPropertyValue -InputObject $_ -Name 'priority' -DefaultValue 2147483647)
+            })
+        $probeRulePriority = if ($configuredPriorities.Count -eq 0) {
+            1
+        }
+        else {
+            $minimumConfiguredPriority = ($configuredPriorities | Measure-Object -Minimum).Minimum
+            if ($minimumConfiguredPriority -le 1) {
+                throw "Cannot create a temporary mTLS probe rule because an existing main-site restriction already uses priority $minimumConfiguredPriority."
+            }
+            $minimumConfiguredPriority - 1
+        }
+        Write-DeploymentLog -Message (
+            "Access restriction configuration validated; App=$frontendAppNameResolved; " +
+            "MainDefaultAction=$previousMainSiteDefaultAction; MainRuleCount=$($mainSiteRules.Count); " +
+            "ExplicitAllowRules=$($explicitAllowRules.Count); ScmUsesMain=$scmUsesMain; " +
+            "InitialState=$frontendInitialState; Host=$frontendDefaultHostName.")
+
+        $deploymentLockChanged = $false
+        $deploymentProbeCidr = $null
         $frontendDeploymentFailure = $null
         $cleanupErrors = @()
         try {
-            Write-DeploymentLog -Message "Applying temporary deny-all main-site restriction; App=$frontendAppNameResolved; Rule=$deploymentLockRule."
-            $deploymentLockMayExist = $true
-            & $azCommand.Source webapp config access-restriction add `
+            Write-DeploymentLog -Message "Applying temporary deny-all main-site default action; App=$frontendAppNameResolved."
+            $deploymentLockChanged = $true
+            & $azCommand.Source webapp config access-restriction set `
                 --name $frontendAppNameResolved `
                 --resource-group $ResourceGroup `
-                --rule-name $deploymentLockRule `
-                --action Deny `
-                --ip-address '0.0.0.0/0' `
-                --priority 1 `
-                --scm-site false `
+                --default-action Deny `
                 --only-show-errors @subscriptionArgs | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Failed to apply the temporary deployment access restriction to $frontendAppNameResolved (exit code $LASTEXITCODE)." }
-            Write-DeploymentLog -Message "Temporary main-site restriction applied; App=$frontendAppNameResolved; Rule=$deploymentLockRule."
+            if ($LASTEXITCODE -ne 0) { throw "Failed to apply the temporary deny-all main-site default action to $frontendAppNameResolved (exit code $LASTEXITCODE)." }
+            Wait-MainSiteDefaultAction -AppName $frontendAppNameResolved -ExpectedAction Deny
+            $deploymentProbeIp = Wait-MainSiteIpRestrictionActive -HostName $frontendDefaultHostName
+            $parsedProbeIp = $null
+            if (-not [Net.IPAddress]::TryParse($deploymentProbeIp, [ref]$parsedProbeIp)) {
+                throw "The App Service IP restriction response did not contain a valid caller IP address: '$deploymentProbeIp'."
+            }
+            $deploymentProbeCidr = if ($parsedProbeIp.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+                "$deploymentProbeIp/32"
+            }
+            else {
+                "$deploymentProbeIp/128"
+            }
+            Write-DeploymentLog -Message "Temporary deny-all main-site default action is active; App=$frontendAppNameResolved."
 
             Write-DeploymentLog -Message "Stopping Frontend before changing client certificate enforcement; App=$frontendAppNameResolved."
             & $azCommand.Source functionapp stop --name $frontendAppNameResolved --resource-group $ResourceGroup --only-show-errors @subscriptionArgs
@@ -388,6 +683,7 @@ if (-not $SkipApps) {
             Write-DeploymentLog -Message "Temporarily disabling client certificate enforcement behind the deny-all restriction; App=$frontendAppNameResolved."
             & $azCommand.Source functionapp update --name $frontendAppNameResolved --resource-group $ResourceGroup --set clientCertEnabled=false --only-show-errors @subscriptionArgs | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Failed to temporarily disable client certificate enforcement on $frontendAppNameResolved (exit code $LASTEXITCODE)." }
+            Wait-ClientCertificateEnabled -AppName $frontendAppNameResolved -ExpectedValue $false
             Write-DeploymentLog -Message "Pushing Frontend zip through Azure CLI; App=$frontendAppNameResolved."
             & $azCommand.Source functionapp deployment source config-zip --resource-group $ResourceGroup --name $frontendAppNameResolved --src $frontendPackage --only-show-errors @subscriptionArgs
             if ($LASTEXITCODE -ne 0) { throw "Frontend deployment failed (exit code $LASTEXITCODE)." }
@@ -398,13 +694,14 @@ if (-not $SkipApps) {
         }
         finally {
             $mTlsRestored = $false
-            $deploymentLockRemoved = -not $deploymentLockMayExist
+            $deploymentLockRestored = -not $deploymentLockChanged
 
             try {
                 & $azCommand.Source functionapp update --name $frontendAppNameResolved --resource-group $ResourceGroup --set clientCertEnabled=true --only-show-errors @subscriptionArgs | Out-Null
                 if ($LASTEXITCODE -eq 0) {
+                    Wait-ClientCertificateEnabled -AppName $frontendAppNameResolved -ExpectedValue $true
                     $mTlsRestored = $true
-                    Write-DeploymentLog -Message "Client certificate enforcement restored; App=$frontendAppNameResolved; Enabled=True."
+                    Write-DeploymentLog -Message "Client certificate enforcement converged in ARM while the deny-all boundary remained active; App=$frontendAppNameResolved; Enabled=True."
                 }
                 else {
                     $cleanupErrors += "Failed to re-enable client certificate enforcement on $frontendAppNameResolved (exit code $LASTEXITCODE)."
@@ -414,42 +711,121 @@ if (-not $SkipApps) {
                 $cleanupErrors += "Failed to re-enable client certificate enforcement on ${frontendAppNameResolved}: $($_.Exception.Message)"
             }
 
-            if ($deploymentLockMayExist -and $mTlsRestored) {
+            if ($deploymentLockChanged -and $mTlsRestored) {
+                if ([string]::IsNullOrWhiteSpace($deploymentProbeCidr)) {
+                    try {
+                        & $azCommand.Source webapp config access-restriction set `
+                            --name $frontendAppNameResolved `
+                            --resource-group $ResourceGroup `
+                            --default-action $previousMainSiteDefaultAction `
+                            --only-show-errors @subscriptionArgs | Out-Null
+                        if ($LASTEXITCODE -ne 0) { throw "Azure CLI exited with code $LASTEXITCODE." }
+                        Wait-MainSiteDefaultAction -AppName $frontendAppNameResolved -ExpectedAction $previousMainSiteDefaultAction
+                        $deploymentLockRestored = $true
+                        Write-DeploymentLog -Message "Main-site default action restored without an mTLS probe because the deployment stopped before changing mTLS; App=$frontendAppNameResolved."
+                    }
+                    catch {
+                        $cleanupErrors += "Failed to restore the main-site access restriction after an early deployment failure on ${frontendAppNameResolved}: $($_.Exception.Message)"
+                    }
+                }
+                else {
+                $probeRuleName = 'LogCollectorDeploymentProbe-{0}-{1}' -f $PID, (Get-Date -Format 'yyyyMMddHHmmss')
+                $probeRuleAdded = $false
                 try {
-                    & $azCommand.Source webapp config access-restriction remove `
+                    $probeRule = [pscustomobject]@{
+                        ipAddress = $deploymentProbeCidr
+                        action = 'Allow'
+                        tag = 'Default'
+                        priority = $probeRulePriority
+                        name = $probeRuleName
+                        description = 'Temporary LogCollector deployment mTLS verification'
+                    }
+                    $probeRuleAdded = $true
+                    Set-MainSiteIpRestrictions `
+                        -AppResourceId $frontendResourceId `
+                        -Rules (@($probeRule) + @($mainSiteConfiguredRules))
+                    Wait-MainSiteRulePresence `
+                        -AppName $frontendAppNameResolved `
+                        -RuleName $probeRuleName `
+                        -ExpectedPresent $true
+
+                    & $azCommand.Source functionapp start --name $frontendAppNameResolved --resource-group $ResourceGroup --only-show-errors @subscriptionArgs
+                    if ($LASTEXITCODE -ne 0) { throw "Failed to start $frontendAppNameResolved for mTLS verification (exit code $LASTEXITCODE)." }
+                    Wait-FunctionAppState -AppName $frontendAppNameResolved -ExpectedState Running
+                    Wait-MainSiteClientCertificateRequired `
+                        -HostName $frontendDefaultHostName `
+                        -ExpectedCallerIp $deploymentProbeIp
+
+                    Set-MainSiteIpRestrictions `
+                        -AppResourceId $frontendResourceId `
+                        -Rules $mainSiteConfiguredRules
+                    Wait-MainSiteRulePresence `
+                        -AppName $frontendAppNameResolved `
+                        -RuleName $probeRuleName `
+                        -ExpectedPresent $false
+                    $probeRuleAdded = $false
+
+                    if (-not $frontendWasRunning) {
+                        & $azCommand.Source functionapp stop --name $frontendAppNameResolved --resource-group $ResourceGroup --only-show-errors @subscriptionArgs
+                        if ($LASTEXITCODE -ne 0) { throw "Failed to return $frontendAppNameResolved to its original stopped state (exit code $LASTEXITCODE)." }
+                        Wait-FunctionAppState -AppName $frontendAppNameResolved -ExpectedState Stopped
+                    }
+
+                    & $azCommand.Source webapp config access-restriction set `
                         --name $frontendAppNameResolved `
                         --resource-group $ResourceGroup `
-                        --rule-name $deploymentLockRule `
-                        --scm-site false `
+                        --default-action $previousMainSiteDefaultAction `
                         --only-show-errors @subscriptionArgs | Out-Null
                     if ($LASTEXITCODE -eq 0) {
-                        $deploymentLockRemoved = $true
-                        Write-DeploymentLog -Message "Temporary main-site restriction removed; App=$frontendAppNameResolved; Rule=$deploymentLockRule."
+                        Wait-MainSiteDefaultAction -AppName $frontendAppNameResolved -ExpectedAction $previousMainSiteDefaultAction
+                        $deploymentLockRestored = $true
+                        Write-DeploymentLog -Message (
+                            "Main-site access restriction default action restored after independent mTLS verification; " +
+                            "App=$frontendAppNameResolved; Action=$previousMainSiteDefaultAction.")
                     }
                     else {
-                        $cleanupErrors += "Failed to remove temporary access restriction '$deploymentLockRule' from $frontendAppNameResolved (exit code $LASTEXITCODE)."
+                        $cleanupErrors += "Failed to restore the main-site access restriction default action '$previousMainSiteDefaultAction' on $frontendAppNameResolved (exit code $LASTEXITCODE)."
                     }
                 }
                 catch {
-                    $cleanupErrors += "Failed to remove temporary access restriction '$deploymentLockRule' from ${frontendAppNameResolved}: $($_.Exception.Message)"
+                    $restoreFailure = $_
+                    try {
+                        if ($probeRuleAdded) {
+                            Set-MainSiteIpRestrictions `
+                                -AppResourceId $frontendResourceId `
+                                -Rules $mainSiteConfiguredRules
+                            Wait-MainSiteRulePresence `
+                                -AppName $frontendAppNameResolved `
+                                -RuleName $probeRuleName `
+                                -ExpectedPresent $false
+                        }
+                        & $azCommand.Source webapp config access-restriction set `
+                            --name $frontendAppNameResolved `
+                            --resource-group $ResourceGroup `
+                            --default-action Deny `
+                            --only-show-errors @subscriptionArgs | Out-Null
+                        if ($LASTEXITCODE -ne 0) { throw "Azure CLI exited with code $LASTEXITCODE." }
+                        Wait-MainSiteDefaultAction -AppName $frontendAppNameResolved -ExpectedAction Deny
+                        $null = Wait-MainSiteIpRestrictionActive -HostName $frontendDefaultHostName
+                        & $azCommand.Source functionapp stop --name $frontendAppNameResolved --resource-group $ResourceGroup --only-show-errors @subscriptionArgs
+                        $cleanupErrors += "Failed to restore and verify the main-site access restriction default action '$previousMainSiteDefaultAction' on $frontendAppNameResolved; the fail-secure Deny default was reapplied. Error=$($restoreFailure.Exception.Message)"
+                    }
+                    catch {
+                        $cleanupErrors += "Failed to restore the main-site access restriction default action '$previousMainSiteDefaultAction' and failed to reapply the Deny default on $frontendAppNameResolved. RestoreError=$($restoreFailure.Exception.Message); DenyError=$($_.Exception.Message)"
+                    }
+                }
                 }
             }
-            elseif ($deploymentLockMayExist) {
-                $cleanupErrors += "Temporary access restriction '$deploymentLockRule' was intentionally retained because mTLS restoration failed."
+            elseif ($deploymentLockChanged) {
+                $cleanupErrors += 'The deny-all main-site default action was intentionally retained because mTLS restoration was not confirmed.'
             }
 
-            if ($mTlsRestored -and $deploymentLockRemoved) {
-                try {
-                    & $azCommand.Source functionapp start --name $frontendAppNameResolved --resource-group $ResourceGroup --only-show-errors @subscriptionArgs
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-DeploymentLog -Message "Frontend restarted after protected deployment transaction; App=$frontendAppNameResolved."
-                    }
-                    else {
-                        $cleanupErrors += "Client certificate enforcement was restored, but $frontendAppNameResolved could not be restarted (exit code $LASTEXITCODE)."
-                    }
+            if ($mTlsRestored -and $deploymentLockRestored) {
+                if ($frontendWasRunning) {
+                    Write-DeploymentLog -Message "Frontend is running after protected deployment transaction; App=$frontendAppNameResolved."
                 }
-                catch {
-                    $cleanupErrors += "Client certificate enforcement was restored, but ${frontendAppNameResolved} could not be restarted: $($_.Exception.Message)"
+                else {
+                    Write-DeploymentLog -Message "Frontend remains stopped because it was stopped before deployment; App=$frontendAppNameResolved."
                 }
             }
             else {
@@ -678,18 +1054,20 @@ If the Frontend package push fails with an Azure CLI traceback ending in
 ``_get_app_settings_from_scm``, this is expected and handled automatically by this script:
 the Frontend enforces mandatory client certificates (``clientCertEnabled=true``), which also
 locks down its Kudu/SCM endpoint that ``az functionapp deployment source config-zip`` calls
-internally. This script first adds a deny-all access restriction to the main site (not SCM),
-stops the Frontend, pushes the package, restores enforcement, removes the restriction and
-then starts the app. The restriction remains effective when ``config-zip`` restarts the app.
-If the script is terminated mid-transaction, the main site remains blocked rather than being
-exposed without mTLS. Verify enforcement, remove the temporary rule and restart the app
-manually before considering the deployment complete:
+internally. Before changing mTLS, this script verifies that the main site starts with the
+``Allow`` default, has no explicit ``Allow`` restrictions, and that SCM does not inherit the
+main-site rules. It then temporarily sets the main-site default to ``Deny``, stops the
+Frontend, pushes the package, restores enforcement, restores ``Allow`` and starts the app.
+The deny default remains effective when ``config-zip`` restarts the app. If the script is
+terminated mid-transaction, the main site remains blocked rather than being exposed without
+mTLS. Verify enforcement and use the deployment log to confirm the original default action
+before restoring it and restarting the app manually:
 
 ``````powershell
 az functionapp show -g <rg-name> -n <frontend-app-name> --query clientCertEnabled -o tsv
 az functionapp update -g <rg-name> -n <frontend-app-name> --set clientCertEnabled=true
 az webapp config access-restriction show -g <rg-name> -n <frontend-app-name> -o table
-az webapp config access-restriction remove -g <rg-name> -n <frontend-app-name> --rule-name <LogCollectorDeploymentLock-...> --scm-site false
+az webapp config access-restriction set -g <rg-name> -n <frontend-app-name> --default-action Allow
 az functionapp start -g <rg-name> -n <frontend-app-name>
 ``````
 

@@ -113,7 +113,15 @@ Describe 'Core package configuration-bound detection' {
         foreach ($expected in @(
                 'function Write-DeploymentLog',
                 'function Protect-DeploymentLogValue',
-                'Deployment started; ScriptVersion=1.3.1',
+                'function Get-DeploymentPropertyValue',
+                'function Wait-MainSiteDefaultAction',
+                'function Wait-ClientCertificateEnabled',
+                'function Wait-FunctionAppState',
+                'function Set-MainSiteIpRestrictions',
+                'function Wait-MainSiteRulePresence',
+                'function Wait-MainSiteIpRestrictionActive',
+                'function Wait-MainSiteClientCertificateRequired',
+                'Deployment started; ScriptVersion=1.3.2',
                 'Starting Bicep deployment',
                 'Starting Frontend package deployment',
                 'Starting Worker package deployment',
@@ -127,18 +135,31 @@ Describe 'Core package configuration-bound detection' {
         $deploymentPublisherText | Should -Match '& \$azCommand\.Source deployment group create'
         $deploymentPublisherText | Should -Match '& \$azCommand\.Source functionapp stop'
         $deploymentPublisherText | Should -Match '& \$azCommand\.Source functionapp start'
-        $deploymentPublisherText | Should -Match 'webapp config access-restriction add'
-        $deploymentPublisherText | Should -Match 'webapp config access-restriction remove'
+        $deploymentPublisherText | Should -Match 'webapp config access-restriction show'
+        $deploymentPublisherText | Should -Match 'webapp config access-restriction set'
+        $deploymentPublisherText | Should -Match 'ipSecurityRestrictionsDefaultAction'
+        $deploymentPublisherText | Should -Match 'scmIpSecurityRestrictionsUseMain'
+        $deploymentPublisherText | Should -Match '\$explicitAllowRules'
+        $deploymentPublisherText | Should -Match 'The deployment stopped before changing mTLS'
+        $deploymentPublisherText | Should -Match 'x-ms-forbidden-ip'
+        $deploymentPublisherText | Should -Match 'Client Certificate Required'
+        $deploymentPublisherText | Should -Match 'defaultHostName'
+        $deploymentPublisherText | Should -Match 'Temporary LogCollector deployment mTLS verification'
+        $deploymentPublisherText | Should -Match 'api-version=2024-04-01'
+        $deploymentPublisherText | Should -Match '\$frontendWasRunning'
+        $deploymentPublisherText | Should -Match '--default-action Deny'
+        $deploymentPublisherText | Should -Match '--default-action \$previousMainSiteDefaultAction'
+        $deploymentPublisherText | Should -Not -Match 'webapp config access-restriction add'
         $deploymentPublisherText | Should -Match '\$frontendDeploymentFailure\s*=\s*\$_'
         $deploymentPublisherText | Should -Match 'PrimaryErrorType='
         $deploymentPublisherText | Should -Match 'CleanupErrors='
         ([regex]::Matches($deploymentPublisherText,
                 '(?s)finally\s*\{.*?try\s*\{.*?clientCertEnabled=true.*?\}\s*catch\s*\{')).Count |
             Should -BeGreaterThan 0
-        $deploymentPublisherText.IndexOf('access-restriction add') |
+        $deploymentPublisherText.IndexOf('--default-action Deny') |
             Should -BeLessThan $deploymentPublisherText.IndexOf('clientCertEnabled=false')
-        $deploymentPublisherText.IndexOf('clientCertEnabled=true') |
-            Should -BeLessThan $deploymentPublisherText.LastIndexOf('access-restriction remove')
+        $deploymentPublisherText.IndexOf('--set clientCertEnabled=true') |
+            Should -BeLessThan $deploymentPublisherText.LastIndexOf('--default-action $previousMainSiteDefaultAction')
         $deploymentPublisherText | Should -Match 'Protect-DeploymentLogValue \$SubscriptionId'
         $deploymentPublisherText | Should -Not -Match 'accessToken\s*='
         $deploymentPublisherText | Should -Not -Match 'Subscription=\$SubscriptionId'
