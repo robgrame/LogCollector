@@ -2,7 +2,7 @@
 .SYNOPSIS
 Shared telemetry facade for independent Windows PowerShell scripts.
 .NOTES
-Version 1.10.1. Import the manifest; no authentication, I/O or network calls occur on import.
+Version 1.10.2. Import the manifest; no authentication, I/O or network calls occur on import.
 #>
 Set-StrictMode -Version Latest
 

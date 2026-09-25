@@ -25,7 +25,9 @@ Describe 'Core installer diagnostics' {
         $script:Text | Should -Match '\$failure\.ScriptStackTrace'
         $script:Text | Should -Match 'throw \$failure'
         $script:Text | Should -Match 'Rollback completed; PreviousVersionRestored=True'
-        $script:Text | Should -Match 'Rollback failed; TargetOccupied=True'
+        $script:Text | Should -Match 'Rollback failed; '
+        $script:Text | Should -Match 'Endpoint configuration rollback failed:'
+        $script:Text | Should -Match 'Module rollback failed:'
     }
 
     It 'records start, configuration and successful completion without credentials' {

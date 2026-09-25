@@ -1,5 +1,5 @@
 @{
-    PackageVersion = '1.10.1'
+    PackageVersion = '1.10.2'
     Environment = ''
     # Names the %ProgramData%\<CustomerName>\<ApplicationName>\Logs tree that Write-CMTraceLog
     # writes to, so every script on the device logs under one predictable folder. Empty falls

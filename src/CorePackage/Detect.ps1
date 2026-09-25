@@ -11,7 +11,7 @@ Detection deliberately imports the module rather than only checking that files e
 package's promise is that `Import-Module LogCollector.Client` works for any script, and a
 present-but-unimportable module would otherwise be reported as a healthy install.
 .NOTES
-Version 1.10.1.
+Version 1.10.2.
 #>
 [CmdletBinding()]
 param()
@@ -69,7 +69,7 @@ function Test-ExpectedLogCollectorConfiguration {
 }
 
 try {
-    $version = '1.10.1'
+    $version = '1.10.2'
     $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "WindowsPowerShell\Modules\LogCollector.Client\$version"
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
         Write-CoreDetectionFailure -Reason 'ModuleDirectoryMissing'

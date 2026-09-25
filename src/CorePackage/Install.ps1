@@ -22,7 +22,7 @@ Overrides the customer folder in Config.psd1. This is the <CustomerName> in
 %ProgramData%\<CustomerName>\<ApplicationName>\Logs, where Write-CMTraceLog writes.
 Intended for a single-machine test install.
 .NOTES
-Version 1.10.1.
+Version 1.10.2.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -32,7 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$packageVersion = '1.10.1'
+$packageVersion = '1.10.2'
 
 $logCustomerName = 'LogCollector'
 $logApplicationName = 'LogCollectorCore'
