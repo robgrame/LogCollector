@@ -205,8 +205,9 @@ queue, the worker does not rely on that:
 - `httpsOnly`, TLS 1.2 minimum, FTPS disabled on both apps.
 - `clientCertMode: Required` with **no** `clientCertExclusionPaths`, including health. Any
   exclusion enables TLS renegotiation and App Service's fixed 100 KB upload limit.
-  Use an external certificate-bearing health probe; liveness does not validate certificate trust
-  at the application layer and is not proof of authorization.
+  App Service Health Check invokes `/api/health`; external probes require a trusted client
+  certificate. Liveness does not validate certificate trust at the application layer and is
+  not proof of authorization.
 
 ## Client-side posture
 

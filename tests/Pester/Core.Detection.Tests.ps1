@@ -104,6 +104,43 @@ Describe 'Core package configuration-bound detection' {
         $publisherText | Should -Match 'entraDeviceValidationEnabled = false'
         $mainBicep | Should -Match 'param entraDeviceValidationEnabled bool = true'
         $deploymentParameters | Should -Match 'param entraDeviceValidationEnabled = true'
+        $mainBicep | Should -Match "healthCheckPath:\s*'/api/health'"
+        $mainBicep | Should -Match "clientCertExclusionPaths:\s*''"
+    }
+
+    It 'generates detailed deployment logging without exposing subscription ids or tokens' {
+        $deploymentPublisherText = [IO.File]::ReadAllText($script:DeploymentPublisherPath)
+        foreach ($expected in @(
+                'function Write-DeploymentLog',
+                'function Protect-DeploymentLogValue',
+                'Deployment started; ScriptVersion=1.3.0',
+                'Starting Bicep deployment',
+                'Starting Frontend package deployment',
+                'Starting Worker package deployment',
+                'Detailed log: $LogPath')) {
+            $deploymentPublisherText | Should -Match ([regex]::Escape($expected))
+        }
+        $deploymentPublisherText | Should -Match '\[Diagnostics\.Stopwatch\]::StartNew\(\)'
+        $deploymentPublisherText | Should -Match 'ParameterFileSha256='
+        $deploymentPublisherText | Should -Match 'Get-Command az -CommandType Application -ErrorAction Stop \| Select-Object -First 1'
+        $deploymentPublisherText | Should -Match '& \$azCommand\.Source deployment group create'
+        $deploymentPublisherText | Should -Match '& \$azCommand\.Source functionapp stop'
+        $deploymentPublisherText | Should -Match '& \$azCommand\.Source functionapp start'
+        $deploymentPublisherText | Should -Match 'webapp config access-restriction add'
+        $deploymentPublisherText | Should -Match 'webapp config access-restriction remove'
+        $deploymentPublisherText | Should -Match '\$frontendDeploymentFailure\s*=\s*\$_'
+        $deploymentPublisherText | Should -Match 'PrimaryErrorType='
+        $deploymentPublisherText | Should -Match 'CleanupErrors='
+        ([regex]::Matches($deploymentPublisherText,
+                '(?s)finally\s*\{.*?try\s*\{.*?clientCertEnabled=true.*?\}\s*catch\s*\{')).Count |
+            Should -BeGreaterThan 0
+        $deploymentPublisherText.IndexOf('access-restriction add') |
+            Should -BeLessThan $deploymentPublisherText.IndexOf('clientCertEnabled=false')
+        $deploymentPublisherText.IndexOf('clientCertEnabled=true') |
+            Should -BeLessThan $deploymentPublisherText.LastIndexOf('access-restriction remove')
+        $deploymentPublisherText | Should -Match 'Protect-DeploymentLogValue \$SubscriptionId'
+        $deploymentPublisherText | Should -Not -Match 'accessToken\s*='
+        $deploymentPublisherText | Should -Not -Match 'Subscription=\$SubscriptionId'
     }
 
     It 'preserves relative module paths when creating the customer deliverable' {

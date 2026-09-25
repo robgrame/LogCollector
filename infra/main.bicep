@@ -749,8 +749,10 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
       http20Enabled: true
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      // Use an external certificate-bearing health probe instead.
-      healthCheckPath: ''
+      // App Service invokes this path internally. Keep it out of
+      // clientCertExclusionPaths: exclusions trigger TLS renegotiation and the
+      // 100 KB request limit, which is incompatible with telemetry ingestion.
+      healthCheckPath: '/api/health'
       appSettings: [
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'dotnet-isolated' }

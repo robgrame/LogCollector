@@ -221,8 +221,9 @@ submission would be rejected with "not an accepted ingestion target".
 
 Do **not** exclude `/api/health` from mTLS. App Service enables TLS renegotiation whenever
 `clientCertExclusionPaths` is nonempty, imposing a fixed **100 KB** upload limit and incompatible
-TLS 1.3/HTTP/2 behavior. The deployed app uses `Required`, no exclusions and no built-in
-unauthenticated health-check path; use an external certificate-bearing probe instead.
+TLS 1.3/HTTP/2 behavior. The deployed app uses `Required`, no exclusions, and binds the
+built-in App Service Health Check directly to `/api/health`. External probes still require
+a trusted client certificate.
 Health reports liveness/configuration, not full client authorization or ingestion success.
 See [Microsoft's mTLS guidance](https://learn.microsoft.com/en-us/azure/app-service/app-service-web-configure-tls-mutual-auth).
 
