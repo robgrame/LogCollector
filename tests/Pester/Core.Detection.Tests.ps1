@@ -133,7 +133,7 @@ Describe 'Core package configuration-bound detection' {
                 'function Get-WebResponseStatusDescription',
                 'function Wait-MainSiteIpRestrictionActive',
                 'function Wait-MainSiteClientCertificateRequired',
-                'Deployment started; ScriptVersion=1.3.5',
+                'Deployment started; ScriptVersion=1.3.6',
                 'Starting Bicep deployment',
                 'Starting Frontend package deployment',
                 'Starting Worker package deployment',
@@ -176,6 +176,127 @@ Describe 'Core package configuration-bound detection' {
         $deploymentPublisherText | Should -Match 'Protect-DeploymentLogValue \$SubscriptionId'
         $deploymentPublisherText | Should -Not -Match 'accessToken\s*='
         $deploymentPublisherText | Should -Not -Match 'Subscription=\$SubscriptionId'
+    }
+
+    It 'builds the complete customer release and strict integrity metadata' {
+        $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
+        $deploymentPublisherText = [IO.File]::ReadAllText($script:DeploymentPublisherPath)
+
+        foreach ($expected in @(
+                "Join-Path `$target '3-Inventory'",
+                "Join-Path `$target '4-Documentation'",
+                "'RELEASE-NOTES.md'",
+                "'Verify-Delivery.ps1'",
+                'InventoryPackageVersion = $inventoryVersion',
+                'LogCollector-Customer-$solutionVersion.zip',
+                'LogCollector-Deployment-$solutionVersion.zip',
+                'Publish-IntuneWin32Package.ps1',
+                'CreateFromDirectory')) {
+            $publisherText | Should -Match ([regex]::Escape($expected))
+        }
+        $publisherText | Should -Not -Match '\[Parameter\(Mandatory\)\]\s*\[uri\]\s*\$FrontendUrl'
+        $publisherText | Should -Match 'post-deployment Core generator'
+        $publisherText | Should -Match 'frontendIngestUrl'
+        $publisherText | Should -Match 'Where-Object \{ \$_.FullName -ne \$manifestPath \}'
+        $publisherText | Should -Match "'1-Azure\\Logs\\\*'"
+        $publisherText | Should -Match "'2-Intune\\Output\\\*'"
+        $publisherText | Should -Match "'2-Intune\\Tools\\\*'"
+        $deploymentPublisherText | Should -Match 'Deployment package integrity check failed'
+        $deploymentPublisherText | Should -Match 'Deployment file set differs from the manifest'
+        $deploymentPublisherText | Should -Match 'FileCount = \$hashes\.Count'
+        $deploymentPublisherText | Should -Match '__LOGCOLLECTOR_PARAMETER_FILE_BASE64__'
+        $deploymentPublisherText | Should -Not -Match "Replace\('__LOGCOLLECTOR_PARAMETER_FILE__'"
+        $deploymentPublisherText | Should -Match 'function Assert-DeploymentFileIntegrity'
+        $deploymentPublisherText | Should -Match 'function New-ProtectedDeploymentStagingDirectory'
+        $deploymentPublisherText | Should -Match 'SetAccessRuleProtection\(\$true, \$false\)'
+        $deploymentPublisherText | Should -Match '\$deploymentRoot'
+        $deploymentPublisherText | Should -Match 'Deployment source file is a reparse point'
+        $publisherText | Should -Match 'unexpected mutable-file list'
+    }
+
+    It 'executes the generated verifier against immutable, mutable and runtime files' {
+        $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
+        $verifierMatch = [regex]::Match(
+            $publisherText, "(?s)\`$verifier\s*=\s*@'\r?\n(.*?)\r?\n'@")
+        $verifierMatch.Success | Should -BeTrue
+
+        $root = Join-Path $TestDrive 'delivery'
+        $requiredFiles = @(
+            'README.md',
+            'RELEASE-NOTES.md',
+            'Verify-Delivery.ps1',
+            '1-Azure\Deploy-LogCollector.ps1',
+            '1-Azure\MANIFEST.json',
+            '1-Azure\Functions\Frontend.zip',
+            '1-Azure\Functions\Worker.zip',
+            '1-Azure\infra\test.bicepparam',
+            '2-Intune\New-IntunePackage.ps1',
+            '2-Intune\CoreSource\Config.psd1',
+            '3-Inventory\1.9.1\Output\Install.intunewin',
+            '3-Inventory\1.9.1\Detect.ps1',
+            '4-Documentation\paths-core-client.md',
+            '4-Documentation\paths-custom-inventory.md',
+            '4-Documentation\paths-other-scripts.md'
+        )
+        foreach ($relative in $requiredFiles) {
+            $path = Join-Path $root $relative
+            $null = New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force
+            Set-Content -LiteralPath $path -Value $relative -NoNewline
+        }
+
+        $verifier = $verifierMatch.Groups[1].Value.
+            Replace('__SOLUTION_VERSION__', '1.13.3').
+            Replace('__CORE_VERSION__', '1.11.1').
+            Replace('__INVENTORY_VERSION__', '1.9.1').
+            Replace('__SOURCE_COMMIT__', 'test-commit').
+            Replace(
+                '__MUTABLE_PARAMETER_FILE_BASE64__',
+                [Convert]::ToBase64String(
+                    [Text.Encoding]::UTF8.GetBytes('1-Azure\infra\test.bicepparam')))
+        $verifierPath = Join-Path $root 'Verify-Delivery.ps1'
+        [IO.File]::WriteAllText($verifierPath, $verifier, [Text.UTF8Encoding]::new($false))
+
+        $hashes = [ordered]@{}
+        foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse -Force | Sort-Object FullName) {
+            $relative = $file.FullName.Substring($root.Length).TrimStart('\')
+            $hashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+        }
+        $manifest = [ordered]@{
+            SolutionVersion = '1.13.3'
+            CorePackageVersion = '1.11.1'
+            InventoryPackageVersion = '1.9.1'
+            FileCount = $hashes.Count
+            SourceCommit = 'test-commit'
+            MutableFiles = @('1-Azure\infra\test.bicepparam')
+            Files = $hashes
+        }
+        $manifest | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $root 'MANIFEST.json') -Encoding utf8
+
+        { & $verifierPath } | Should -Not -Throw
+        Set-Content -LiteralPath (Join-Path $root '1-Azure\infra\test.bicepparam') `
+            -Value 'customer-edited' -NoNewline
+        foreach ($relative in @(
+                '1-Azure\Logs\deployment.log',
+                '2-Intune\Output\1.11.1\Package\Install.intunewin',
+                '2-Intune\Tools\IntuneWinAppUtil.exe')) {
+            $path = Join-Path $root $relative
+            $null = New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force
+            Set-Content -LiteralPath $path -Value 'runtime' -NoNewline
+        }
+        { & $verifierPath } | Should -Not -Throw
+
+        Set-Content -LiteralPath (Join-Path $root 'unexpected.txt') -Value 'unexpected' -NoNewline
+        { & $verifierPath } | Should -Throw '*Undeclared=*unexpected.txt*'
+        Remove-Item -LiteralPath (Join-Path $root 'unexpected.txt')
+        Set-Content -LiteralPath (Join-Path $root 'README.md') -Value 'tampered' -NoNewline
+        { & $verifierPath } | Should -Throw '*integrity check failed*README.md*'
+
+        Set-Content -LiteralPath (Join-Path $root 'README.md') -Value 'README.md' -NoNewline
+        $manifest.MutableFiles = @('README.md')
+        $manifest | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $root 'MANIFEST.json') -Encoding utf8
+        { & $verifierPath } | Should -Throw '*unexpected mutable-file list*'
     }
 
     It 'preserves relative module paths when creating the customer deliverable' {
