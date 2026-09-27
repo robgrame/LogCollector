@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.2.5. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.2.6. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -29,6 +29,8 @@ Set-StrictMode -Version Latest
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $repo 'out\Deploy' }
 if (-not $PSBoundParameters.ContainsKey('ParameterFile')) { $ParameterFile = Join-Path $repo 'infra\logcollector.bicepparam' }
+$OutputRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)
+$ParameterFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ParameterFile)
 if (-not (Test-Path -LiteralPath $ParameterFile -PathType Leaf)) { throw "Parameter file not found: $ParameterFile" }
 
 # The three project versions must agree; the package is named/versioned after them.

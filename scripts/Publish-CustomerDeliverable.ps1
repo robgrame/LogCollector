@@ -19,7 +19,7 @@ Folder under which a versioned deliverable folder is created. Defaults to '<repo
 Bicep parameter file bundled as the deployment default. Defaults to
 'infra\logcollector.bicepparam'.
 .NOTES
-Version 1.3.0. Builds via dotnet publish; makes no changes to Azure resources and never
+Version 1.3.1. Builds via dotnet publish; makes no changes to Azure resources and never
 overwrites an existing deliverable.
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -32,6 +32,10 @@ Set-StrictMode -Version Latest
 
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $repo 'out\Customer' }
+$OutputRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)
+if ($PSBoundParameters.ContainsKey('ParameterFile')) {
+    $ParameterFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ParameterFile)
+}
 
 function Get-ProjectVersion {
     param([string] $CsprojPath)

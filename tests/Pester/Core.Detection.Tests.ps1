@@ -76,6 +76,15 @@ Describe 'Core package configuration-bound detection' {
         $publisherText | Should -Not -Match '\$clientVersion'
     }
 
+    It 'resolves publisher output roots before mixing PowerShell and .NET file APIs' {
+        foreach ($path in @($script:PublisherPath, $script:DeploymentPublisherPath)) {
+            $publisherText = [IO.File]::ReadAllText($path)
+            $publisherText | Should -Match (
+                '\$OutputRoot\s*=\s*\$ExecutionContext\.SessionState\.Path\.' +
+                'GetUnresolvedProviderPathFromPSPath\(\$OutputRoot\)')
+        }
+    }
+
     It 'copies the canonical generator instead of embedding a second implementation' {
         $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
         $publisherText | Should -Match ([regex]::Escape(
