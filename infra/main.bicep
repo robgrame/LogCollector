@@ -115,7 +115,7 @@ param entraDeviceValidationEnabled bool = true
 @description('Minutes to cache successful Entra device validations in each frontend instance. Set to 0 to query Microsoft Graph for every request.')
 @minValue(0)
 @maxValue(1440)
-param entraDevicePositiveCacheMinutes int = 10
+param entraDevicePositiveCacheMinutes int = 240
 
 @description('Pipe-separated allow-list of Intune enrollment issuer subject DNs.')
 param intuneEnrollmentIssuerSubjects string = 'CN=Microsoft Intune MDM Device CA|CN=Microsoft Intune Device Management Device CA'

@@ -152,7 +152,7 @@ Only an existing, enabled device with the exact same device ID is accepted. A fo
 certificate alone cannot satisfy this lookup. Missing devices and disabled devices return 403;
 Graph outages or missing application consent fail intake and leave the client's spool intact.
 This verification is enabled by default through `EntraDeviceValidation__Enabled=true`.
-Successful lookups are cached in memory per frontend instance for 10 minutes by default through
+Successful lookups are cached in memory per frontend instance for 240 minutes by default through
 `EntraDeviceValidation__PositiveCacheMinutes`. Missing, disabled, malformed and failed Graph
 responses are never cached. Set the value to `0` to require a Graph lookup for every request.
 The cache reduces Graph latency and throttling at the cost of allowing a recently disabled device

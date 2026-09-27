@@ -12,7 +12,7 @@ public sealed class TelemetryIntakeOptionsTests
         var options = new EntraDeviceValidationOptions(TestCertificates.Config([]));
 
         Assert.True(options.Enabled);
-        Assert.Equal(TimeSpan.FromMinutes(10), options.PositiveCacheDuration);
+        Assert.Equal(TimeSpan.FromMinutes(240), options.PositiveCacheDuration);
     }
 
     [Fact]

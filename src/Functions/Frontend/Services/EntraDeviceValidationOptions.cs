@@ -5,7 +5,7 @@ namespace LogCollector.Frontend.Services;
 /// <summary>Controls the optional tenant-device lookup for Intune enrollment certificates.</summary>
 public sealed class EntraDeviceValidationOptions
 {
-    private const int DefaultPositiveCacheMinutes = 10;
+    private const int DefaultPositiveCacheMinutes = 240;
 
     public EntraDeviceValidationOptions(IConfiguration cfg)
     {

@@ -11,7 +11,7 @@ namespace LogCollector.Shared.Security;
 /// <summary>Checks tenant membership using the frontend identity's Microsoft Graph tenant.</summary>
 public sealed class GraphDeviceAuthorizer
 {
-    private static readonly TimeSpan DefaultPositiveCacheDuration = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan DefaultPositiveCacheDuration = TimeSpan.FromMinutes(240);
     private const int MaximumPositiveCacheEntries = 100_000;
     private readonly TokenCredential _credential;
     private readonly HttpClient _http;

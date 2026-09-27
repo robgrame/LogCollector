@@ -137,7 +137,7 @@ exists and is enabled in the customer's Entra tenant. Record this reduced-securi
 the customer deployment decision.
 
 Missing consent or unavailable Graph produces a failed submission, never an authorization bypass.
-Successful device lookups are cached in each frontend instance for 10 minutes by default. Configure
+Successful device lookups are cached in each frontend instance for 240 minutes by default. Configure
 `entraDevicePositiveCacheMinutes` in Bicep (range `0`–`1440`); `0` disables caching. Only positive
 authorization results are cached, so missing or disabled devices and Graph failures are rechecked
 on every request. A disabled device can remain authorized until an existing positive cache entry

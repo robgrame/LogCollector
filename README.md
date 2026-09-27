@@ -134,8 +134,8 @@ Graph and requires an enabled device in its identity's tenant. This requires Gra
 **Device.Read.All (application)**. Customers unable to grant it can explicitly set
 `EntraDeviceValidation__Enabled=false`; mTLS, signing, anti-replay and certificate/device binding
 remain enforced, but tenant membership is no longer proven.
-Successful Entra device checks are cached per frontend instance for 10 minutes by default
-(`EntraDeviceValidation__PositiveCacheMinutes=10`); negative results and Graph errors are not cached.
+Successful Entra device checks are cached per frontend instance for 240 minutes by default
+(`EntraDeviceValidation__PositiveCacheMinutes=240`); negative results and Graph errors are not cached.
 
 Then, at the data layer, `TelemetryRowFactory` writes the server-asserted identity columns **after**
 copying client fields, so a record containing its own `EntraDeviceId` cannot spoof attribution.
