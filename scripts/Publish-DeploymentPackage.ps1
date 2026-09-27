@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.2.7. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.2.8. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -586,7 +586,7 @@ function New-ProtectedDeploymentStagingDirectory {
 }
 
 Write-DeploymentLog -Message (
-    "Deployment started; ScriptVersion=1.3.6; PowerShell=$($PSVersionTable.PSVersion); " +
+    "Deployment started; ScriptVersion=1.3.7; PowerShell=$($PSVersionTable.PSVersion); " +
     "ProcessId=$PID; LogPath=$LogPath.")
 Write-DeploymentLog -Message (
     "Requested scope; Subscription=$(Protect-DeploymentLogValue $SubscriptionId); " +

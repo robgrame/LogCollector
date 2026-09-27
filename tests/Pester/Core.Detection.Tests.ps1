@@ -133,7 +133,7 @@ Describe 'Core package configuration-bound detection' {
                 'function Get-WebResponseStatusDescription',
                 'function Wait-MainSiteIpRestrictionActive',
                 'function Wait-MainSiteClientCertificateRequired',
-                'Deployment started; ScriptVersion=1.3.6',
+                'Deployment started; ScriptVersion=1.3.7',
                 'Starting Bicep deployment',
                 'Starting Frontend package deployment',
                 'Starting Worker package deployment',

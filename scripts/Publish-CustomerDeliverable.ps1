@@ -27,7 +27,7 @@ Log Analytics application inventory table used by the Inventory package.
 Optional explicit path to Microsoft's signed IntuneWinAppUtil.exe. When omitted, the
 canonical Core and Inventory builders search the repository tools folder and PATH.
 .NOTES
-Version 1.4.0. Builds via dotnet publish; makes no changes to Azure resources and never
+Version 1.4.1. Builds via dotnet publish; makes no changes to Azure resources and never
 overwrites an existing deliverable.
 #>
 [CmdletBinding(SupportsShouldProcess)]

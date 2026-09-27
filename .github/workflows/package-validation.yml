@@ -30,22 +30,48 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Download verified Microsoft Intune packaging tool
+        shell: pwsh
+        run: |
+          $toolDirectory = Join-Path $env:RUNNER_TEMP 'IntuneWinAppUtil'
+          $toolPath = Join-Path $toolDirectory 'IntuneWinAppUtil.exe'
+          $null = New-Item -ItemType Directory -Path $toolDirectory -Force
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri 'https://raw.githubusercontent.com/microsoft/Microsoft-Win32-Content-Prep-Tool/v1.8.7/IntuneWinAppUtil.exe' `
+            -OutFile $toolPath
+          $expectedHash = 'C1BA45B5CB939E84AF064BB7FF4B38FB3DFE33C8DC1078FD9B157672EAE671F6'
+          if ((Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash -ne $expectedHash) {
+              throw 'IntuneWinAppUtil.exe failed SHA256 verification.'
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $toolPath
+          if ($signature.Status -ne 'Valid' -or
+              $signature.SignerCertificate.Subject -notmatch '(?i)O=Microsoft Corporation') {
+              throw 'IntuneWinAppUtil.exe failed Microsoft Authenticode verification.'
+          }
+          "INTUNEWIN_TOOL=$toolPath" >> $env:GITHUB_ENV
+
       - name: Build and verify packages
         shell: pwsh
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'logcollector-packages'
           $null = New-Item -ItemType Directory -Path $root -Force
-          $deployment = .\scripts\Publish-DeploymentPackage.ps1 -OutputRoot (Join-Path $root 'deployment') |
+          $customer = .\scripts\Publish-CustomerDeliverable.ps1 `
+              -OutputRoot $root `
+              -IntuneWinAppUtilPath $env:INTUNEWIN_TOOL |
               Select-Object -Last 1
-          $customer = .\scripts\Publish-CustomerDeliverable.ps1 -OutputRoot (Join-Path $root 'customer') |
-              Select-Object -Last 1
-          Compress-Archive -LiteralPath $deployment.PackagePath -DestinationPath (Join-Path $root "LogCollector-Deployment-$($deployment.Version).zip")
-          Compress-Archive -LiteralPath $customer.DeliverablePath -DestinationPath (Join-Path $root "LogCollector-Customer-$($customer.SolutionVersion).zip")
+          & (Join-Path $customer.DeliverablePath 'Verify-Delivery.ps1')
+          foreach ($path in @($customer.CustomerZip, $customer.DeploymentZip)) {
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                  throw "Expected package was not generated: $path"
+              }
+          }
 
       - name: Upload validated packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: validated-packages
-          path: ${{ runner.temp }}\logcollector-packages\*.zip
+          path: |
+            ${{ runner.temp }}\logcollector-packages\*.zip
+            ${{ runner.temp }}\logcollector-packages\*.sha256
           if-no-files-found: error
           retention-days: 14

@@ -75,6 +75,26 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Download verified Microsoft Intune packaging tool
+        shell: pwsh
+        run: |
+          $toolDirectory = Join-Path $env:RUNNER_TEMP 'IntuneWinAppUtil'
+          $toolPath = Join-Path $toolDirectory 'IntuneWinAppUtil.exe'
+          $null = New-Item -ItemType Directory -Path $toolDirectory -Force
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri 'https://raw.githubusercontent.com/microsoft/Microsoft-Win32-Content-Prep-Tool/v1.8.7/IntuneWinAppUtil.exe' `
+            -OutFile $toolPath
+          $expectedHash = 'C1BA45B5CB939E84AF064BB7FF4B38FB3DFE33C8DC1078FD9B157672EAE671F6'
+          if ((Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash -ne $expectedHash) {
+              throw 'IntuneWinAppUtil.exe failed SHA256 verification.'
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $toolPath
+          if ($signature.Status -ne 'Valid' -or
+              $signature.SignerCertificate.Subject -notmatch '(?i)O=Microsoft Corporation') {
+              throw 'IntuneWinAppUtil.exe failed Microsoft Authenticode verification.'
+          }
+          "INTUNEWIN_TOOL=$toolPath" >> $env:GITHUB_ENV
+
       - name: Verify tag and build release assets
         id: assets
         shell: pwsh
@@ -87,15 +107,12 @@ jobs:
 
           $root = Join-Path $env:RUNNER_TEMP 'release'
           $null = New-Item -ItemType Directory -Path $root -Force
-          $deployment = .\scripts\Publish-DeploymentPackage.ps1 -OutputRoot (Join-Path $root 'deployment') |
+          $customer = .\scripts\Publish-CustomerDeliverable.ps1 `
+              -OutputRoot $root `
+              -IntuneWinAppUtilPath $env:INTUNEWIN_TOOL |
               Select-Object -Last 1
-          $customer = .\scripts\Publish-CustomerDeliverable.ps1 -OutputRoot (Join-Path $root 'customer') |
-              Select-Object -Last 1
-          $deploymentZip = Join-Path $root "LogCollector-Deployment-$version.zip"
-          $customerZip = Join-Path $root "LogCollector-Customer-$version.zip"
-          Compress-Archive -LiteralPath $deployment.PackagePath -DestinationPath $deploymentZip
-          Compress-Archive -LiteralPath $customer.DeliverablePath -DestinationPath $customerZip
-          Get-FileHash $deploymentZip, $customerZip -Algorithm SHA256 |
+          & (Join-Path $customer.DeliverablePath 'Verify-Delivery.ps1')
+          Get-FileHash $customer.DeploymentZip, $customer.CustomerZip -Algorithm SHA256 |
               ForEach-Object { "$($_.Hash)  $([IO.Path]::GetFileName($_.Path))" } |
               Set-Content (Join-Path $root 'SHA256SUMS.txt')
           "root=$root" >> $env:GITHUB_OUTPUT
@@ -108,7 +125,7 @@ jobs:
         run: |
           $tag = $env:GITHUB_REF_NAME
           $assets = Get-ChildItem $env:RELEASE_ROOT -File |
-              Where-Object Extension -In '.zip', '.txt' |
+              Where-Object Extension -In '.zip', '.txt', '.sha256' |
               ForEach-Object FullName
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {

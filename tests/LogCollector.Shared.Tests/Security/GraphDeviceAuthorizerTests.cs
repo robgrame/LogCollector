@@ -121,17 +121,25 @@ public sealed class GraphDeviceAuthorizerTests
     [Fact]
     public async Task CancelledWaiterDoesNotRetainNegativeLookup()
     {
-        var handler = new Handler(HttpStatusCode.NotFound, "{}", TimeSpan.FromMilliseconds(50));
+        var handler = new ControlledNegativeHandler();
         using var http = new HttpClient(handler);
         var authorizer = new GraphDeviceAuthorizer(
             new Credential(), http, TimeSpan.FromMinutes(10));
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
+        using var cancellation = new CancellationTokenSource();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            authorizer.IsEnabledTenantDeviceAsync(DeviceId, cancellation.Token));
-        await Task.Delay(100);
+        var cancelledWaiter = authorizer.IsEnabledTenantDeviceAsync(DeviceId, cancellation.Token);
+        await handler.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledWaiter);
+        handler.ReleaseFirstRequest.TrySetResult();
+        await handler.FirstRequestReturned.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.False(await authorizer.IsEnabledTenantDeviceAsync(DeviceId, default));
+        for (var attempt = 0; attempt < 50 && handler.Calls < 2; attempt++)
+        {
+            Assert.False(await authorizer.IsEnabledTenantDeviceAsync(DeviceId, default));
+            if (handler.Calls < 2)
+                await Task.Delay(10);
+        }
         Assert.Equal(2, handler.Calls);
     }
 
@@ -155,6 +163,36 @@ public sealed class GraphDeviceAuthorizerTests
             if (delay is not null)
                 await Task.Delay(delay.Value, ct);
             return new HttpResponseMessage(status) { Content = new StringContent(body) };
+        }
+    }
+
+    private sealed class ControlledNegativeHandler : HttpMessageHandler
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+        public TaskCompletionSource FirstRequestStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstRequest { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource FirstRequestReturned { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken ct)
+        {
+            var call = Interlocked.Increment(ref _calls);
+            if (call == 1)
+            {
+                FirstRequestStarted.TrySetResult();
+                await ReleaseFirstRequest.Task.WaitAsync(ct);
+                FirstRequestReturned.TrySetResult();
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent("{}")
+            };
         }
     }
 
