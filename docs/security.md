@@ -152,6 +152,11 @@ Only an existing, enabled device with the exact same device ID is accepted. A fo
 certificate alone cannot satisfy this lookup. Missing devices and disabled devices return 403;
 Graph outages or missing application consent fail intake and leave the client's spool intact.
 This verification is enabled by default through `EntraDeviceValidation__Enabled=true`.
+Successful lookups are cached in memory per frontend instance for 10 minutes by default through
+`EntraDeviceValidation__PositiveCacheMinutes`. Missing, disabled, malformed and failed Graph
+responses are never cached. Set the value to `0` to require a Graph lookup for every request.
+The cache reduces Graph latency and throttling at the cost of allowing a recently disabled device
+to remain authorized until its positive entry expires.
 
 The intended customer tenant must be the tenant hosting the frontend identity. Grant that identity
 Microsoft Graph `Device.Read.All` application permission when using Intune fallback. Keep shared

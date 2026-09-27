@@ -12,6 +12,7 @@ public sealed class TelemetryIntakeOptionsTests
         var options = new EntraDeviceValidationOptions(TestCertificates.Config([]));
 
         Assert.True(options.Enabled);
+        Assert.Equal(TimeSpan.FromMinutes(10), options.PositiveCacheDuration);
     }
 
     [Fact]
@@ -24,6 +25,35 @@ public sealed class TelemetryIntakeOptionsTests
 
         Assert.Contains("true", exception.Message);
         Assert.Contains("false", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("15", 15)]
+    [InlineData("1440", 1440)]
+    public void EntraPositiveCacheDurationIsConfigurable(string configured, int expectedMinutes)
+    {
+        var config = TestCertificates.Config(
+            [("EntraDeviceValidation:PositiveCacheMinutes", configured)]);
+
+        var options = new EntraDeviceValidationOptions(config);
+
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), options.PositiveCacheDuration);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("1441")]
+    [InlineData("10.5")]
+    public void InvalidEntraPositiveCacheDurationFailsStartup(string configured)
+    {
+        var config = TestCertificates.Config(
+            [("EntraDeviceValidation:PositiveCacheMinutes", configured)]);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => new EntraDeviceValidationOptions(config));
+
+        Assert.Contains("0 to 1440", exception.Message);
     }
 
     [Theory]
