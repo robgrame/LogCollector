@@ -122,7 +122,7 @@ Describe 'New-CustomerInventorySchema' {
             @(
                 [pscustomobject]@{
                     AssetTag = 'A-0001'
-                    Metadata = [pscustomobject]@{ Region = 'eu'; Password = 'nested-secret-value' }
+                    Metadata = [pscustomobject]@{ Region = 'eu'; Password = '<sample-secret-value>' }
                 }
             ) | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $samplePath -Encoding utf8
 
@@ -131,7 +131,7 @@ Describe 'New-CustomerInventorySchema' {
                 -Source 'AssetTagCollector' -OutputDirectory $outDir -WarningAction SilentlyContinue
 
             $sampleText = Get-Content -LiteralPath $result.SchemaSamplePath -Raw
-            $sampleText | Should -Not -Match 'nested-secret-value'
+            $sampleText | Should -Not -Match 'sample-secret-value'
             $sampleText | Should -Match 'redacted'
             $sampleText | Should -Match 'eu'
         }
