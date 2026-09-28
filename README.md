@@ -3,6 +3,9 @@
 Purpose-independent, certificate-authenticated device telemetry ingestion into Azure Monitor.
 Inventory, remediation results, health checks and other scripts share the same ingestion platform.
 
+Current release versions: **Azure backend 1.13.4**, **LogCollector Core / Client 1.11.1**,
+and **Custom Inventory 1.9.1**.
+
 A script on each device produces records, signs them with the device's own certificate, and
 posts it over mutual TLS to a frontend Azure Function. The frontend authenticates the device, parks
 the payload in Blob storage, and enqueues a pointer on Service Bus. A worker Function drains the
@@ -21,7 +24,7 @@ not another Function or a platform code change. See the
 [customer procedure for adding a telemetry collection](docs/customer-add-telemetry-collection.md)
 and [Adding a purpose](docs/operations.md#adding-a-purpose).
 
-Backend **1.2.2** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
+Backend **1.13.4** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
 `LOGCOLLECTOR-INVENTORY-V1` wire format. `/api/inventory` is an explicit compatibility alias through
 the **same** authentication and processing path. Existing inventory packages, table names, queues,
 retained blobs and spool entries are not renamed or rewritten.
@@ -134,6 +137,8 @@ Graph and requires an enabled device in its identity's tenant. This requires Gra
 **Device.Read.All (application)**. Customers unable to grant it can explicitly set
 `EntraDeviceValidation__Enabled=false`; mTLS, signing, anti-replay and certificate/device binding
 remain enforced, but tenant membership is no longer proven.
+Successful Entra device checks are cached per frontend instance for 240 minutes by default
+(`EntraDeviceValidation__PositiveCacheMinutes=240`); negative results and Graph errors are not cached.
 
 Then, at the data layer, `TelemetryRowFactory` writes the server-asserted identity columns **after**
 copying client fields, so a record containing its own `EntraDeviceId` cannot spoof attribution.
@@ -275,7 +280,7 @@ metadata rather than a transcript of payloads or HTTP response bodies.
 
 The current package source is **1.7.0** and includes shared client **1.9.0**, including schema-sample export.
 Existing installed packages remain compatible with their configured inventory endpoints and tables.
-The folder-only builder creates `out\Inventory\1.7.0`, ready for Intune Win32 packaging with `Install.ps1`
+The folder-only builder creates `out\Inventory\1.9.1`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
 environment and table names are supplied as configuration; `-DeviceTableName` and
 `-AppTableName` default to **DeviceInventory_CL** and **AppInventory_CL** to retain existing
@@ -470,6 +475,35 @@ Deploy it with:
 ```powershell
 .\Deploy-LogCollector.ps1 -SubscriptionId <sub-id> -ResourceGroup LOGCOLLECTOR-RG -Location italynorth
 ```
+
+### Complete customer release
+
+To create the complete versioned handoff, including Azure deployment files, the Core
+post-deployment generator, a prebuilt Inventory package, documentation, strict manifests,
+ZIP archives and external SHA-256 sidecars:
+
+```powershell
+.\scripts\Publish-CustomerDeliverable.ps1 -OutputRoot .\Artifacts\MSLabs
+```
+
+The prebuilt Inventory step requires the official Microsoft-signed
+`IntuneWinAppUtil.exe` under `tools\IntuneWinAppUtil` or supplied through
+`-IntuneWinAppUtilPath`.
+
+The publisher does **not** require an intake URL. Deploy `1-Azure` first; its deployment script
+prints `frontendIngestUrl`. Then create the customer-specific Core package:
+
+```powershell
+cd .\Artifacts\MSLabs\<version>\2-Intune
+.\New-IntunePackage.ps1 `
+  -FrontendUrl '<frontendIngestUrl>' `
+  -CustomerName '<customer-name>' `
+  -Environment Production
+```
+
+Inventory obtains the endpoint, customer, environment and certificate policy from Core, so
+`3-Inventory` does not contain or require a separate intake URL. Run `Verify-Delivery.ps1`
+before deployment and compare the external ZIP checksum through an authenticated channel.
 
 ### 3. Devices
 

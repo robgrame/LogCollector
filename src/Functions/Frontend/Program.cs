@@ -80,11 +80,23 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<ILogger<EntraDeviceValidationOptions>>().LogWarning(
             "Entra device validation is disabled. Intune submissions will not be checked for tenant membership.");
     }
+    else
+    {
+        sp.GetRequiredService<ILogger<EntraDeviceValidationOptions>>().LogInformation(
+            "Entra device validation is enabled with a positive cache duration of {CacheDuration}.",
+            options.PositiveCacheDuration);
+    }
     return options;
 });
 builder.Services.AddSingleton<TelemetryPointerPublisher>();
 builder.Services.AddHostedService<NonceCleanupService>();
-builder.Services.AddHttpClient<GraphDeviceAuthorizer>(client => client.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddHttpClient("MicrosoftGraph", client => client.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddSingleton(sp => new GraphDeviceAuthorizer(
+    sp.GetRequiredService<Azure.Core.TokenCredential>(),
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient("MicrosoftGraph"),
+    sp.GetRequiredService<EntraDeviceValidationOptions>().PositiveCacheDuration,
+    TimeProvider.System,
+    sp.GetRequiredService<ILogger<GraphDeviceAuthorizer>>()));
 
 builder.Build().Run();
 

@@ -1,37 +1,56 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Builds the single folder handed to the customer: the Azure deployment package and a
-self-contained generator for the shared Intune Win32 Core package.
+Builds the complete customer release: Azure deployment, Core generator, prebuilt Inventory
+Intune packages, documentation, integrity verification, ZIP archives and checksums.
 .DESCRIPTION
-Produces '<OutputRoot>\<version>' containing two ready-to-run entry points:
+Produces '<OutputRoot>\<version>' containing four customer-ready sections:
 
   1-Azure\Deploy-LogCollector.ps1   deploys infrastructure and the pre-built Function apps
-  2-Intune\New-IntunePackage.ps1    builds the shared Core .intunewin package
+  2-Intune                          shared Core source and post-deployment generator
+  3-Inventory                       prebuilt Custom Inventory package and detection script
+  4-Documentation                   component path references
 
-The Azure part is produced by Publish-DeploymentPackage.ps1 and keeps its internal layout
-untouched. The Intune part bundles the client sources so the customer never needs this
-repository, the .NET SDK or PowerShell modules from the build machine: only the Azure CLI
-(to deploy) and Microsoft's IntuneWinAppUtil.exe (to package).
+The release folder also contains release notes, a strict SHA-256 verifier and a complete
+manifest. Customer and Azure-only ZIP archives plus external SHA-256 sidecars are created
+beside the versioned folder.
 .PARAMETER OutputRoot
 Folder under which a versioned deliverable folder is created. Defaults to '<repo>\out\Customer'.
 .PARAMETER ParameterFile
 Bicep parameter file bundled as the deployment default. Defaults to
 'infra\logcollector.bicepparam'.
+.PARAMETER DeviceTableName
+Log Analytics device inventory table used by the Inventory package.
+.PARAMETER AppTableName
+Log Analytics application inventory table used by the Inventory package.
+.PARAMETER IntuneWinAppUtilPath
+Optional explicit path to Microsoft's signed IntuneWinAppUtil.exe. When omitted, the
+canonical Core and Inventory builders search the repository tools folder and PATH.
 .NOTES
-Version 1.3.0. Builds via dotnet publish; makes no changes to Azure resources and never
+Version 1.4.1. Builds via dotnet publish; makes no changes to Azure resources and never
 overwrites an existing deliverable.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [ValidateNotNullOrEmpty()] [string] $OutputRoot,
-    [ValidateNotNullOrEmpty()] [string] $ParameterFile
+    [ValidateNotNullOrEmpty()] [string] $ParameterFile,
+    [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $DeviceTableName = 'DeviceInventory_CL',
+    [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,96}_CL$')] [string] $AppTableName = 'AppInventory_CL',
+    [string] $IntuneWinAppUtilPath
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $repo 'out\Customer' }
+$OutputRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)
+if ($PSBoundParameters.ContainsKey('ParameterFile')) {
+    $ParameterFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ParameterFile)
+}
+if ($PSBoundParameters.ContainsKey('IntuneWinAppUtilPath')) {
+    $IntuneWinAppUtilPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+        $IntuneWinAppUtilPath)
+}
 
 function Get-ProjectVersion {
     param([string] $CsprojPath)
@@ -103,8 +122,31 @@ if ($coreVersion -ne $moduleManifest.Version.ToString()) {
     throw ("Core package version '$coreVersion' does not match the shared module version " +
         "'$($moduleManifest.Version)'. They ship together and must be bumped together.")
 }
+$inventoryVersion = (Import-PowerShellDataFile -LiteralPath (
+        Join-Path $repo 'src\InventoryPackage\Config.psd1')).PackageVersion
+$sourceCommit = try {
+    $resolvedCommit = (& git -C $repo rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $resolvedCommit) { 'unknown' } else { $resolvedCommit }
+}
+catch { 'unknown' }
+$mutableParameterFile = "1-Azure\infra\$([IO.Path]::GetFileName($parameterFileToScan))"
+$mutableParameterFileBase64 = [Convert]::ToBase64String(
+    [Text.Encoding]::UTF8.GetBytes($mutableParameterFile))
 
-if (-not $PSCmdlet.ShouldProcess($target, 'Create customer deliverable (Azure deployment package + Intune package generator)')) { return }
+$customerZip = Join-Path $OutputRoot "LogCollector-Customer-$solutionVersion.zip"
+$deploymentZip = Join-Path $OutputRoot "LogCollector-Deployment-$solutionVersion.zip"
+$customerChecksum = "$customerZip.sha256"
+$deploymentChecksum = "$deploymentZip.sha256"
+foreach ($output in @($target, $customerZip, $deploymentZip, $customerChecksum, $deploymentChecksum)) {
+    if (Test-Path -LiteralPath $output) {
+        throw "Output already exists: $output. Customer releases are never overwritten."
+    }
+}
+
+if (-not $PSCmdlet.ShouldProcess(
+        $target, 'Create complete customer release with Azure, Core generator, Inventory and documentation')) {
+    return
+}
 
 $null = New-Item -ItemType Directory -Path $target -Force
 
@@ -116,11 +158,13 @@ $azureTarget = Join-Path $target '1-Azure'
 Move-Item -LiteralPath $azure.PackagePath -Destination $azureTarget
 Remove-Item -LiteralPath (Join-Path $target 'azure-staging') -Recurse -Force
 
-# --- 2-Intune ------------------------------------------------------------------------
+# --- 2-Intune: source and post-deployment Core generator -------------------------------
 $intune = Join-Path $target '2-Intune'
 $corePayload = Join-Path $intune 'CoreSource'
 $null = New-Item -ItemType Directory -Path (Join-Path $corePayload 'Modules') -Force
-foreach ($file in $coreFiles) { Copy-Item -LiteralPath (Join-Path $coreSource $file) -Destination (Join-Path $corePayload $file) }
+foreach ($file in $coreFiles) {
+    Copy-Item -LiteralPath (Join-Path $coreSource $file) -Destination (Join-Path $corePayload $file)
+}
 foreach ($file in $moduleManifestData.FileList) {
     $destination = Join-Path $corePayload "Modules\$file"
     $null = New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force
@@ -131,95 +175,39 @@ $generatorSource = Join-Path $PSScriptRoot 'New-IntunePackage.ps1'
 if (-not (Test-Path -LiteralPath $generatorSource -PathType Leaf)) {
     throw "Missing Intune package generator source: $generatorSource"
 }
-Copy-Item -LiteralPath $generatorSource -Destination (Join-Path $intune 'New-IntunePackage.ps1') -ErrorAction Stop
+Copy-Item -LiteralPath $generatorSource -Destination (Join-Path $intune 'New-IntunePackage.ps1')
 
-# Microsoft's content prep tool cannot be redistributed, so ship the drop location and the
-# instructions instead: New-IntunePackage.ps1 searches this folder recursively.
 $toolsDir = Join-Path $intune 'Tools'
 $null = New-Item -ItemType Directory -Path $toolsDir -Force
 $toolsReadme = @"
-# Tools
+# Microsoft Win32 Content Prep Tool
 
-Place Microsoft's **IntuneWinAppUtil.exe** (Win32 Content Prep Tool) in this folder.
-``New-IntunePackage.ps1`` searches here recursively, so either the bare executable or the
-whole unzipped release folder works, and no ``-IntuneWinAppUtilPath`` argument is needed.
-Keep only **one** copy here: if several are found the generator stops and lists them rather
-than guessing which one you meant.
+``IntuneWinAppUtil.exe`` is not redistributed in this release. Download the official,
+Microsoft-signed tool from:
+https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
 
-Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
-
-The executable is verified before it is run: it must carry a valid Authenticode signature
-issued to **Microsoft Corporation**. Download it only from the official repository above.
-
-The tool is Microsoft's and is not redistributed with this delivery. If it is absent, the
-generator also looks on ``PATH``, and otherwise fails with a message pointing back here.
+Place one copy under this folder before rebuilding Core. The included generator validates
+the Authenticode signature and refuses non-Microsoft or ambiguous executables.
 "@
-[IO.File]::WriteAllText((Join-Path $toolsDir 'README.md'), $toolsReadme, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText(
+    (Join-Path $toolsDir 'README.md'), $toolsReadme, [Text.UTF8Encoding]::new($false))
 
-$intuneGuide = @"
-# Deploying LogCollector Core with Intune
+$coreGuide = @"
+# Deploying LogCollector Core $coreVersion with Intune
 
-Core package version **$coreVersion**. This package installs only the shared
-``LogCollector.Client`` PowerShell module and its protected machine-wide configuration.
-It does not contain inventory collectors, application scripts or scheduled tasks.
-
-## 1. Prerequisites
-
-* **IntuneWinAppUtil.exe** - Microsoft Win32 Content Prep Tool.
-  Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
-  Microsoft's licence does not allow us to redistribute it, so it is **not** included here.
-  Drop the downloaded ``IntuneWinAppUtil.exe`` (or the whole unzipped release folder) into
-  ``2-Intune\Tools\`` and the generator finds it by itself - no path parameter needed.
-  Alternatively pass ``-IntuneWinAppUtilPath`` or put it on ``PATH``.
-  Whatever the source, the generator refuses to run it unless it carries a valid Authenticode
-  signature issued to Microsoft Corporation, so download it only from the official repository.
-* Windows PowerShell 5.1 or PowerShell 7 to run the generator.
-* The intake endpoint of your deployment, printed by ``1-Azure\Deploy-LogCollector.ps1`` as
-  **``frontendIngestUrl``**.
-* Intune permissions to create and assign a Win32 app.
-* The application packages, including Inventory, are maintained and deployed separately.
-
-## 2. Build the Core package
+Deploy Azure first. ``1-Azure\Deploy-LogCollector.ps1`` prints ``frontendIngestUrl``;
+use that customer-specific URL to build Core:
 
 ``````powershell
 .\New-IntunePackage.ps1 ``
-  -FrontendUrl  https://<prefix>-logcollector-intake.azurewebsites.net/api/submit ``
-  -CustomerName ACIInformatica ``
+  -FrontendUrl  <frontendIngestUrl> ``
+  -CustomerName <customer-name> ``
   -Environment  Production
 ``````
 
-(With ``IntuneWinAppUtil.exe`` in ``.\Tools\`` no tool path is needed; otherwise add
-``-IntuneWinAppUtilPath C:\Tools\IntuneWinAppUtil.exe``.)
-
-The command prints ``ContentPrepTool``, ``PackageSha256`` and ``ConfigurationSha256``.
-It produces one Core release:
-
-| Path | Contents |
-| --- | --- |
-| ``Output\$coreVersion\Package\Install.intunewin`` | Core package to upload to Intune |
-| ``Output\$coreVersion\Detect.ps1`` | Configuration-bound Core detection script |
-| ``Output\$coreVersion\Source`` | Core installer, configuration and module files |
-
-``Source`` and ``Package`` are kept apart so the tool never wraps its own output.
-
-### Optional parameters
-
-| Parameter | Default | Purpose |
-| --- | --- | --- |
-| ``-Environment`` | *(empty)* | Free-text tag stored with every record |
-| ``-CustomerName`` | ``LogCollector`` | Customer folder used by shared CMTrace logs |
-| ``-PkiRootCaThumbprints`` | ``@()`` | Restrict client certificates to specific root CAs |
-| ``-PkiIntermediateCaThumbprints`` | ``@()`` | Restrict to specific intermediate CAs |
-
-By default the client selects its **Intune device certificate** automatically. The PKI
-parameters are only needed when the endpoints must present a certificate from your own PKI.
-
-## 3. Create the Win32 app in Intune
-
-**Apps > Windows > Add > Windows app (Win32)**, then upload
-``Output\$coreVersion\Package\Install.intunewin``.
-
-**Program** page - each command is a single line:
+The generator produces ``Output\$coreVersion\Package\Install.intunewin`` and a matching
+``Output\$coreVersion\Detect.ps1``. Create a Windows Win32 app, run it in System context
+with 64-bit PowerShell, and always upload both files from the same generator run.
 
 Install command:
 
@@ -227,262 +215,284 @@ Install command:
 "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ".\Install.ps1"
 ``````
 
-Uninstall command (the expected-version guard makes an old Intune uninstall a no-op after
-a newer Core release has replaced the stable module directory):
+Uninstall command:
 
 ``````text
 "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\Uninstall.ps1" -ExpectedVersion $coreVersion
 ``````
 
-``Sysnative`` prevents Intune Management Extension from redirecting to 32-bit PowerShell,
-which the installer refuses. For manual tests from an already 64-bit console use
-``System32`` instead, and expand the variables with PowerShell syntax rather than ``%...%``.
-
-| Setting | Value |
-| --- | --- |
-| Install behavior | System |
-| Device restart behavior | No specific action |
-| Return codes | 0 = Success, 1 = Failed |
-
-**Requirements**: Windows 10 1809 / Windows 11 or later, 64-bit.
-
-**Detection rules**: *Use a custom detection script* and upload
-``Output\$coreVersion\Detect.ps1``. Leave *Run script as 32-bit process* **unchecked** and
-*Enforce script signature check* unchecked. The generated detection verifies the module
-version and the exact endpoint, environment, customer name, submission state and PKI
-criteria selected for this build.
-
-**Assignments**: assign to a device group. Start with a small pilot ring.
-
-Configure **LogCollector Core** as a dependency of each separate application package that
-imports ``LogCollector.Client``. Inventory is one such application package; it is not
-created or modified by this generator.
-
-## 4. Validate the Core pilot
-
-On a targeted device, after the app installs:
-
-``````powershell
-(Get-Module -ListAvailable LogCollector.Client | Sort-Object Version -Descending |
-    Select-Object -First 1).Version
-Import-Module LogCollector.Client -MinimumVersion $coreVersion -ErrorAction Stop
-Get-LogCollectorEndpointConfiguration
-``````
-
-The returned configuration must show the expected ``FrontendUrl``, ``Environment`` and
-``CustomerName``. Core itself performs no collection and registers no task. Test data
-submission from the pilot version of an application package, not from Core installation.
-
-For the one-time transition from Core 1.10.2's versioned directory to 1.11.0's stable
-directory, update the existing Intune app or configure supersedence with **Uninstall
-previous version = No**. The old 1.10.2 uninstall command points inside the versioned
-directory that the 1.11.0 migration replaces; the expected-version guard protects upgrades
-from 1.11.0 onward.
-
-``````powershell
-`$configuration = Get-LogCollectorEndpointConfiguration
-Get-Content `$configuration.ConfigurationPath
-``````
-
-## 5. Troubleshooting
-
-| Symptom | Cause and remedy |
-| --- | --- |
-| Core reported *Not installed* after a successful install | Upload the ``Detect.ps1`` produced by the same generator run as the Core ``.intunewin``. |
-| Application script cannot import the module | Verify its Win32 App declares LogCollector Core as a dependency and runs in 64-bit PowerShell. |
-| Configuration shows the previous endpoint | Replace both the Core ``.intunewin`` and detection script, then force an Intune sync. |
-| Install fails immediately | Verify the install command uses ``Sysnative``; the installer refuses 32-bit PowerShell. |
-
-## 6. Upgrading
-
-For configuration-only changes, keep the software version and rebuild with the new values,
-then replace both package and detection in the existing Core Win32 App. For code changes,
-bump the Core/module version before rebuilding. Application packages are upgraded through
-their own source, packaging and detection lifecycle.
+Configure this app as a dependency of Inventory and every application package that imports
+``LogCollector.Client``. Put the official signed ``IntuneWinAppUtil.exe`` under ``Tools``
+before running ``New-IntunePackage.ps1``.
 "@
-[IO.File]::WriteAllText((Join-Path $intune 'Intune-Deployment.md'), $intuneGuide, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText(
+    (Join-Path $intune 'Intune-Deployment.md'), $coreGuide, [Text.UTF8Encoding]::new($false))
 
-# --- Instructions and manifest --------------------------------------------------------
-# Placeholder so the README is on disk (and therefore hashed) before the manifest is built;
-# MANIFEST.json is the only file it cannot cover, since it cannot hash itself.
-$readmePath = Join-Path $target 'README.md'
-
-$readme = @"
-# LogCollector $solutionVersion - delivery package
-
-Core PowerShell package version: **$coreVersion**.
-
-Everything needed to deploy the LogCollector Azure services and build the shared Core
-PowerShell dependency. Application packages such as Inventory are maintained separately
-and are not generated by this deliverable.
-
-| Folder | Purpose |
-| --- | --- |
-| ``1-Azure`` | Deploys infrastructure and the pre-built Function apps |
-| ``2-Intune`` | Builds the shared Core ``.intunewin`` package |
-| ``2-Intune\CoreSource`` | Payload of the shared **core dependency** package |
-| ``2-Intune\Tools`` | Drop ``IntuneWinAppUtil.exe`` here; it is found automatically |
-
-## Prerequisites
-
-* **Azure CLI** (``az``), signed in with ``az login``. Rights to create resources in the
-  target resource group, plus User Access Administrator (the template creates role assignments).
-* **IntuneWinAppUtil.exe** - Microsoft Win32 Content Prep Tool, for step 2 only.
-  Download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
-  We cannot redistribute it; copy it into ``2-Intune\Tools\`` and it is picked up
-  automatically (see ``2-Intune\Tools\README.md``).
-* Windows PowerShell 5.1 or PowerShell 7.
-
-## Step 1 - deploy to Azure
-
-``````powershell
-cd 1-Azure
-.\Deploy-LogCollector.ps1 ``
-  -SubscriptionId <subscription-id> ``
-  -ResourceGroup  <resource-group> ``
-  -Location       italynorth ``
-  -CustomerPrefix <short-code>
-``````
-
-``-CustomerPrefix`` (max 8 alphanumeric characters, e.g. your company code) is prepended to
-every resource name. Storage account, Service Bus namespace and Function app names must be
-globally unique across Azure, so set it on the **first** deployment; changing it later
-renames rather than migrates the resources. See ``1-Azure\README.md`` for the naming table,
-collision handling and troubleshooting.
-
-Add ``-WhatIf`` to preview without changing anything.
-
-When it finishes the script prints **``frontendIngestUrl``**. Copy it: step 2 needs it.
-
-### Optional Entra device validation for Intune certificates
-
-The secure default ``entraDeviceValidationEnabled = true`` verifies that an Intune
-certificate's device ID belongs to an enabled device in this Entra tenant. Bicep cannot grant
-the required tenant-wide Microsoft Graph application permission. The canonical repository
-contains an idempotent helper, intentionally not copied into this unsigned customer package.
-Run tenant-administrator code only from a trusted, reviewed checkout of the matching release:
-
-``````powershell
-.\scripts\Grant-IntuneGraphPermission.ps1 ``
-  -SubscriptionId <subscription-id> ``
-  -ResourceGroup  <resource-group> ``
-  -IdentityName   <resolved-intake-identity-name>
-``````
-
-The helper is idempotent and grants only ``Device.Read.All`` to the intake managed identity.
-The operator needs an Entra role allowed to assign application permissions, such as
-**Privileged Role Administrator** or **Global Administrator**. **Cloud Application
-Administrator is not sufficient** for Microsoft Graph application permissions.
-This is separate from Azure ``Contributor``/``User Access Administrator``.
-
-Use the exact identity name printed by ``Deploy-LogCollector.ps1``. If it must be reconstructed,
-scope discovery to the target subscription and stop unless exactly one match exists:
-
-``````powershell
-`$intakeIdentities = @(az identity list --subscription <subscription-id> -g <resource-group> ``
-  --query "[?ends_with(name, '-intake-identity')].name" -o tsv)
-if (`$intakeIdentities.Count -ne 1) { throw "Expected one intake identity, found `$(`$intakeIdentities.Count)." }
-.\scripts\Grant-IntuneGraphPermission.ps1 -SubscriptionId <subscription-id> ``
-  -ResourceGroup <resource-group> -IdentityName `$intakeIdentities[0]
-``````
-
-Do not start the Intune pilot before this command reports that the permission was assigned or
-already present. Without it, authenticated submissions fail in the intake with HTTP 500 while
-Application Insights shows a Microsoft Graph dependency returning HTTP 403.
-
-If the customer cannot grant this permission, set ``entraDeviceValidationEnabled = false`` in
-``1-Azure\infra\$($azure.ParameterFileName)`` before deployment. This produces the Function App
-setting ``EntraDeviceValidation__Enabled=false``. mTLS, body signature, anti-replay and exact
-certificate-to-device-ID binding remain active, but tenant membership is no longer verified.
-This reduced-security mode must be an explicit customer decision.
-
-## Step 2 - build the Core Intune package
-
-``````powershell
-cd 2-Intune
-.\New-IntunePackage.ps1 ``
-  -FrontendUrl  <frontendIngestUrl from step 1> ``
-  -CustomerName <customer-name> ``
-  -Environment  Production
-``````
-
-The script prints the paths to use in Intune:
-
-| Intune field | Value |
-| --- | --- |
-| App package file | ``Output\$coreVersion\Package\Install.intunewin`` |
-| Detection rule | Custom script -> ``Output\$coreVersion\Detect.ps1`` (do NOT tick "run as 32-bit") |
-| Install behaviour | System |
-
-Create one Win32 App named **LogCollector Core**. Always upload ``Detect.ps1`` produced by
-the same build as the Core ``.intunewin``.
-It is bound to the requested endpoint, environment, customer name, submission state and PKI
-criteria. Rebuilding with changed configuration therefore remediates devices that still hold
-the previous configuration without requiring a software-version bump.
-
-Assign the core app to every device that runs any script which writes to Log Analytics, not
-only to Inventory devices. Configure it as a dependency of each separately maintained
-application Win32 App. It is what lets an arbitrary script do:
-
-``````powershell
-Import-Module LogCollector.Client
-Send-LogAnalyticsData -LogType 'W11Upgrade' -Body (`$events | ConvertTo-Json)
-``````
-
-with no workspace key and no endpoint URL of its own. See ``2-Intune\CoreSource\README.md``.
-Inventory and every other migrated script retain their own package, installer, detection,
-assignment and upgrade lifecycle.
-
-Install and uninstall command lines (they must use ``Sysnative``, the installer refuses
-32-bit PowerShell) are given in full in ``2-Intune\Intune-Deployment.md``, together with the
-pilot validation procedure and troubleshooting.
-
-Assign the app to a device group.
-
-## Client authentication
-
-Devices authenticate with mutual TLS using their **Intune device certificate**; no secrets,
-keys or passwords are placed on the endpoints. The intake endpoint rejects any request
-without a valid client certificate, so a plain browser request to ``/api/health`` returning
-**403 "Client Certificate Required"** confirms the service is healthy.
-
-## Integrity
-
-``MANIFEST.json`` lists the SHA256 of every delivered file except itself. To verify after transfer:
-
-``````powershell
-`$m = Get-Content MANIFEST.json -Raw | ConvertFrom-Json
-`$m.Files.PSObject.Properties | ForEach-Object {
-    `$actual = (Get-FileHash -LiteralPath `$_.Name -Algorithm SHA256).Hash
-    '{0}: {1}' -f `$_.Name, `$(if (`$actual -eq `$_.Value) { 'OK' } else { 'MISMATCH' })
+# --- 3-Inventory ---------------------------------------------------------------------
+$inventoryBuildArgs = @{
+    DeviceTableName = $DeviceTableName
+    AppTableName = $AppTableName
+    OutputRoot = Join-Path $target '3-Inventory'
 }
-``````
-"@
-[IO.File]::WriteAllText($readmePath, $readme, [Text.UTF8Encoding]::new($false))
+if ($PSBoundParameters.ContainsKey('IntuneWinAppUtilPath')) {
+    $inventoryBuildArgs.IntuneWinAppUtilPath = $IntuneWinAppUtilPath
+}
+$inventoryPackage = & (Join-Path $PSScriptRoot 'Publish-IntuneWin32Package.ps1') `
+    @inventoryBuildArgs | Select-Object -Last 1
+$inventoryGuidePath = Join-Path $target "3-Inventory\$inventoryVersion\Intune-Deployment.md"
+$inventoryGuide = [IO.File]::ReadAllText($inventoryGuidePath)
+$inventoryHeader = @"
+# Release-specific configuration
 
-$commit = (& git -C $repo rev-parse HEAD 2>$null)
-if ($LASTEXITCODE -ne 0 -or -not $commit) { $commit = 'unknown' }
+This package uses the endpoint configured centrally by LogCollector Core $coreVersion.
+Deploy Core as an Intune dependency and upload
+the ``.intunewin`` and ``Detect.ps1`` from this same release.
+
+"@
+[IO.File]::WriteAllText(
+    $inventoryGuidePath, $inventoryHeader + $inventoryGuide, [Text.UTF8Encoding]::new($false))
+
+# --- 4-Documentation ----------------------------------------------------------------
+$documentation = Join-Path $target '4-Documentation'
+$null = New-Item -ItemType Directory -Path $documentation -Force
+foreach ($document in @(
+        'paths-core-client.md',
+        'paths-custom-inventory.md',
+        'paths-other-scripts.md')) {
+    Copy-Item -LiteralPath (Join-Path $repo "docs\$document") `
+        -Destination (Join-Path $documentation $document) -ErrorAction Stop
+}
+
+# --- Customer instructions, release notes and verifier -------------------------------
+$readme = @"
+# LogCollector $solutionVersion - customer delivery
+
+This is the complete deployment-ready customer release. Customer-specific Core configuration
+is generated only after Azure returns the final intake URL.
+
+| Section | Contents |
+| --- | --- |
+| ``1-Azure`` | Bicep, prebuilt Function ZIPs and ``Deploy-LogCollector.ps1`` |
+| ``2-Intune`` | Core $coreVersion source and post-deployment package generator |
+| ``3-Inventory`` | Prebuilt Custom Inventory $inventoryVersion package |
+| ``4-Documentation`` | Installed-path and component reference documents |
+
+## Deployment order
+
+1. Run ``.\Verify-Delivery.ps1`` and independently compare the external ZIP checksum.
+2. Deploy Azure with ``1-Azure\Deploy-LogCollector.ps1``.
+3. Grant Microsoft Graph ``Device.Read.All`` application permission to the intake UAMI
+   before enabling the pilot. The administrative helper remains only in the trusted source
+   repository and is intentionally not bundled.
+4. Run ``2-Intune\New-IntunePackage.ps1`` with the returned ``frontendIngestUrl``, customer
+   name and environment. Upload the generated ``.intunewin`` with its matching
+   ``Detect.ps1`` and assign it as **LogCollector Core**.
+5. Upload ``3-Inventory\$inventoryVersion\Output\Install.intunewin`` with its matching
+   ``Detect.ps1``. Configure LogCollector Core as its Intune dependency.
+
+The generated Core configuration is the only endpoint-side location containing the intake
+URL. Inventory reads the protected machine-wide Core configuration and does not require its
+own endpoint.
+
+Entra device validation is enabled by default. Successful Graph device checks are cached
+per Function instance for 240 minutes; failures and disabled/missing devices are never cached.
+If the customer cannot grant ``Device.Read.All``, set
+``entraDeviceValidationEnabled = false`` in the bundled Bicep parameter file before deployment;
+this is an explicit reduction in tenant-membership validation, not the default.
+
+The PowerShell scripts and manifests are not Authenticode-signed. Treat a successful local
+manifest check as necessary but not sufficient: compare the ZIP SHA-256 obtained through an
+authenticated, independent channel before executing any script.
+"@
+[IO.File]::WriteAllText(
+    (Join-Path $target 'README.md'), $readme, [Text.UTF8Encoding]::new($false))
+
+$releaseNotesSource = Join-Path $repo "docs\release-notes\$solutionVersion.md"
+if (-not (Test-Path -LiteralPath $releaseNotesSource -PathType Leaf)) {
+    throw "Release notes source not found for solution version $solutionVersion`: $releaseNotesSource"
+}
+$releaseChanges = [IO.File]::ReadAllText($releaseNotesSource).Trim()
+$releaseNotes = @"
+# LogCollector $solutionVersion customer release
+
+## Included versions
+
+| Component | Version |
+| --- | ---: |
+| Azure Frontend, Worker and Shared library | $solutionVersion |
+| LogCollector Core / Client | $coreVersion |
+| Custom Inventory | $inventoryVersion |
+
+## Changes
+
+$releaseChanges
+
+## Packaged Inventory configuration
+
+``````text
+Device table: $DeviceTableName
+Application table: $AppTableName
+``````
+
+The customer-specific ``FrontendUrl``, ``CustomerName`` and ``Environment`` are supplied to
+the Core generator only after Azure deployment returns ``frontendIngestUrl``.
+"@
+[IO.File]::WriteAllText(
+    (Join-Path $target 'RELEASE-NOTES.md'), $releaseNotes, [Text.UTF8Encoding]::new($false))
+
+$verifier = @'
+#Requires -Version 5.1
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$root = $PSScriptRoot
+$manifestPath = Join-Path $root 'MANIFEST.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "Delivery manifest is missing: $manifestPath"
+}
+$manifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop |
+    ConvertFrom-Json -ErrorAction Stop
+$expectedMutableFile = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String('__MUTABLE_PARAMETER_FILE_BASE64__'))
+if ([string] $manifest.SolutionVersion -ne '__SOLUTION_VERSION__' -or
+    [string] $manifest.CorePackageVersion -ne '__CORE_VERSION__' -or
+    [string] $manifest.InventoryPackageVersion -ne '__INVENTORY_VERSION__' -or
+    [string] $manifest.SourceCommit -ne '__SOURCE_COMMIT__') {
+    throw 'Delivery manifest contains unexpected component versions or source commit.'
+}
+$rootPrefix = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+$requiredFiles = @(
+    'README.md'
+    'RELEASE-NOTES.md'
+    'Verify-Delivery.ps1'
+    '1-Azure\Deploy-LogCollector.ps1'
+    '1-Azure\MANIFEST.json'
+    '1-Azure\Functions\Frontend.zip'
+    '1-Azure\Functions\Worker.zip'
+    '2-Intune\New-IntunePackage.ps1'
+    '2-Intune\CoreSource\Config.psd1'
+    '3-Inventory\__INVENTORY_VERSION__\Output\Install.intunewin'
+    '3-Inventory\__INVENTORY_VERSION__\Detect.ps1'
+    '4-Documentation\paths-core-client.md'
+    '4-Documentation\paths-custom-inventory.md'
+    '4-Documentation\paths-other-scripts.md'
+)
+$manifestNames = @($manifest.Files.PSObject.Properties | ForEach-Object { $_.Name })
+$mutableFiles = @($manifest.MutableFiles | ForEach-Object { [string] $_ })
+if ($mutableFiles.Count -ne 1 -or $mutableFiles[0] -ne $expectedMutableFile) {
+    throw 'Delivery manifest contains an unexpected mutable-file list.'
+}
+if ($manifestNames.Count -ne [int] $manifest.FileCount) {
+    throw "Manifest file count '$($manifestNames.Count)' does not match '$($manifest.FileCount)'."
+}
+foreach ($required in $requiredFiles) {
+    if ($required -notin $manifestNames) { throw "Delivery manifest is missing required file: $required" }
+}
+$actualNames = @(
+    Get-ChildItem -LiteralPath $root -File -Recurse -Force |
+        Where-Object { $_.FullName -ne $manifestPath } |
+        ForEach-Object { $_.FullName.Substring($root.Length).TrimStart('\') }
+)
+$undeclared = @(
+    $actualNames | Where-Object {
+        $_ -notin $manifestNames -and
+        $_ -notlike '1-Azure\Logs\*' -and
+        $_ -notlike '2-Intune\Output\*' -and
+        $_ -notlike '2-Intune\Tools\*'
+    }
+)
+$missing = @($manifestNames | Where-Object { $_ -notin $actualNames })
+if ($undeclared.Count -gt 0 -or $missing.Count -gt 0) {
+    throw ("Delivery file set differs from the manifest. Undeclared={0}; Missing={1}." -f
+        ($undeclared -join ', '), ($missing -join ', '))
+}
+$verified = 0
+foreach ($entry in $manifest.Files.PSObject.Properties) {
+    $candidate = [IO.Path]::GetFullPath((Join-Path $root $entry.Name))
+    if (-not $candidate.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Manifest contains a path outside the delivery: $($entry.Name)"
+    }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        throw "Delivery file is missing: $($entry.Name)"
+    }
+    if ($entry.Name -eq $expectedMutableFile) { continue }
+    if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ne [string] $entry.Value) {
+        throw "Delivery integrity check failed: $($entry.Name)"
+    }
+    $verified++
+}
+Write-Output ("LogCollector delivery verified; Version={0}; Core={1}; Inventory={2}; Files={3}; SourceCommit={4}." -f
+    $manifest.SolutionVersion, $manifest.CorePackageVersion,
+    $manifest.InventoryPackageVersion, $verified, $manifest.SourceCommit)
+'@
+$verifier = $verifier.
+    Replace('__SOLUTION_VERSION__', $solutionVersion).
+    Replace('__CORE_VERSION__', $coreVersion).
+    Replace('__INVENTORY_VERSION__', $inventoryVersion).
+    Replace('__SOURCE_COMMIT__', [string] $sourceCommit).
+    Replace('__MUTABLE_PARAMETER_FILE_BASE64__', $mutableParameterFileBase64)
+[IO.File]::WriteAllText(
+    (Join-Path $target 'Verify-Delivery.ps1'), $verifier, [Text.UTF8Encoding]::new($false))
+
 $hashes = [ordered]@{}
-foreach ($file in Get-ChildItem -LiteralPath $target -File -Recurse) {
+foreach ($file in Get-ChildItem -LiteralPath $target -File -Recurse -Force | Sort-Object FullName) {
     $relative = $file.FullName.Substring($target.Length).TrimStart('\')
     $hashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
 }
 $manifest = [ordered]@{
     SolutionVersion = $solutionVersion
     CorePackageVersion = $coreVersion
+    InventoryPackageVersion = $inventoryVersion
+    FileCount = $hashes.Count
     BuiltAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-    SourceCommit = [string]$commit
-    Note = 'Files covers every delivered file except MANIFEST.json, which cannot hash itself.'
+    SourceCommit = [string] $sourceCommit
+    MutableFiles = @($mutableParameterFile)
+    InventoryConfiguration = [ordered]@{
+        DeviceTableName = $DeviceTableName
+        AppTableName = $AppTableName
+    }
+    Security = [ordered]@{
+        AuthenticodeSigned = $false
+        RequiredVerification = 'Run Verify-Delivery.ps1 and compare the external ZIP SHA-256 through an authenticated channel.'
+    }
+    Note = 'Files covers the exact delivered file set except MANIFEST.json. Generated 1-Azure Logs are excluded.'
     Files = $hashes
 }
-[IO.File]::WriteAllText((Join-Path $target 'MANIFEST.json'), ($manifest | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText(
+    (Join-Path $target 'MANIFEST.json'),
+    ($manifest | ConvertTo-Json -Depth 6),
+    [Text.UTF8Encoding]::new($false))
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $target, $customerZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $azureTarget, $deploymentZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+$customerZipHash = (Get-FileHash -LiteralPath $customerZip -Algorithm SHA256).Hash
+$deploymentZipHash = (Get-FileHash -LiteralPath $deploymentZip -Algorithm SHA256).Hash
+[IO.File]::WriteAllText(
+    $customerChecksum,
+    "$customerZipHash *$(Split-Path $customerZip -Leaf)`r`n",
+    [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText(
+    $deploymentChecksum,
+    "$deploymentZipHash *$(Split-Path $deploymentZip -Leaf)`r`n",
+    [Text.UTF8Encoding]::new($false))
 
 [pscustomobject]@{
     SolutionVersion = $solutionVersion
     CorePackageVersion = $coreVersion
+    InventoryPackageVersion = $inventoryVersion
     DeliverablePath = [IO.Path]::GetFullPath($target)
-    AzureEntryPoint = Join-Path $target '1-Azure\Deploy-LogCollector.ps1'
-    IntuneEntryPoint = Join-Path $target '2-Intune\New-IntunePackage.ps1'
-    FileCount = @(Get-ChildItem -LiteralPath $target -File -Recurse).Count
+    CustomerZip = [IO.Path]::GetFullPath($customerZip)
+    CustomerZipSha256 = $customerZipHash
+    DeploymentZip = [IO.Path]::GetFullPath($deploymentZip)
+    DeploymentZipSha256 = $deploymentZipHash
+    CoreGeneratorPath = Join-Path $intune 'New-IntunePackage.ps1'
+    InventoryPackagePath = $inventoryPackage.PackagePath
+    InventoryPackageSha256 = $inventoryPackage.PackageSha256
+    FileCount = $hashes.Count
     HashedFileCount = $hashes.Count
 }

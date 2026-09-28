@@ -16,7 +16,7 @@ Bicep parameter file to bundle as the deployment default. Defaults to
 'infra\logcollector.bicepparam'. Must not contain secrets or a subscription/tenant id;
 the subscription is always supplied at deploy time via -SubscriptionId.
 .NOTES
-Version 1.2.5. Builds via dotnet publish; makes no changes to Azure resources.
+Version 1.2.8. Builds via dotnet publish; makes no changes to Azure resources.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -29,6 +29,8 @@ Set-StrictMode -Version Latest
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $PSBoundParameters.ContainsKey('OutputRoot')) { $OutputRoot = Join-Path $repo 'out\Deploy' }
 if (-not $PSBoundParameters.ContainsKey('ParameterFile')) { $ParameterFile = Join-Path $repo 'infra\logcollector.bicepparam' }
+$OutputRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)
+$ParameterFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ParameterFile)
 if (-not (Test-Path -LiteralPath $ParameterFile -PathType Leaf)) { throw "Parameter file not found: $ParameterFile" }
 
 # The three project versions must agree; the package is named/versioned after them.
@@ -47,6 +49,11 @@ if ($frontendVersion -ne $workerVersion -or $frontendVersion -ne $sharedVersion)
     throw "Frontend ($frontendVersion), Worker ($workerVersion) and Shared ($sharedVersion) versions must match before packaging."
 }
 $version = $frontendVersion
+$sourceCommit = try {
+    $resolvedCommit = (& git -C $repo rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $resolvedCommit) { 'unknown' } else { $resolvedCommit }
+}
+catch { 'unknown' }
 
 $target = Join-Path $OutputRoot $version
 if (Test-Path -LiteralPath $target) { throw "Output already exists: $target. Use a new OutputRoot; existing packages are never overwritten." }
@@ -85,6 +92,8 @@ Copy-Item -LiteralPath (Join-Path $infraSource 'modules\log-analytics-tables.bic
 Copy-Item -LiteralPath (Join-Path $infraSource 'certificates\intune-root.base64') -Destination (Join-Path $target 'infra\certificates\intune-root.base64')
 Copy-Item -LiteralPath (Join-Path $infraSource 'certificates\intune-intermediate.base64') -Destination (Join-Path $target 'infra\certificates\intune-intermediate.base64')
 $parameterFileName = Split-Path $ParameterFile -Leaf
+$parameterFileNameBase64 = [Convert]::ToBase64String(
+    [Text.Encoding]::UTF8.GetBytes($parameterFileName))
 Copy-Item -LiteralPath $ParameterFile -Destination (Join-Path $target "infra\$parameterFileName")
 
 # Clean up the transient build folders created by Publish-Function.ps1.
@@ -439,8 +448,19 @@ function Wait-MainSiteClientCertificateRequired {
     throw "Timed out waiting for the main site to require a client certificate at $uri."
 }
 
+$deploymentStagingPath = $null
 trap {
     $failure = $_
+    if ($deploymentStagingPath -and (Test-Path -LiteralPath $deploymentStagingPath)) {
+        try {
+            Remove-Item -LiteralPath $deploymentStagingPath -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            Write-DeploymentLog -Level Warning -Message (
+                "Could not remove protected deployment staging after failure; " +
+                "Path=$deploymentStagingPath; Error=$($_.Exception.Message)")
+        }
+    }
     Write-DeploymentLog -Level Error -Message (
         "Deployment failed; ErrorType=$($failure.Exception.GetType().FullName); " +
         "Error=$($failure.Exception.Message); Position=$($failure.InvocationInfo.PositionMessage); " +
@@ -448,8 +468,125 @@ trap {
     throw $failure
 }
 
+$manifestPath = Join-Path $root 'MANIFEST.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "Deployment manifest is missing: $manifestPath"
+}
+$deliveryManifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop |
+    ConvertFrom-Json -ErrorAction Stop
+$expectedParameterFile = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String('__LOGCOLLECTOR_PARAMETER_FILE_BASE64__'))
+if ([string] $deliveryManifest.Version -ne '__LOGCOLLECTOR_SOLUTION_VERSION__' -or
+    [string] $deliveryManifest.SourceCommit -ne '__LOGCOLLECTOR_SOURCE_COMMIT__' -or
+    [string] $deliveryManifest.ParameterFile -ne $expectedParameterFile) {
+    throw 'Deployment manifest contains an unexpected version, source commit or parameter file.'
+}
+$rootPrefix = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+$requiredFiles = @(
+    'Deploy-LogCollector.ps1'
+    'README.md'
+    'Functions\Frontend.zip'
+    'Functions\Worker.zip'
+    'infra\main.bicep'
+    "infra\$expectedParameterFile"
+    'infra\certificates\intune-root.base64'
+    'infra\certificates\intune-intermediate.base64'
+    'infra\modules\log-analytics-tables.bicep'
+)
+$manifestNames = @($deliveryManifest.Files.PSObject.Properties | ForEach-Object { $_.Name })
+if ($manifestNames.Count -ne [int] $deliveryManifest.FileCount) {
+    throw "Deployment manifest file count '$($manifestNames.Count)' does not match '$($deliveryManifest.FileCount)'."
+}
+foreach ($required in $requiredFiles) {
+    if ($required -notin $manifestNames) {
+        throw "Deployment manifest is missing required file: $required"
+    }
+}
+$actualNames = @(
+    Get-ChildItem -LiteralPath $root -File -Recurse -Force |
+        Where-Object { $_.FullName -ne $manifestPath } |
+        ForEach-Object { $_.FullName.Substring($root.Length).TrimStart('\') }
+)
+$undeclared = @(
+    $actualNames |
+        Where-Object { $_ -notin $manifestNames -and $_ -notlike 'Logs\*' }
+)
+$missing = @($manifestNames | Where-Object { $_ -notin $actualNames })
+if ($undeclared.Count -gt 0 -or $missing.Count -gt 0) {
+    throw ("Deployment file set differs from the manifest. Undeclared={0}; Missing={1}." -f
+        ($undeclared -join ', '), ($missing -join ', '))
+}
+foreach ($entry in $deliveryManifest.Files.PSObject.Properties) {
+    $candidate = [IO.Path]::GetFullPath((Join-Path $root $entry.Name))
+    if (-not $candidate.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Deployment manifest contains a path outside the package: $($entry.Name)"
+    }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        throw "Deployment package file is missing: $($entry.Name)"
+    }
+    if ($entry.Name -eq "infra\$expectedParameterFile") {
+        continue
+    }
+    if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ne [string] $entry.Value) {
+        throw "Deployment package integrity check failed: $($entry.Name)"
+    }
+}
+
+function Assert-DeploymentFileIntegrity {
+    param(
+        [Parameter(Mandatory)] [string] $RelativePath,
+        [string] $BasePath = $root
+    )
+
+    $entry = $deliveryManifest.Files.PSObject.Properties[$RelativePath]
+    if ($null -eq $entry) {
+        throw "Deployment manifest has no integrity entry for: $RelativePath"
+    }
+    $resolvedBase = [IO.Path]::GetFullPath($BasePath).TrimEnd('\')
+    $candidatePrefix = $resolvedBase + '\'
+    $candidate = [IO.Path]::GetFullPath((Join-Path $resolvedBase $RelativePath))
+    if (-not $candidate.StartsWith($candidatePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Deployment integrity path escapes the package: $RelativePath"
+    }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        throw "Deployment package file is missing: $RelativePath"
+    }
+    if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ne [string] $entry.Value) {
+        throw "Deployment package integrity recheck failed: $RelativePath"
+    }
+    return $candidate
+}
+
+function New-ProtectedDeploymentStagingDirectory {
+    $path = Join-Path ([IO.Path]::GetTempPath()) (
+        'LogCollector-Deployment-' + [guid]::NewGuid().ToString('N'))
+    $directory = New-Item -ItemType Directory -Path $path -ErrorAction Stop
+    if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Deployment staging path is a reparse point: $path"
+    }
+
+    $inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $propagation = [Security.AccessControl.PropagationFlags]::None
+    $allow = [Security.AccessControl.AccessControlType]::Allow
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sidValue in @(
+            [Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+            'S-1-5-18',
+            'S-1-5-32-544')) {
+        $sid = New-Object Security.Principal.SecurityIdentifier($sidValue)
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+            $sid, [Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance, $propagation, $allow)
+        $null = $acl.AddAccessRule($rule)
+    }
+    $acl.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)
+    Set-Acl -LiteralPath $directory.FullName -AclObject $acl -ErrorAction Stop
+    return $directory.FullName
+}
+
 Write-DeploymentLog -Message (
-    "Deployment started; ScriptVersion=1.3.5; PowerShell=$($PSVersionTable.PSVersion); " +
+    "Deployment started; ScriptVersion=1.3.7; PowerShell=$($PSVersionTable.PSVersion); " +
     "ProcessId=$PID; LogPath=$LogPath.")
 Write-DeploymentLog -Message (
     "Requested scope; Subscription=$(Protect-DeploymentLogValue $SubscriptionId); " +
@@ -476,6 +613,39 @@ $ParameterFile = (Resolve-Path -LiteralPath $ParameterFile -ErrorAction Stop).Pr
 Write-DeploymentLog -Message (
     "Input validation completed; ParameterFile=$ParameterFile; " +
     "ParameterFileSha256=$((Get-FileHash -LiteralPath $ParameterFile -Algorithm SHA256).Hash).")
+
+$deploymentStagingPath = New-ProtectedDeploymentStagingDirectory
+$deploymentRoot = $deploymentStagingPath
+$immutableDeploymentFiles = @(
+    'infra\main.bicep',
+    'infra\modules\log-analytics-tables.bicep',
+    'infra\certificates\intune-root.base64',
+    'infra\certificates\intune-intermediate.base64',
+    'Functions\Frontend.zip',
+    'Functions\Worker.zip'
+)
+foreach ($relativePath in $immutableDeploymentFiles) {
+    $sourcePath = Join-Path $root $relativePath
+    $sourceItem = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop
+    if (($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Deployment source file is a reparse point: $relativePath"
+    }
+    $destinationPath = Join-Path $deploymentRoot $relativePath
+    $null = New-Item -ItemType Directory -Path (Split-Path $destinationPath -Parent) -Force
+    Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force -ErrorAction Stop
+    $null = Assert-DeploymentFileIntegrity -RelativePath $relativePath -BasePath $deploymentRoot
+}
+$bundledParameterPath = [IO.Path]::GetFullPath((Join-Path $root "infra\$expectedParameterFile"))
+if ([string]::Equals(
+        [IO.Path]::GetFullPath($ParameterFile), $bundledParameterPath,
+        [StringComparison]::OrdinalIgnoreCase)) {
+    $stagedParameterPath = Join-Path $deploymentRoot "infra\$expectedParameterFile"
+    Copy-Item -LiteralPath $ParameterFile -Destination $stagedParameterPath -Force -ErrorAction Stop
+    $ParameterFile = $stagedParameterPath
+}
+Write-DeploymentLog -Message (
+    "Protected deployment staging prepared; Path=$deploymentRoot; " +
+    "ImmutableFiles=$($immutableDeploymentFiles.Count); ParameterFile=$ParameterFile.")
 
 $subscriptionArgs = @('--subscription', $SubscriptionId)
 # Only override the parameter file's customerPrefix when one was supplied, so an existing
@@ -515,13 +685,20 @@ if (-not $SkipInfra) {
         $deploymentName = 'LogCollector-' + (Get-Date -Format 'yyyyMMddHHmmss')
         Write-DeploymentLog -Message (
             "Starting Bicep deployment; DeploymentName=$deploymentName; ResourceGroup=$ResourceGroup; " +
-            "Template=$(Join-Path $root 'infra\main.bicep'); ParameterFile=$ParameterFile; " +
+            "Template=$(Join-Path $deploymentRoot 'infra\main.bicep'); ParameterFile=$ParameterFile; " +
             "Location=$Location; CustomerPrefixOverride=$([bool]$CustomerPrefix); " +
             "WorkspaceOverride=$([bool]$ExistingLogAnalyticsWorkspaceResourceId).")
+        foreach ($relativePath in @(
+                'infra\main.bicep',
+                'infra\modules\log-analytics-tables.bicep',
+                'infra\certificates\intune-root.base64',
+                'infra\certificates\intune-intermediate.base64')) {
+            $null = Assert-DeploymentFileIntegrity -RelativePath $relativePath -BasePath $deploymentRoot
+        }
         $outputsJson = & $azCommand.Source deployment group create `
             --resource-group $ResourceGroup `
             --name $deploymentName `
-            --template-file (Join-Path $root 'infra\main.bicep') `
+            --template-file (Join-Path $deploymentRoot 'infra\main.bicep') `
             --parameters $ParameterFile `
             --parameters location=$Location `
             --query properties.outputs `
@@ -573,7 +750,7 @@ if (-not $SkipApps) {
     }
     if ($PSCmdlet.ShouldProcess($frontendAppNameResolved, 'Deploy Frontend package')) {
         $deploymentPhase = 'DeployFrontend'
-        $frontendPackage = Join-Path $root 'Functions\Frontend.zip'
+        $frontendPackage = Join-Path $deploymentRoot 'Functions\Frontend.zip'
         Write-DeploymentLog -Message (
             "Starting Frontend package deployment; App=$frontendAppNameResolved; " +
             "Package=$frontendPackage; Sha256=$((Get-FileHash -LiteralPath $frontendPackage -Algorithm SHA256).Hash).")
@@ -718,6 +895,8 @@ if (-not $SkipApps) {
             if ($LASTEXITCODE -ne 0) { throw "Failed to temporarily disable client certificate enforcement on $frontendAppNameResolved (exit code $LASTEXITCODE)." }
             Wait-ClientCertificateEnabled -AppName $frontendAppNameResolved -ExpectedValue $false
             Write-DeploymentLog -Message "Pushing Frontend zip through Azure CLI; App=$frontendAppNameResolved."
+            $null = Assert-DeploymentFileIntegrity `
+                -RelativePath 'Functions\Frontend.zip' -BasePath $deploymentRoot
             & $azCommand.Source functionapp deployment source config-zip --resource-group $ResourceGroup --name $frontendAppNameResolved --src $frontendPackage --only-show-errors @subscriptionArgs
             if ($LASTEXITCODE -ne 0) { throw "Frontend deployment failed (exit code $LASTEXITCODE)." }
             Write-DeploymentLog -Message "Frontend package deployment completed; App=$frontendAppNameResolved."
@@ -883,10 +1062,12 @@ if (-not $SkipApps) {
     }
     if ($PSCmdlet.ShouldProcess($workerAppNameResolved, 'Deploy Worker package')) {
         $deploymentPhase = 'DeployWorker'
-        $workerPackage = Join-Path $root 'Functions\Worker.zip'
+        $workerPackage = Join-Path $deploymentRoot 'Functions\Worker.zip'
         Write-DeploymentLog -Message (
             "Starting Worker package deployment; App=$workerAppNameResolved; " +
             "Package=$workerPackage; Sha256=$((Get-FileHash -LiteralPath $workerPackage -Algorithm SHA256).Hash).")
+        $null = Assert-DeploymentFileIntegrity `
+            -RelativePath 'Functions\Worker.zip' -BasePath $deploymentRoot
         & $azCommand.Source functionapp deployment source config-zip --resource-group $ResourceGroup --name $workerAppNameResolved --src $workerPackage --only-show-errors @subscriptionArgs
         if ($LASTEXITCODE -ne 0) { throw "Worker deployment failed (exit code $LASTEXITCODE)." }
         Write-DeploymentLog -Message "Worker package deployment completed; App=$workerAppNameResolved."
@@ -934,28 +1115,24 @@ else {
     Write-Warning 'Entra device validation mode could not be determined. Verify the Frontend setting EntraDeviceValidation__Enabled before onboarding devices.'
 }
 $deploymentPhase = 'Complete'
+if ($deploymentStagingPath -and (Test-Path -LiteralPath $deploymentStagingPath)) {
+    Remove-Item -LiteralPath $deploymentStagingPath -Recurse -Force -ErrorAction Stop
+    $deploymentStagingPath = $null
+}
 Write-DeploymentLog -Message (
     "Deployment completed; ResourceGroup=$ResourceGroup; FrontendApp=$frontendAppNameResolved; " +
     "WorkerApp=$workerAppNameResolved; InfrastructureDeployed=$infraDeployed; " +
     "ApplicationsSkipped=$([bool]$SkipApps); LogPath=$LogPath.")
 Write-Output "Deployment complete. Detailed log: $LogPath"
 '@
+$deployScript = $deployScript.
+    Replace('__LOGCOLLECTOR_SOLUTION_VERSION__', $version).
+    Replace('__LOGCOLLECTOR_SOURCE_COMMIT__', [string] $sourceCommit).
+    Replace('__LOGCOLLECTOR_PARAMETER_FILE_BASE64__', $parameterFileNameBase64)
 [IO.File]::WriteAllText((Join-Path $target 'Deploy-LogCollector.ps1'), $deployScript, [Text.UTF8Encoding]::new($false))
 
 $frontendHash = (Get-FileHash -LiteralPath (Join-Path $target 'Functions\Frontend.zip') -Algorithm SHA256).Hash
 $workerHash = (Get-FileHash -LiteralPath (Join-Path $target 'Functions\Worker.zip') -Algorithm SHA256).Hash
-$commit = try { (& git -C $repo rev-parse HEAD) } catch { 'unknown' }
-$manifest = [ordered]@{
-    Version = $version
-    BuiltAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-    SourceCommit = $commit
-    ParameterFile = $parameterFileName
-    Files = [ordered]@{
-        'Functions\Frontend.zip' = $frontendHash
-        'Functions\Worker.zip' = $workerHash
-    }
-}
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $target 'MANIFEST.json') -Encoding utf8
 
 $readme = @"
 # LogCollector deployment package — v$version
@@ -1116,6 +1293,25 @@ Both apps should report ``Running``. A plain HTTPS GET to ``/api/health`` return
 mutual TLS and rejects any request without a client certificate.
 "@
 Set-Content -LiteralPath (Join-Path $target 'README.md') -Value $readme -Encoding utf8
+
+$hashes = [ordered]@{}
+foreach ($file in Get-ChildItem -LiteralPath $target -File -Recurse -Force) {
+    $relative = $file.FullName.Substring($target.Length).TrimStart('\')
+    $hashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+}
+$manifest = [ordered]@{
+    Version = $version
+    FileCount = $hashes.Count
+    BuiltAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+    SourceCommit = [string] $sourceCommit
+    ParameterFile = $parameterFileName
+    Note = 'Files covers the exact deployment package except MANIFEST.json and generated Logs.'
+    Files = $hashes
+}
+[IO.File]::WriteAllText(
+    (Join-Path $target 'MANIFEST.json'),
+    ($manifest | ConvertTo-Json -Depth 5),
+    [Text.UTF8Encoding]::new($false))
 
 [pscustomobject]@{
     Version = $version

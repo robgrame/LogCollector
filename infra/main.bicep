@@ -112,6 +112,11 @@ param allowIntuneEnrollmentCertificateFallback bool = true
 @description('Verify Intune certificate-bound device IDs against Microsoft Entra ID through Microsoft Graph. Keep enabled when Device.Read.All can be granted. Disabling removes tenant-membership validation.')
 param entraDeviceValidationEnabled bool = true
 
+@description('Minutes to cache successful Entra device validations in each frontend instance. Set to 0 to query Microsoft Graph for every request.')
+@minValue(0)
+@maxValue(1440)
+param entraDevicePositiveCacheMinutes int = 240
+
 @description('Pipe-separated allow-list of Intune enrollment issuer subject DNs.')
 param intuneEnrollmentIssuerSubjects string = 'CN=Microsoft Intune MDM Device CA|CN=Microsoft Intune Device Management Device CA'
 
@@ -803,6 +808,7 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ClientCert__RevocationMode', value: 'Online' }
         { name: 'ClientCert__RevocationFlag', value: 'ExcludeRoot' }
         { name: 'EntraDeviceValidation__Enabled', value: string(entraDeviceValidationEnabled) }
+        { name: 'EntraDeviceValidation__PositiveCacheMinutes', value: string(entraDevicePositiveCacheMinutes) }
 
         { name: 'Ingestion__StreamMap', value: ingestionStreamMap }
         { name: 'Intake__MaxRecordsPerEnvelope', value: '50000' }

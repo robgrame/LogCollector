@@ -106,6 +106,11 @@ do not grant this tenant-level consent by themselves.
 The command is the deployment gate: it must report either `Assigned Microsoft Graph
 Device.Read.All to the intake managed identity.` or `Device.Read.All is already assigned.`.
 Re-running it is safe and is the supported verification that consent is still present.
+The Azure portal can display the managed identity under **Microsoft Entra ID > Enterprise
+applications** and show its granted permissions, but it cannot add Microsoft Graph application
+permissions to a managed identity through the normal API permissions UI because a managed identity
+has no app-registration object. Use the helper above, Microsoft Graph PowerShell/CLI, or Cloud Shell
+opened from the portal to create the app-role assignment.
 
 For prefixed deployments, use the exact identity name printed by the deployment package. To
 rediscover it without reproducing the Bicep normalization rules, scope the lookup to the target
@@ -132,6 +137,11 @@ exists and is enabled in the customer's Entra tenant. Record this reduced-securi
 the customer deployment decision.
 
 Missing consent or unavailable Graph produces a failed submission, never an authorization bypass.
+Successful device lookups are cached in each frontend instance for 240 minutes by default. Configure
+`entraDevicePositiveCacheMinutes` in Bicep (range `0`–`1440`); `0` disables caching. Only positive
+authorization results are cached, so missing or disabled devices and Graph failures are rechecked
+on every request. A disabled device can remain authorized until an existing positive cache entry
+expires, so choose the TTL according to the customer's revocation-latency requirement.
 For the pilot, confirm the enrollment certificate's `.5.25` GUID equals the device's `dsregcmd`
 Entra device ID. Shared Microsoft Intune roots belong only in the Intune trust settings.
 
