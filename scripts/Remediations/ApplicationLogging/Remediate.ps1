@@ -7,7 +7,7 @@ Intended for Intune Remediations. The script imports LogCollector.Client only fr
 machine-wide Program Files module tree, submits one non-sensitive operational event to
 LogCollectorOperations_CL, and records local success only after the intake accepts it.
 .NOTES
-Version 1.1.0. Run as SYSTEM in 64-bit PowerShell.
+Version 1.1.1. Run as SYSTEM in 64-bit PowerShell.
 #>
 [CmdletBinding()]
 param(
@@ -15,7 +15,7 @@ param(
     [ValidateNotNullOrEmpty()] [string] $StatePath,
     [Uri] $FrontendUrl,
     [ValidateNotNullOrEmpty()] [string] $SpoolRoot,
-    [ValidateRange(1, 1000)] [int] $EventCount = 200,
+    [ValidateRange(1, 1000)] [int] $EventCount = 1000,
     [ValidateRange(1, 100)] [int] $BatchSize = 25,
     [ValidateRange(0, 5000)] [int] $DelayMilliseconds = 100
 )
@@ -23,7 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $minimumModuleVersion = [version] '1.10.0'
-$scriptVersion = '1.1.0'
+$scriptVersion = '1.1.1'
 
 if (-not [Environment]::Is64BitProcess) {
     throw 'Application logging remediation requires 64-bit PowerShell.'
@@ -36,7 +36,15 @@ if (-not (Test-Path -LiteralPath $ModuleRoot -PathType Container)) {
     throw "LogCollector Core is not installed: module root not found at '$ModuleRoot'."
 }
 
+$rootManifest = Join-Path $ModuleRoot 'LogCollector.Client.psd1'
 $candidates = @(
+    if (Test-Path -LiteralPath $rootManifest -PathType Leaf) {
+        $rootModule = Test-ModuleManifest -Path $rootManifest -ErrorAction Stop
+        [pscustomobject]@{
+            Version = $rootModule.Version
+            Manifest = $rootManifest
+        }
+    }
     foreach ($directory in Get-ChildItem -LiteralPath $ModuleRoot -Directory -ErrorAction Stop) {
         $version = $null
         if (-not [version]::TryParse($directory.Name, [ref] $version)) { continue }
@@ -49,7 +57,7 @@ $candidates = @(
         }
     }
 )
-$selected = $candidates | Where-Object Version -GE $minimumModuleVersion |
+$selected = @($candidates) | Where-Object Version -GE $minimumModuleVersion |
     Sort-Object Version -Descending | Select-Object -First 1
 if (-not $selected) {
     throw "LogCollector.Client $minimumModuleVersion or later is not installed under '$ModuleRoot'."
