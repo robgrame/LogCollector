@@ -3,7 +3,7 @@
 .SYNOPSIS
 Detects whether the application-logging remediation recently reached LogCollector.
 .NOTES
-Version 1.1.0. Run as SYSTEM in 64-bit PowerShell through Intune Remediations.
+Version 1.1.1. Run as SYSTEM in 64-bit PowerShell through Intune Remediations.
 #>
 [CmdletBinding()]
 param(
@@ -23,7 +23,14 @@ try {
         $usingDefaultStatePath = $true
         $moduleRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) `
             'WindowsPowerShell\Modules\LogCollector.Client'
+        $rootManifest = Join-Path $moduleRoot 'LogCollector.Client.psd1'
         $selected = @(
+            if (Test-Path -LiteralPath $rootManifest -PathType Leaf) {
+                $rootModule = Test-ModuleManifest -Path $rootManifest -ErrorAction Stop
+                if ($rootModule.Version -ge [version] '1.10.0') {
+                    [pscustomobject]@{ Version = $rootModule.Version; Manifest = $rootManifest }
+                }
+            }
             foreach ($directory in @(Get-ChildItem -LiteralPath $moduleRoot -Directory -ErrorAction Stop)) {
                 $version = $null
                 if (-not [version]::TryParse($directory.Name, [ref] $version) -or $version -lt [version] '1.10.0') {

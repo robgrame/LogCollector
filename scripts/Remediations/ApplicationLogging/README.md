@@ -3,7 +3,7 @@
 This Intune Remediations package verifies that a device can submit application events
 through LogCollector Core to `LogCollectorOperations_CL`.
 
-By default it sends 200 synthetic events in eight batches of 25, with a 100 ms pause between
+By default it sends 1000 synthetic events in 40 batches of 25, with a 100 ms pause between
 batches. This exercises repeated authenticated requests without opening one HTTP connection
 per event. The remediation parameters allow bounded manual tests of 1-1000 events and batches
 of 1-100 records.
@@ -53,7 +53,7 @@ LogCollectorOperations_CL
 | order by LastSeen desc
 ```
 
-A successful default run must show `Events == 200` for its `ExecutionId`. A lower count means
+A successful default run must show `Events == 1000` for its `ExecutionId`. A lower count means
 the intake accepted all batches but downstream ingestion is incomplete or delayed.
 
 If remediation fails, inspect its Intune output and the local Core configuration:
