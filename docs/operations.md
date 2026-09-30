@@ -204,6 +204,13 @@ The default remains the original inventory example to preserve existing deployme
 Keep additional schemas in the environment's parameter file so later infrastructure deployments
 do not replace a manually extended DCR/map with the default example.
 
+The production Endpoint Data Sprawl Remediator contract is authoritative in
+`infra\logcollector.bicepparam` as `EndpointDataSprawlRemediator_CL`. Its schema includes the
+server-stamped platform identity fields and the client's stable cycle, file-result, count and
+pseudonymous `UserCorrelationId` fields. The generated `ingestionStreamMap` in `infra\main.bicep`
+wires `Custom-EndpointDataSprawlRemediator_CL` into both Function Apps; do not maintain separate
+manual mappings.
+
 Send existing record objects using shared client **1.5.0** or later:
 
 ```powershell
