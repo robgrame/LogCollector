@@ -22,6 +22,7 @@ param additionalTelemetryTables = [
       { name: 'RecordIndex', type: 'int' }
       { name: 'Source', type: 'string' }
       { name: 'ClientVersion', type: 'string' }
+      { name: 'UserCorrelationId', type: 'string' }
       { name: 'EventTimeUtc', type: 'datetime' }
       { name: 'CycleStartedAtUtc', type: 'datetime' }
       { name: 'ExecutionId', type: 'string' }
