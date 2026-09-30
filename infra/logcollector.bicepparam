@@ -11,7 +11,7 @@ param frontendPlanSku = 'B1'
 // Keep this list authoritative: a table created out of band is reverted here.
 param additionalTelemetryTables = [
   {
-    name: 'OneDriveFileOrganizer_CL'
+    name: 'EndpointDataSprawlRemediator_CL'
     columns: [
       { name: 'TimeGenerated', type: 'datetime' }
       { name: 'CollectedAtUtc', type: 'datetime' }
