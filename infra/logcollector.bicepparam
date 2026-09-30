@@ -11,6 +11,41 @@ param frontendPlanSku = 'B1'
 // Keep this list authoritative: a table created out of band is reverted here.
 param additionalTelemetryTables = [
   {
+    name: 'OneDriveFileOrganizer_CL'
+    columns: [
+      { name: 'TimeGenerated', type: 'datetime' }
+      { name: 'CollectedAtUtc', type: 'datetime' }
+      { name: 'EntraDeviceId', type: 'string' }
+      { name: 'DeviceName', type: 'string' }
+      { name: 'IntuneDeviceId', type: 'string' }
+      { name: 'CorrelationId', type: 'string' }
+      { name: 'RecordIndex', type: 'int' }
+      { name: 'Source', type: 'string' }
+      { name: 'ClientVersion', type: 'string' }
+      { name: 'EventTimeUtc', type: 'datetime' }
+      { name: 'CycleStartedAtUtc', type: 'datetime' }
+      { name: 'ExecutionId', type: 'string' }
+      { name: 'RecordType', type: 'string' }
+      { name: 'ClientType', type: 'string' }
+      { name: 'Status', type: 'string' }
+      { name: 'DryRun', type: 'boolean' }
+      { name: 'SourcePath', type: 'string' }
+      { name: 'DestinationPath', type: 'string' }
+      { name: 'Category', type: 'string' }
+      { name: 'CategoryProvider', type: 'string' }
+      { name: 'Bytes', type: 'long' }
+      { name: 'DurationMs', type: 'long' }
+      { name: 'ResultCode', type: 'string' }
+      { name: 'Detail', type: 'string' }
+      { name: 'Discovered', type: 'int' }
+      { name: 'Planned', type: 'int' }
+      { name: 'Moved', type: 'int' }
+      { name: 'Skipped', type: 'int' }
+      { name: 'Failed', type: 'int' }
+      { name: 'OmittedFileResults', type: 'int' }
+    ]
+  }
+  {
     name: 'DeviceInventory_CL'
     columns: [
       { name: 'TimeGenerated', type: 'datetime' }
