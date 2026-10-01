@@ -84,17 +84,21 @@ Function App with `clientCertMode: Required` · Flex Consumption FC1 plan + work
 
 ### Intune fallback: Entra device validation
 
-Deploy the frontend in the customer's Entra tenant. By default, when Intune fallback is enabled, an Entra
-administrator must grant **Microsoft Graph Device.Read.All (application)** to its user-assigned
-managed identity. This is a Graph app-role assignment, not an Azure RBAC role; Bicep does not
-silently grant tenant-wide directory permissions. Enterprise-PKI-only deployments do not need it.
+Deploy the Functions in the customer's Entra tenant. An Entra administrator must grant this Microsoft Graph application permission:
 
-The following idempotent helper resolves both the identity and Graph token in the specified
+- Frontend managed identity: `Device.Read.All`, used to validate that an Intune certificate-bound
+  device exists and is enabled in the tenant.
+
+These are Graph app-role assignments, not Azure RBAC roles; Bicep does not silently grant
+tenant-wide directory permissions.
+
+The following idempotent helper resolves the identity and Graph token in the specified
 subscription's tenant. It does not change the caller's default Azure CLI subscription:
 
 ```powershell
 .\scripts\Grant-IntuneGraphPermission.ps1 -SubscriptionId $subscription `
-  -ResourceGroup LOGCOLLECTOR-RG -IdentityName LogCollector-intake-identity
+  -ResourceGroup LOGCOLLECTOR-RG `
+  -IdentityName LogCollector-intake-identity
 ```
 
 Run this command after every first deployment into a new Entra tenant and before assigning the
@@ -103,9 +107,9 @@ Core package to pilot devices. The operator needs **Privileged Role Administrato
 Graph application permissions. Azure `Contributor`, `Owner`, and `User Access Administrator`
 do not grant this tenant-level consent by themselves.
 
-The command is the deployment gate: it must report either `Assigned Microsoft Graph
-Device.Read.All to the intake managed identity.` or `Device.Read.All is already assigned.`.
-Re-running it is safe and is the supported verification that consent is still present.
+The command is the deployment gate: it must report an assigned/already-assigned result for
+`Device.Read.All`. Re-running it is safe and is the
+supported verification that consent is still present.
 The Azure portal can display the managed identity under **Microsoft Entra ID > Enterprise
 applications** and show its granted permissions, but it cannot add Microsoft Graph application
 permissions to a managed identity through the normal API permissions UI because a managed identity
@@ -218,6 +222,153 @@ retains `Moved`, `Planned`, and `Failed` destination states
 because the user experience distinguishes completed, pending, and retry-required work; consumers
 must filter `Status = 'Moved'` when only completed placements are required.
 
+Backend 1.15.0 extends file telemetry with `FileName`, `Extension`, `SourceCreatedAtUtc`, and
+`SourceModifiedAtUtc`, and applies those additions idempotently to existing SQL databases. Dashboard
+read access is restricted to three procedures:
+
+- `dbo.GetEndpointDataSprawlUserSummary(@UserCorrelationId char(64))` returns one aggregate row
+  from the durable latest-placement snapshot retained under the placement-retention policy.
+- `dbo.GetEndpointDataSprawlUserDevices(@UserCorrelationId char(64))` returns the same
+  latest-placement KPIs grouped by device, so its totals reconcile with the user summary.
+- `dbo.GetEndpointDataSprawlUserDeviceFiles(@UserCorrelationId char(64), @EntraDeviceId
+  uniqueidentifier, @FileName nvarchar(260)=NULL, @Extension nvarchar(64)=NULL, @CreatedFromUtc
+  datetimeoffset=NULL, @CreatedToUtc datetimeoffset=NULL, @ModifiedFromUtc datetimeoffset=NULL,
+  @ModifiedToUtc datetimeoffset=NULL, @Offset int, @PageSize int)` returns a `TotalRows` result set
+  followed by a page of moved files. Placements are populated only from non-dry-run events, so the
+  read procedure does not join retained placements back to shorter-lived event rows. File name is
+  a literal substring filter and extension is exact. Pages are ordered by source-modified time,
+  event time, and destination path.
+
+For both KPI procedures, `Total` counts all current placement rows; `Moved`, `Planned`, and
+`Failed` partition them by latest status; `BytesMoved` sums bytes only for latest status `Moved`;
+and `Categories` counts distinct non-empty categories in that same snapshot. `LatestActivity`
+is the latest placement event time. Migration-cycle counters are not mixed into these aggregates.
+
+The `endpoint_data_sprawl_reader` role has execute permission only on those procedures. It has no
+direct table `SELECT` and is not a member of `db_datareader`, `db_owner`, or any contributor role.
+To provision a dashboard managed identity while initializing the database, add
+`-DashboardIdentityName <name> -DashboardIdentityClientId <application-id>` to
+`scripts\Initialize-EndpointDataSprawlDatabase.ps1`. Both arguments are optional as a pair, so
+standalone LogCollector deployments that omit them retain Worker-only database initialization.
+The initializer converts the application/client ID to the contained-user SID and adds that user
+only to `endpoint_data_sprawl_reader`.
+
+For `EndpointDataSprawlRemediator_CL`, client JSON `UserCorrelationId` is reserved and ignored.
+User authorization is established only through `POST /api/user-sessions/register`. The request
+must use the same trusted mTLS device certificate as telemetry and send a delegated access token
+in `Authorization: Bearer <token>`. The Frontend validates the configured single-tenant signing
+metadata, signature, issuer, audience, lifetime, `tid`, `oid`, exact delegated `scp`, and requires
+the token's `deviceid` claim to equal the certificate-bound Entra device id.
+
+After validation, the Frontend computes uppercase HMAC-SHA256 hexadecimal over:
+
+```text
+EndpointDataSprawlRemediator.User.v2\0
+<uppercase tenant GUID D>\0
+<uppercase delegated user object GUID D>
+```
+
+The Frontend returns a random 256-bit base64url registration ID and stores only its SHA-256 hash,
+trusted device id, correlation, creation/expiry, and revocation metadata in the `UserSessions`
+Azure Table. Its expiry is the earlier of token expiry and the configured registration TTL
+(default/recommended 480 minutes, maximum 1440);
+expired rows are cleaned hourly. Telemetry supplies the opaque ID in
+`X-LogCollector-User-Session`. An ID that is unknown, expired, revoked, or bound to another device
+is ignored for user correlation while the telemetry is accepted as administrative telemetry with
+`NULL` correlation. Administrative telemetry cannot enter user placements.
+
+Frontend app settings:
+
+- `UserSession__TenantId`
+- `UserSession__Audience`
+- `UserSession__RequiredScope`
+- `UserSession__MetadataAddress`
+- `UserSession__RegistrationTtlMinutes`
+- `UserSession__TableName`
+- `UserSession__HmacKeyBase64`
+
+Relevant Bicep inputs are `userSessionEnabled`, `userSessionTenantId`,
+`userSessionAudience`, `userSessionRequiredScope`, `userSessionMetadataAddress`,
+`userSessionRegistrationTtlMinutes`, `userSessionTableName`,
+`userSessionHmacKeyBase64`, `endpointDataSprawlKeyVaultName`, and
+`userSessionHmacSecretName`. The workflow sets `userSessionEnabled=true`; standalone
+deployments can leave it false.
+
+The HMAC key must decode to at least 32 bytes. Production deployment supplies the raw Base64 value
+through the secure `userSessionHmacKeyBase64` parameter. Bicep writes it to the deterministic EDSR
+Key Vault secret `user-correlation-hmac-key`, grants the Frontend only **Key Vault Secrets User**,
+and writes an `@Microsoft.KeyVault(SecretUri=...)` reference using the versionless secret URI to
+`UserSession__HmacKeyBase64`. Outputs `endpointDataSprawlKeyVaultName`,
+`endpointDataSprawlKeyVaultUri`, and `userSessionHmacSecretUri` allow the unified dashboard to
+reuse the same vault and secret and observe the same rotations. The workflow secret remains
+`ENDPOINT_DATA_SPRAWL_USER_CORRELATION_HMAC_KEY_BASE64`; non-secret deployment variables are
+`ENDPOINT_DATA_SPRAWL_API_AUDIENCE`, `ENDPOINT_DATA_SPRAWL_API_SCOPE`, and
+`ENDPOINT_DATA_SPRAWL_OPENID_METADATA_ADDRESS`.
+
+### Endpoint Data Sprawl App Configuration
+
+Non-secret user-session settings and SQL retention periods are stored in the dedicated
+Endpoint Data Sprawl Azure App Configuration store. `endpointDataSprawlAppConfigurationName`
+is an optional store-name override; when it is empty, standalone deployment uses
+`appcs-edsr-<13-character uniqueString(subscription, resource group, customer prefix)>`.
+The unified workflow sets it to `appcs-mslabs-edsr-prod`.
+`endpointDataSprawlAppConfigurationLabel` defaults to `prod` and is applied to every key:
+
+- `EndpointDataSprawl:UserSession:TenantId`
+- `EndpointDataSprawl:UserSession:Audience`
+- `EndpointDataSprawl:UserSession:RequiredScope`
+- `EndpointDataSprawl:UserSession:MetadataAddress`
+- `EndpointDataSprawl:UserSession:RegistrationTtlMinutes`
+- `EndpointDataSprawl:UserSession:TableName`
+- `EndpointDataSprawl:SqlPersistence:RetentionDays`
+- `EndpointDataSprawl:SqlPersistence:PlacementRetentionDays`
+
+The Frontend and Worker user-assigned identities receive **App Configuration Data Reader** at
+store scope. Their existing Function app settings use native
+`@Microsoft.AppConfiguration(...)` references with the configured label. The HMAC remains a
+versionless Key Vault reference, and SQL enablement, connection string, and fixed target-table
+invariant remain Function app settings; no secret or credential is stored in App Configuration.
+
+Native App Service App Configuration references are resolved on app start or configuration
+restart. The Functions do not install the App Configuration SDK or dynamic-refresh middleware.
+After changing a key-value, restart the affected Function app to activate it. Outputs
+`endpointDataSprawlAppConfigurationName`, `endpointDataSprawlAppConfigurationEndpoint`, and
+`endpointDataSprawlAppConfigurationResourceId` expose the shared store contract.
+
+Client usage:
+
+```powershell
+$session = Register-LogCollectorUserSession `
+  -FrontendUrl 'https://<frontend>/api/submit' `
+  -AccessToken $delegatedAccessToken
+
+Send-LogCollectorData `
+  -FrontendUrl 'https://<frontend>/api/submit' `
+  -TableName 'EndpointDataSprawlRemediator_CL' `
+  -Records $records `
+  -Source 'EndpointDataSprawlRemediator' `
+  -UserSessionRegistrationId $session.RegistrationId
+
+# Call from the interactive-user logoff/uninstall helper before discarding the ID.
+Revoke-LogCollectorUserSession `
+  -FrontendUrl 'https://<frontend>/api/submit' `
+  -RegistrationId $session.RegistrationId
+```
+
+The access token is used only for the registration request's `Authorization` header and is never
+spooled. The opaque registration ID is stored with each envelope inside the existing protected
+spool entry. Replay uses exactly that saved ID; it never substitutes a caller's current session.
+Legacy entries without an ID replay uncorrelated. Revocation uses
+`POST /api/user-sessions/revoke` with mTLS and `X-LogCollector-User-Session`; successful revocation
+clears the stored correlation mapping.
+
+SQL event/cycle retention uses the App Configuration-backed
+`SqlPersistence__RetentionDays` setting (default 2555). Durable placements use the separate,
+longer App Configuration-backed `SqlPersistence__PlacementRetentionDays` setting (default 3650);
+startup and the SQL procedure reject a placement period that is not greater than event retention.
+The corresponding Bicep parameters are `sqlPersistenceRetentionDays` and
+`sqlPlacementRetentionDays`.
+
 SQL persistence uses `IngestionSubmissions` as the delivery ledger. `LogAnalyticsState` is
 `0` (pending), `1` (outcome unknown), or `2` (published). The Worker writes state `1` before the
 external upload, resets it to `0` only when no chunk was committed, and writes state `2` after a
@@ -233,11 +384,14 @@ by `azure/login`; workflow callers cannot choose the SQL Entra administrator. Th
 parameter file keeps SQL persistence disabled so direct Bicep commands remain safe; the protected
 deployment workflow enables it only after injecting those administrator values.
 
-`SqlPersistence__RetentionDays` defaults to 2555 days. A daily timer removes expired inactive
-placements, file events, cycle summaries and unreferenced submissions in dependency order using
-server-controlled accepted, inserted, and updated timestamps rather than client event time. This
-is the governed path for removing persisted file paths and device identifiers; reducing retention
-must follow the organization's audit and data-subject deletion requirements.
+`SqlPersistence__RetentionDays` defaults to 2555 days and
+`SqlPersistence__PlacementRetentionDays` defaults to 3650 days. A daily timer first removes
+placements older than the longer placement cutoff, then removes eligible file events, cycle
+summaries, and unreferenced submissions using server-controlled accepted, inserted, and updated
+timestamps rather than client event time. `PlacementRetentionDays` must be greater than
+`RetentionDays`. This is the governed path for removing persisted file paths and device
+identifiers; reducing retention must follow the organization's audit and data-subject deletion
+requirements.
 
 Send existing record objects using shared client **1.5.0** or later:
 

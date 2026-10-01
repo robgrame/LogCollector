@@ -17,7 +17,7 @@ request already accepted by the server. Do not use a callback that dumps caller
 variables or arbitrary exceptions into a log.
 
 `src\Client\LogCollector.Client.psd1` is the public module entry point for independent
-inventory, diagnostic and remediation scripts. Version **1.11.1** supports Windows PowerShell
+inventory, diagnostic and remediation scripts. Version **1.12.0** supports Windows PowerShell
 5.1 and PowerShell 7 on Windows and can export representative schema samples without contacting Azure. Import does not discover certificates, access Azure, install
 tasks or run collection/remediation.
 
@@ -31,7 +31,7 @@ $package | Format-List ModuleVersion, PackagePath, PackageSha256
 ```
 
 The ZIP contains the eight files declared by the module manifest under
-`LogCollector.Client\1.11.1`.
+`LogCollector.Client\1.12.0`.
 It contains no customer scripts, private keys, CA files, credentials or device inventory.
 The SHA-256 identifies the generated artifact; it is not a digital signature or proof of its source.
 
@@ -40,7 +40,7 @@ Core package, distribute it through the customer's trusted management channel to
 an administrator-controlled directory, for example:
 
 ```text
-C:\Program Files\LogCollector\Modules\LogCollector.Client\1.11.1\
+C:\Program Files\LogCollector\Modules\LogCollector.Client\1.12.0\
     LogCollector.Client.psd1
     LogCollector.Client.psm1
     EndpointConfiguration.psm1
@@ -57,7 +57,7 @@ Keep the import path valid for scheduled tasks, self-copies and post-upgrade hoo
 the current working directory to locate it.
 
 ```powershell
-Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.11.1\LogCollector.Client.psd1' -ErrorAction Stop
+Import-Module 'C:\Program Files\LogCollector\Modules\LogCollector.Client\1.12.0\LogCollector.Client.psd1' -ErrorAction Stop
 ```
 
 The supported machine-wide **LogCollector Core** package uses a different,
@@ -84,6 +84,8 @@ workspace key, workspace ID or Graph token is distributed with the module.
 | `New-InventoryEnvelope` | Wraps existing records; legacy version by default, optional `-EnvelopeVersion 'LOGCOLLECTOR-TELEMETRY-V1'` |
 | `Get-LogCollectorSpoolPath` | Computes the endpoint-specific queue directory without creating it |
 | `Export-LogCollectorSchema` | Exports representative final rows for the Azure Monitor table/DCR wizard without network or certificate access |
+| `Register-LogCollectorUserSession` | Exchanges a delegated EDSR API token over mTLS for a short-lived opaque registration ID |
+| `Revoke-LogCollectorUserSession` | Revokes a registration over mTLS for logoff or uninstall cleanup |
 | `Send-LogCollectorData` | Discovers identity/certificate, wraps, signs and submits existing record objects |
 | `Sync-LogCollectorSpool` | Retries queued data without re-running the originating scripts |
 
@@ -145,6 +147,35 @@ $result | Select-Object Disposition, StatusCode, Attempts, Spooled, SpoolDirecto
 Replace `$record` with the objects the existing script already builds. A single object still goes
 inside `@(...)`. Pass objects, **not an already serialized JSON string**. Hardware and software
 destinations need separate calls if separate tables are retained.
+
+Endpoint Data Sprawl user telemetry first registers the signed-in user with the same trusted
+device certificate:
+
+```powershell
+$session = Register-LogCollectorUserSession `
+    -FrontendUrl $endpoint `
+    -AccessToken $delegatedEdsrApiToken
+
+Send-LogCollectorData -FrontendUrl $endpoint `
+    -TableName 'EndpointDataSprawlRemediator_CL' `
+    -Records $records -Source 'EndpointDataSprawlRemediator' `
+    -UserSessionRegistrationId $session.RegistrationId
+
+Revoke-LogCollectorUserSession -FrontendUrl $endpoint `
+    -RegistrationId $session.RegistrationId
+```
+
+Optional registration parameters are `-CertificateThumbprint`, `-CertificateSubjectLike`,
+`-CertificateIssuerLike`, `-PkiRootCaThumbprints`, `-PkiRootCaSubjects`,
+`-PkiIntermediateCaThumbprints`, `-PkiIntermediateCaSubjects`, and `-TimeoutSeconds`.
+Registration sends the delegated token only as `Authorization: Bearer <token>` to
+`POST /api/user-sessions/register`. Telemetry sends the returned opaque ID only as
+`X-LogCollector-User-Session: <registration-id>`. The access token is never serialized or spooled.
+The opaque registration ID is saved in the protected spool entry with its envelope, and
+`Sync-LogCollectorSpool` replays exactly that saved value. It has no parameter for replacing
+registration context during drain. Entries saved without a registration replay uncorrelated.
+Logoff/uninstall helpers should call `Revoke-LogCollectorUserSession`; it posts to
+`/api/user-sessions/revoke` with the registration header and the same device certificate.
 
 For legacy JSON-producing code, deserialize into objects before calling the facade; do not
 double-encode the body. Dates should be explicit UTC/ISO values and nested fields must match the

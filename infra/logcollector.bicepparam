@@ -9,6 +9,12 @@ param sqlEntraAdminObjectId = ''
 param sqlEntraAdminName = ''
 param sqlEntraAdminType = 'Application'
 param sqlPersistenceRetentionDays = 2555
+param sqlPlacementRetentionDays = 3650
+param userSessionEnabled = false
+param userSessionTableName = 'UserSessions'
+param userSessionRegistrationTtlMinutes = 480
+param endpointDataSprawlAppConfigurationName = ''
+param endpointDataSprawlAppConfigurationLabel = 'prod'
 
 // Purpose-specific tables in addition to the InventoryWindows_CL example.
 // Provisions the Log Analytics table, the Custom-<name> DCR stream declaration,
@@ -38,6 +44,10 @@ param additionalTelemetryTables = [
       { name: 'DryRun', type: 'boolean' }
       { name: 'SourcePath', type: 'string' }
       { name: 'DestinationPath', type: 'string' }
+      { name: 'FileName', type: 'string' }
+      { name: 'Extension', type: 'string' }
+      { name: 'SourceCreatedAtUtc', type: 'datetime' }
+      { name: 'SourceModifiedAtUtc', type: 'datetime' }
       { name: 'Category', type: 'string' }
       { name: 'CategoryProvider', type: 'string' }
       { name: 'Bytes', type: 'long' }

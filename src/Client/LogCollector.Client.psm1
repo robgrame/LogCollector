@@ -2,7 +2,7 @@
 .SYNOPSIS
 Shared telemetry facade for independent Windows PowerShell scripts.
 .NOTES
-Version 1.11.1. Import the manifest; no authentication, I/O or network calls occur on import.
+Version 1.12.0. Import the manifest; no authentication, I/O or network calls occur on import.
 #>
 Set-StrictMode -Version Latest
 
@@ -407,6 +407,9 @@ function Send-LogCollectorData {
         [string[]] $PkiIntermediateCaSubjects = @(),
         [string] $SpoolRoot,
         [string] $CustomerName,
+        [AllowEmptyString()]
+        [ValidatePattern('^$|^[A-Za-z0-9_-]{43}$')]
+        [string] $UserSessionRegistrationId,
         [ValidateRange(1, 10)] [int] $MaxAttempts = 3,
         [ValidateRange(1, 300)] [int] $TimeoutSeconds = 30,
         [ValidateRange(1, 900)] [int] $MaxDelaySeconds = 60,
@@ -451,6 +454,7 @@ function Send-LogCollectorData {
             }
         }
         $result = Invoke-InventorySubmission -Uri $FrontendUrl -Envelope $envelope -Certificate $certificate `
+            -UserSessionRegistrationId $UserSessionRegistrationId `
             -SpoolDirectory $spool -MaxAttempts $MaxAttempts -TimeoutSeconds $TimeoutSeconds `
             -MaxDelaySeconds $MaxDelaySeconds -MaxDrainEntries $MaxDrainEntries -MaxDrainAttempts $MaxDrainAttempts `
             -MaxSpoolAgeDays $MaxSpoolAgeDays -MaxSpoolEntries $MaxSpoolEntries -MaxSpoolTotalBytes $MaxSpoolTotalBytes `
@@ -518,6 +522,225 @@ function Sync-LogCollectorSpool {
     }
     finally {
         if ($null -ne $certificate) { $certificate.Dispose() }
+    }
+}
+
+function Invoke-LogCollectorUserSessionRegistrationRequest {
+    param(
+        [Parameter(Mandatory)] [Uri] $Uri,
+        [Parameter(Mandatory)] [string] $AccessToken,
+        [Parameter(Mandatory)]
+        [Security.Cryptography.X509Certificates.X509Certificate2] $Certificate,
+        [Parameter(Mandatory)] [int] $TimeoutSeconds
+    )
+
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object Net.Http.HttpClientHandler
+    $null = $handler.ClientCertificates.Add($Certificate)
+    $handler.AllowAutoRedirect = $false
+    $client = New-Object Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $request = New-Object Net.Http.HttpRequestMessage([Net.Http.HttpMethod]::Post, $Uri)
+    $request.Headers.Authorization =
+        New-Object Net.Http.Headers.AuthenticationHeaderValue('Bearer', $AccessToken)
+    try {
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        try {
+            [pscustomobject]@{
+                StatusCode = [int]$response.StatusCode
+                Content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            }
+        }
+        finally {
+            $response.Dispose()
+        }
+    }
+    finally {
+        $request.Dispose()
+        $client.Dispose()
+    }
+}
+
+function Invoke-LogCollectorUserSessionRevocationRequest {
+    param(
+        [Parameter(Mandatory)] [Uri] $Uri,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9_-]{43}$')]
+        [string] $RegistrationId,
+        [Parameter(Mandatory)]
+        [Security.Cryptography.X509Certificates.X509Certificate2] $Certificate,
+        [Parameter(Mandatory)] [int] $TimeoutSeconds
+    )
+
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object Net.Http.HttpClientHandler
+    $null = $handler.ClientCertificates.Add($Certificate)
+    $handler.AllowAutoRedirect = $false
+    $client = New-Object Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $request = New-Object Net.Http.HttpRequestMessage(
+        [Net.Http.HttpMethod]::Post,
+        $Uri)
+    $null = $request.Headers.TryAddWithoutValidation(
+        'X-LogCollector-User-Session',
+        $RegistrationId)
+    try {
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        try {
+            return [int]$response.StatusCode
+        }
+        finally {
+            $response.Dispose()
+        }
+    }
+    finally {
+        $request.Dispose()
+        $client.Dispose()
+    }
+}
+
+function Register-LogCollectorUserSession {
+    <#
+    .SYNOPSIS
+    Exchanges a delegated EDSR access token for a short-lived opaque registration.
+    .DESCRIPTION
+    Sends the access token only in the Authorization header of the mTLS-protected
+    registration request. The token is not written to the telemetry envelope,
+    local spool, diagnostics, or the returned object.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [Uri] $FrontendUrl,
+        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $AccessToken,
+        [string] $CertificateThumbprint,
+        [string] $CertificateSubjectLike,
+        [string] $CertificateIssuerLike,
+        [string[]] $PkiRootCaThumbprints = @(),
+        [string[]] $PkiRootCaSubjects = @(),
+        [string[]] $PkiIntermediateCaThumbprints = @(),
+        [string[]] $PkiIntermediateCaSubjects = @(),
+        [ValidateRange(1, 300)] [int] $TimeoutSeconds = 30
+    )
+
+    Assert-LogCollectorEndpoint -FrontendUrl $FrontendUrl
+    $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
+    $certificate = Resolve-LogCollectorCertificate -DeviceId $identity.EntraDeviceId `
+        -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike `
+        -PkiRootCaThumbprints $PkiRootCaThumbprints -PkiRootCaSubjects $PkiRootCaSubjects `
+        -PkiIntermediateCaThumbprints $PkiIntermediateCaThumbprints `
+        -PkiIntermediateCaSubjects $PkiIntermediateCaSubjects
+    if ($null -eq $certificate) {
+        throw 'No usable client certificate is available for user-session registration.'
+    }
+
+    try {
+        $registrationUri = [UriBuilder]::new($FrontendUrl)
+        $registrationUri.Path = '/api/user-sessions/register'
+        $registrationUri.Query = ''
+        $registrationUri.Fragment = ''
+
+        try {
+            $response = Invoke-LogCollectorUserSessionRegistrationRequest `
+                -Uri $registrationUri.Uri `
+                -AccessToken $AccessToken `
+                -Certificate $certificate `
+                -TimeoutSeconds $TimeoutSeconds
+        }
+        catch {
+            throw 'Endpoint Data Sprawl user-session registration failed.'
+        }
+
+        if ([int]$response.StatusCode -ne 201) {
+            throw "Endpoint Data Sprawl user-session registration returned HTTP $([int]$response.StatusCode)."
+        }
+
+        try {
+            $result = ConvertFrom-Json -InputObject $response.Content -ErrorAction Stop
+        }
+        catch {
+            throw 'Endpoint Data Sprawl user-session response was not valid JSON.'
+        }
+
+        if ($result.registrationId -notmatch '^[A-Za-z0-9_-]{43}$') {
+            throw 'Endpoint Data Sprawl user-session response did not contain a valid registration ID.'
+        }
+
+        $expiresAt = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse(
+                [string]$result.expiresAtUtc,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind,
+                [ref]$expiresAt)) {
+            throw 'Endpoint Data Sprawl user-session response did not contain a valid expiry.'
+        }
+
+        return [pscustomobject]@{
+            RegistrationId = [string]$result.registrationId
+            ExpiresAtUtc = $expiresAt
+        }
+    }
+    finally {
+        $certificate.Dispose()
+    }
+}
+
+function Revoke-LogCollectorUserSession {
+    <#
+    .SYNOPSIS
+    Revokes an opaque EDSR user-session registration during logoff or uninstall.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [Uri] $FrontendUrl,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9_-]{43}$')]
+        [string] $RegistrationId,
+        [string] $CertificateThumbprint,
+        [string] $CertificateSubjectLike,
+        [string] $CertificateIssuerLike,
+        [string[]] $PkiRootCaThumbprints = @(),
+        [string[]] $PkiRootCaSubjects = @(),
+        [string[]] $PkiIntermediateCaThumbprints = @(),
+        [string[]] $PkiIntermediateCaSubjects = @(),
+        [ValidateRange(1, 300)] [int] $TimeoutSeconds = 30
+    )
+
+    Assert-LogCollectorEndpoint -FrontendUrl $FrontendUrl
+    $identity = Get-DeviceIdentitySnapshot -ErrorAction Stop
+    $certificate = Resolve-LogCollectorCertificate -DeviceId $identity.EntraDeviceId `
+        -Thumbprint $CertificateThumbprint -SubjectLike $CertificateSubjectLike -IssuerLike $CertificateIssuerLike `
+        -PkiRootCaThumbprints $PkiRootCaThumbprints -PkiRootCaSubjects $PkiRootCaSubjects `
+        -PkiIntermediateCaThumbprints $PkiIntermediateCaThumbprints `
+        -PkiIntermediateCaSubjects $PkiIntermediateCaSubjects
+    if ($null -eq $certificate) {
+        throw 'No usable client certificate is available for user-session revocation.'
+    }
+
+    try {
+        $revocationUri = [UriBuilder]::new($FrontendUrl)
+        $revocationUri.Path = '/api/user-sessions/revoke'
+        $revocationUri.Query = ''
+        $revocationUri.Fragment = ''
+
+        try {
+            $statusCode = Invoke-LogCollectorUserSessionRevocationRequest `
+                -Uri $revocationUri.Uri `
+                -RegistrationId $RegistrationId `
+                -Certificate $certificate `
+                -TimeoutSeconds $TimeoutSeconds
+        }
+        catch {
+            throw 'Endpoint Data Sprawl user-session revocation failed.'
+        }
+
+        if ($statusCode -ne 204) {
+            throw "Endpoint Data Sprawl user-session revocation returned HTTP $statusCode."
+        }
+
+        return $true
+    }
+    finally {
+        $certificate.Dispose()
     }
 }
 
@@ -776,6 +999,6 @@ function Send-LogCollectorOperationalEvent {
 
 Export-ModuleMember -Function Get-DeviceIdentitySnapshot, Get-ClientCertificate, New-SignedInventoryRequest, `
     New-InventoryEnvelope, Get-LogCollectorSpoolPath, Export-LogCollectorSchema, Send-LogCollectorData, `
-    Sync-LogCollectorSpool, Send-LogAnalyticsData, Send-LogCollectorOperationalEvent, Get-LogCollectorEndpointConfiguration, `
+    Sync-LogCollectorSpool, Register-LogCollectorUserSession, Revoke-LogCollectorUserSession, Send-LogAnalyticsData, Send-LogCollectorOperationalEvent, Get-LogCollectorEndpointConfiguration, `
     Get-LogCollectorConfigurationPath, Get-LogCollectorDataRoot, Assert-LogCollectorApplicationFiles, `
     Write-CMTraceLog, Get-CMTraceLogPath, Get-CMTraceCustomerName

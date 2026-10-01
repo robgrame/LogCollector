@@ -48,6 +48,7 @@ public sealed class TelemetryPointerPublisher
         byte[] bodyBytes,
         string correlationId,
         string? certificateThumbprint,
+        string? userCorrelationId,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(envelope);
@@ -101,6 +102,7 @@ public sealed class TelemetryPointerPublisher
             CollectedAtUtc = envelope.CollectedAtUtc ?? now,
             AcceptedAtUtc = now,
             CertificateThumbprint = certificateThumbprint,
+            UserCorrelationId = userCorrelationId,
         };
 
         await using var sender = _serviceBus.CreateSender(_options.QueueName);

@@ -636,17 +636,21 @@ Context 'Invoke-InventorySubmission' {
     }
 
     It 'spools the exact body that was submitted' {
+        $registrationId = 's' * 43
         Mock -ModuleName InventoryClient Send-InventoryEnvelope {
             [pscustomobject]@{ Disposition = 'Transient'; StatusCode = 503; Attempts = 4; Message = 'busy' }
         }
 
         $null = Invoke-InventorySubmission -Uri ([Uri]'https://example.invalid/api/inventory') `
             -Envelope $script:Envelope -Certificate $script:Certificate `
-            -SpoolDirectory $script:SpoolRoot -SkipDrain -NoSleep
+            -SpoolDirectory $script:SpoolRoot -SkipDrain -NoSleep `
+            -UserSessionRegistrationId $registrationId
 
-        $spooled = (Get-SpoolEntry -SpoolDirectory $script:SpoolRoot)[0].Body | ConvertFrom-Json
+        $entry = (Get-SpoolEntry -SpoolDirectory $script:SpoolRoot)[0]
+        $spooled = $entry.Body | ConvertFrom-Json
         $spooled.entraDeviceId | Should -BeExactly $script:DeviceId
         $spooled.tableName | Should -BeExactly 'InventoryWindows_CL'
+        $entry.UserSessionRegistrationId | Should -BeExactly $registrationId
     }
 
     It 'drains the backlog before submitting the current sample' {
@@ -663,6 +667,58 @@ Context 'Invoke-InventorySubmission' {
 
         $result.Drain.Delivered | Should -Be 1
         $result.Disposition | Should -BeExactly 'Delivered'
+    }
+
+    It 'replays each spooled envelope with exactly its saved registration' {
+        $savedRegistrationId = 'c' * 43
+        $null = Save-SpoolEntry -Body '{"old":true}' -TableName 'T_CL' `
+            -SpoolDirectory $script:SpoolRoot `
+            -UserSessionRegistrationId $savedRegistrationId
+        Mock -ModuleName InventoryClient Send-InventoryEnvelope {
+            [pscustomobject]@{
+                Disposition = 'Delivered'
+                StatusCode = 202
+                Attempts = 1
+                Message = 'ok'
+            }
+        }
+
+        $result = Invoke-InventorySpoolDrain `
+            -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Certificate $script:Certificate `
+            -SpoolDirectory $script:SpoolRoot `
+            -NoSleep
+
+        $result.Delivered | Should -Be 1
+        Should -Invoke -ModuleName InventoryClient Send-InventoryEnvelope `
+            -Times 1 -Exactly -ParameterFilter {
+                $UserSessionRegistrationId -eq $savedRegistrationId
+            }
+    }
+
+    It 'replays a spooled envelope without a saved registration uncorrelated' {
+        $null = Save-SpoolEntry -Body '{"old":true}' -TableName 'T_CL' `
+            -SpoolDirectory $script:SpoolRoot
+        Mock -ModuleName InventoryClient Send-InventoryEnvelope {
+            [pscustomobject]@{
+                Disposition = 'Delivered'
+                StatusCode = 202
+                Attempts = 1
+                Message = 'ok'
+            }
+        }
+
+        $result = Invoke-InventorySpoolDrain `
+            -Uri ([Uri]'https://example.invalid/api/inventory') `
+            -Certificate $script:Certificate `
+            -SpoolDirectory $script:SpoolRoot `
+            -NoSleep
+
+        $result.Delivered | Should -Be 1
+        Should -Invoke -ModuleName InventoryClient Send-InventoryEnvelope `
+            -Times 1 -Exactly -ParameterFilter {
+                [string]::IsNullOrEmpty($UserSessionRegistrationId)
+            }
     }
 
     It 'rejects unsafe spool permissions before signing even when drain is skipped' {

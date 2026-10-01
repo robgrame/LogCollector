@@ -50,13 +50,13 @@ sottodirectory versionata:
 %ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\<versione>\
 ```
 
-Core 1.11.1 installa invece il manifest direttamente nel percorso stabile:
+Core 1.12.0 installa invece il manifest direttamente nel percorso stabile:
 
 ```text
 %ProgramW6432%\WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1
 ```
 
-La remediation 1.1.0 non deve quindi essere distribuita con Core 1.11.1 finché
+La remediation 1.1.0 non deve quindi essere distribuita con Core 1.12.0 finché
 il lookup non viene aggiornato al percorso stabile. Questa differenza riguarda
 solo Application Logging Remediation; Custom Inventory 1.9.1 usa già il percorso
 corretto.
@@ -177,7 +177,7 @@ out\Client\<guid>\
 ```
 
 Questo è un artefatto di distribuzione separato. Non rappresenta il layout
-machine-wide installato dal Core 1.11.1, che resta non versionato.
+machine-wide installato dal Core 1.12.0, che resta non versionato.
 
 ### Package Azure
 

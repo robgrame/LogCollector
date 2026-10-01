@@ -1,7 +1,7 @@
 # Percorsi LogCollector Core e LogCollector.Client
 
-Questo documento descrive i percorsi Windows usati da **LogCollector Core 1.11.1**
-e dal modulo condiviso **LogCollector.Client 1.11.1**. I percorsi sono espressi
+Questo documento descrive i percorsi Windows usati da **LogCollector Core 1.12.0**
+e dal modulo condiviso **LogCollector.Client 1.12.0**. I percorsi sono espressi
 con variabili di sistema: l'implementazione non presume che Windows sia installato
 su `C:`.
 

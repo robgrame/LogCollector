@@ -1,7 +1,7 @@
 # Custom Inventory - pacchetto Windows universale
 
 Versione **1.9.1**, Windows PowerShell **5.1 a 64 bit**, contesto SYSTEM.
-Il pacchetto richiede **LogCollector Core 1.11.1 o successivo** come dipendenza Intune.
+Il pacchetto richiede **LogCollector Core 1.12.0 o successivo** come dipendenza Intune.
 Non richiede repository, OneDrive, PowerShell Gallery, Workspace ID/Primary Key o
 Function key sul dispositivo. Codice e nomi dei task non dipendono da un cliente;
 endpoint, cliente e criteri certificato provengono dalla configurazione protetta del Core.
@@ -40,7 +40,7 @@ Core solo dopo aver configurato tabelle, stream/DCR e mapping sia nell'intake si
 - `Run-Inventory.ps1`: raccolta e invio separato alle destinazioni configurate.
 - `Sync-Spool.ps1`: ritrasmissione senza nuova raccolta.
 - `Inventory.Collection.psm1` / `Inventory.Runtime.psm1`: raccolta e integrazione.
-- dipendenza esterna: LogCollector Core installa `LogCollector.Client` 1.11.1 o successivo.
+- dipendenza esterna: LogCollector Core installa `LogCollector.Client` 1.12.0 o successivo.
 - `Inventory.Logging.psm1`: logger locale protetto, condiviso dalle entry point.
 - `Install.ps1`, `Uninstall.ps1`, `Detect.ps1`: gestione Intune Win32.
 - `Config.psd1`: sole opzioni specifiche del collector.
@@ -63,7 +63,7 @@ e' stata installata anche se il pacchetto Intune viene poi aggiornato.
 Caricare `Detect.ps1` GENERATO insieme al pacchetto come regola di detection, con esecuzione a 32 bit su
 client a 64 bit impostata a **No**.
 
-La detection contiene lo SHA256 del Config.psd1 finale, richiede Core 1.11.1 e controlla
+La detection contiene lo SHA256 del Config.psd1 finale, richiede Core 1.12.0 e controlla
 azione, principal SYSTEM e abilitazione dei task rispetto al Core. Per applicare una nuova configurazione
 senza disinstallare, aggiornare nella stessa app Intune sia il contenuto .intunewin
 sia il relativo Detect.ps1, con assegnazione Required. La configurazione precedente

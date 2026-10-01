@@ -33,9 +33,11 @@
       * Single-writer lock. Two overlapping scheduled-task instances must not
         drain the same entry twice.
 
-    Entries store the envelope body only. Signatures are deliberately NOT stored:
-    they are timestamp- and nonce-bound and would be stale by the time the entry
-    is drained, so every drain re-signs with a fresh timestamp and nonce.
+    Entries store the envelope body and the optional opaque user-session
+    registration that was bound to that envelope. Signatures are deliberately
+    NOT stored: they are timestamp- and nonce-bound and would be stale by the
+    time the entry is drained, so every drain re-signs with a fresh timestamp
+    and nonce.
 
 .NOTES
     Version 1.0.1 - explicit retention on save and rejection of entries exceeding the entire quota.
@@ -284,6 +286,9 @@ function Save-SpoolEntry {
         [Parameter(Mandatory)] [string] $Body,
         [Parameter(Mandatory)] [string] $TableName,
         [Parameter(Mandatory)] [string] $SpoolDirectory,
+        [AllowEmptyString()]
+        [ValidatePattern('^$|^[A-Za-z0-9_-]{43}$')]
+        [string] $UserSessionRegistrationId,
         [ValidateRange(1, 100000)] [int] $MaxEntries = 500,
         [ValidateRange(1, 2147483647)] [int] $MaxTotalBytes = 67108864,
         [ValidateRange(1, 365)] [int] $MaxAgeDays = 7
@@ -297,6 +302,7 @@ function Save-SpoolEntry {
         createdUtc   = $createdUtc.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
         tableName    = $TableName
         attempts     = 0
+        userSessionRegistrationId = $UserSessionRegistrationId
         body         = $Body
     }
 
@@ -327,7 +333,8 @@ function Get-SpoolEntry {
     .SYNOPSIS
         Returns spooled entries, oldest first.
     .OUTPUTS
-        [pscustomobject[]] with Path, CreatedUtc, TableName, Attempts, Body.
+        [pscustomobject[]] with Path, CreatedUtc, TableName, Attempts,
+        UserSessionRegistrationId and Body.
     #>
     [CmdletBinding()]
     param(
@@ -396,12 +403,24 @@ function ConvertFrom-SpoolFile {
     $tableName = ''
     if ($names -contains 'tableName') { $tableName = [string]$parsed.tableName }
 
+    $userSessionRegistrationId = ''
+    if ($names -contains 'userSessionRegistrationId') {
+        $userSessionRegistrationId =
+            [string]$parsed.userSessionRegistrationId
+        if ($userSessionRegistrationId -notmatch '^$|^[A-Za-z0-9_-]{43}$') {
+            Write-Verbose ("ConvertFrom-SpoolFile: quarantining entry with invalid user-session metadata {0}" -f $Path)
+            $null = Move-SpoolEntryToQuarantine -Path $Path -Reason 'invalid-user-session'
+            return $null
+        }
+    }
+
     [pscustomobject]@{
-        Path       = $Path
-        CreatedUtc = $createdUtc
-        TableName  = $tableName
-        Attempts   = $attempts
-        Body       = [string]$parsed.body
+        Path                      = $Path
+        CreatedUtc                = $createdUtc
+        TableName                 = $tableName
+        Attempts                  = $attempts
+        UserSessionRegistrationId = $userSessionRegistrationId
+        Body                      = [string]$parsed.body
     }
 }
 
@@ -437,6 +456,7 @@ function Update-SpoolEntryAttempt {
         createdUtc   = $entry.CreatedUtc.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
         tableName    = $entry.TableName
         attempts     = $attempts
+        userSessionRegistrationId = $entry.UserSessionRegistrationId
         body         = $entry.Body
     }
 

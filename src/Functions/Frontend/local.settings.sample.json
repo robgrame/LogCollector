@@ -15,6 +15,14 @@
     "Replay__MaxTimestampSkewSeconds": "300",
     "Replay__NonceRetentionSeconds": "7200",
 
+    "UserSession__TenantId": "<tenant-guid>",
+    "UserSession__Audience": "api://<edsr-api-application-id>",
+    "UserSession__RequiredScope": "EndpointDataSprawl.Register",
+    "UserSession__MetadataAddress": "https://login.microsoftonline.com/<tenant-guid>/v2.0/.well-known/openid-configuration",
+    "UserSession__RegistrationTtlMinutes": "480",
+    "UserSession__TableName": "UserSessions",
+    "UserSession__HmacKeyBase64": "<base64-key-at-least-32-bytes>",
+
     "RequestSignature__Required": "true",
     "RequestSignature__MaxBodyBytes": "4194304",
 

@@ -329,6 +329,29 @@ Describe 'InventorySpool' {
             (Get-SpoolEntry -SpoolDirectory $script:SpoolRoot)[0].Body | Should -BeExactly $body
         }
 
+        It 'round-trips the envelope-bound user-session registration' {
+            $registrationId = 'a' * 43
+            $null = Save-SpoolEntry -Body '{}' -TableName 'T_CL' `
+                -SpoolDirectory $script:SpoolRoot `
+                -UserSessionRegistrationId $registrationId
+
+            $entry = (Get-SpoolEntry -SpoolDirectory $script:SpoolRoot)[0]
+            $entry.UserSessionRegistrationId |
+                Should -BeExactly $registrationId
+        }
+
+        It 'treats legacy entries without a registration as uncorrelated' {
+            $path = Save-SpoolEntry -Body '{}' -TableName 'T_CL' `
+                -SpoolDirectory $script:SpoolRoot
+            $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            $json.PSObject.Properties.Remove('userSessionRegistrationId')
+            $json | ConvertTo-Json -Compress |
+                Set-Content -LiteralPath $path -Encoding utf8
+
+            $entry = (Get-SpoolEntry -SpoolDirectory $script:SpoolRoot)[0]
+            $entry.UserSessionRegistrationId | Should -BeNullOrEmpty
+        }
+
         It 'creates the quarantine directory alongside the spool' {
             $null = Save-SpoolEntry -Body '{}' -TableName 'T_CL' -SpoolDirectory $script:SpoolRoot
 
@@ -432,10 +455,16 @@ Describe 'InventorySpool' {
         }
 
         It 'preserves the body across attempt updates' {
-            $path = Save-SpoolEntry -Body '{"keep":"me"}' -TableName 'T_CL' -SpoolDirectory $script:SpoolRoot
+            $registrationId = 'b' * 43
+            $path = Save-SpoolEntry -Body '{"keep":"me"}' -TableName 'T_CL' `
+                -SpoolDirectory $script:SpoolRoot `
+                -UserSessionRegistrationId $registrationId
             $null = Update-SpoolEntryAttempt -Path $path
 
-            (Get-SpoolEntry -SpoolDirectory $script:SpoolRoot)[0].Body | Should -BeExactly '{"keep":"me"}'
+            $entry = (Get-SpoolEntry -SpoolDirectory $script:SpoolRoot)[0]
+            $entry.Body | Should -BeExactly '{"keep":"me"}'
+            $entry.UserSessionRegistrationId |
+                Should -BeExactly $registrationId
         }
     }
 

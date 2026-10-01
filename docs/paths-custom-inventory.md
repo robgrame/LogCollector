@@ -1,7 +1,7 @@
 # Percorsi Custom Inventory
 
 Questo documento descrive i percorsi usati da **Custom Inventory 1.9.1**. Il
-package dipende da **LogCollector Core 1.11.1 o successivo** e non possiede una
+package dipende da **LogCollector Core 1.12.0 o successivo** e non possiede una
 seconda configurazione di endpoint, certificato, cliente o spool.
 
 ## Installazione

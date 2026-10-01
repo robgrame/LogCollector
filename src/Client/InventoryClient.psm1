@@ -326,12 +326,18 @@ function Invoke-InventoryHttpPost {
         [Parameter(Mandatory)] [string] $Body,
         [Parameter(Mandatory)]
         [System.Security.Cryptography.X509Certificates.X509Certificate2] $Certificate,
+        [AllowEmptyString()]
+        [ValidatePattern('^$|^[A-Za-z0-9_-]{43}$')]
+        [string] $UserSessionRegistrationId,
         [int] $TimeoutSeconds = 100
     )
 
     # Sign inside the attempt: the timestamp and nonce must be fresh for every
     # single transmission, otherwise a retry is indistinguishable from a replay.
     $signed = New-SignedInventoryRequest -Uri $Uri -Body $Body -Certificate $Certificate -Method 'POST'
+    if (-not [string]::IsNullOrWhiteSpace($UserSessionRegistrationId)) {
+        $signed.Headers['X-LogCollector-User-Session'] = $UserSessionRegistrationId
+    }
     # Let the TLS endpoint finish certificate negotiation before sending a large body.
     if ($PSVersionTable.PSVersion.Major -ge 6) {
         $signed.Headers['Expect'] = '100-continue'
@@ -400,6 +406,9 @@ function Send-InventoryEnvelope {
         [Parameter(Mandatory)] [string] $Body,
         [Parameter(Mandatory)]
         [System.Security.Cryptography.X509Certificates.X509Certificate2] $Certificate,
+        [AllowEmptyString()]
+        [ValidatePattern('^$|^[A-Za-z0-9_-]{43}$')]
+        [string] $UserSessionRegistrationId,
         [int] $MaxAttempts = 4,
         [int] $BaseDelaySeconds = 5,
         [int] $MaxDelaySeconds = 300,
@@ -417,7 +426,8 @@ function Send-InventoryEnvelope {
             Endpoint = $Uri.AbsoluteUri; Attempt = $attempt; MaxAttempts = $MaxAttempts
             BodyBytes = [Text.Encoding]::UTF8.GetByteCount($Body)
         }
-        $last = Invoke-InventoryHttpPost -Uri $Uri -Body $Body -Certificate $Certificate -TimeoutSeconds $TimeoutSeconds
+        $last = Invoke-InventoryHttpPost -Uri $Uri -Body $Body -Certificate $Certificate `
+            -UserSessionRegistrationId $UserSessionRegistrationId -TimeoutSeconds $TimeoutSeconds
         $diagnostic = @{ Attempt = $attempt; StatusCode = $last.StatusCode; Disposition = $last.Disposition }
         foreach ($field in @('ExceptionType', 'HResult', 'WebExceptionStatus')) {
             if ($last.PSObject.Properties.Name -contains $field -and $null -ne $last.$field -and [string]$last.$field -ne '') {
@@ -535,6 +545,7 @@ function Invoke-InventorySpoolDrain {
                 -Uri $Uri `
                 -Body $entry.Body `
                 -Certificate $Certificate `
+                -UserSessionRegistrationId $entry.UserSessionRegistrationId `
                 -MaxAttempts $MaxAttemptsPerEntry `
                 -TimeoutSeconds $TimeoutSeconds `
                 -MaxDelaySeconds $MaxDelaySeconds `
@@ -588,6 +599,9 @@ function Invoke-InventorySubmission {
         [Parameter(Mandatory)] [object] $Envelope,
         [Parameter(Mandatory)] [AllowNull()]
         [System.Security.Cryptography.X509Certificates.X509Certificate2] $Certificate,
+        [AllowEmptyString()]
+        [ValidatePattern('^$|^[A-Za-z0-9_-]{43}$')]
+        [string] $UserSessionRegistrationId,
         [string] $SpoolDirectory = 'C:\ProgramData\LogCollector\Spool',
         [int] $MaxAttempts = 4,
         [int] $BaseDelaySeconds = 5,
@@ -615,6 +629,7 @@ function Invoke-InventorySubmission {
 
     if ($QueueOnly -or $null -eq $Certificate) {
         $path = Save-SpoolEntry -Body $body -TableName $tableName -SpoolDirectory $SpoolDirectory `
+            -UserSessionRegistrationId $UserSessionRegistrationId `
             -MaxEntries $MaxSpoolEntries -MaxTotalBytes $MaxSpoolTotalBytes -MaxAgeDays $MaxSpoolAgeDays
         if (-not $QueueOnly) {
             Write-Warning 'No usable client certificate; the submission is retained in the local spool, not delivered.'
@@ -654,6 +669,7 @@ function Invoke-InventorySubmission {
         -Uri $Uri `
         -Body $body `
         -Certificate $Certificate `
+        -UserSessionRegistrationId $UserSessionRegistrationId `
         -MaxAttempts $MaxAttempts `
         -BaseDelaySeconds $BaseDelaySeconds `
         -MaxDelaySeconds $MaxDelaySeconds `
@@ -669,6 +685,7 @@ function Invoke-InventorySubmission {
             -Body $body `
             -TableName $tableName `
             -SpoolDirectory $SpoolDirectory `
+            -UserSessionRegistrationId $UserSessionRegistrationId `
             -MaxEntries $MaxSpoolEntries `
             -MaxTotalBytes $MaxSpoolTotalBytes `
             -MaxAgeDays $MaxSpoolAgeDays

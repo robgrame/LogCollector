@@ -128,7 +128,9 @@ function Test-PublicSnapshot {
         '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3', '3913510d-42f4-4e42-8a64-420c390055eb',
         '43d0d8ad-25c7-4714-9337-8ba259a9fe05', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0',
         '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39', '974c5e8b-45b9-4653-ba55-5f855dd0fb88',
-        'b7e6dc6d-f1e8-4753-8033-0f276bb0955b', '4ca10d53-456c-4ce0-a860-14d4b6644db9'
+        'b7e6dc6d-f1e8-4753-8033-0f276bb0955b', '4ca10d53-456c-4ce0-a860-14d4b6644db9',
+        '4633458b-17de-408a-b874-0445c86b69e6', '516239f1-63e1-4d78-a4de-a74fb236a071',
+        '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b'
     ) | ForEach-Object { $null = $allowedGuids.Add($_) }
 
     $binaryExtensions = @(
