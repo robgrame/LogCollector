@@ -275,6 +275,7 @@ jobs:
               }
           }
           foreach ($entry in @{
+              includeEndpointDataSprawlTable = $true
               sqlPersistenceEnabled = $true
               sqlEntraAdminObjectId = $env:SQL_ENTRA_ADMIN_OBJECT_ID
               sqlEntraAdminName = $env:SQL_ENTRA_ADMIN_NAME

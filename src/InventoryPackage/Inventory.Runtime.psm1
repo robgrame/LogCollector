@@ -30,7 +30,7 @@ function Get-InventoryConfiguration {
     }
     if ($SkipCoreConfiguration) { return $config }
     $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-    Import-Module $coreManifest -MinimumVersion 1.12.0 -ErrorAction Stop
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
     $endpoint = Get-LogCollectorEndpointConfiguration
     if ($endpoint.SubmissionEnabled -isnot [bool]) {
         throw 'LogCollector Core configuration SubmissionEnabled must be a Boolean.'

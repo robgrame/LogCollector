@@ -11,7 +11,7 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'Inventory.Logging.psm1') -ErrorAction Stop
     $configPath = Join-Path $PSScriptRoot 'Config.psd1'
     $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-    Import-Module $coreManifest -MinimumVersion 1.12.0 -ErrorAction Stop
+    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
     $customerName = (Get-LogCollectorEndpointConfiguration).CustomerName
     if ($customerName) {
         $log = Initialize-InventoryLogContext -Component Spool -PackageVersion $packageVersion `

@@ -319,6 +319,29 @@ public sealed class TelemetryIngestFunctionTests
     }
 
     [Fact]
+    public async Task EndpointDataSprawlIgnoresRegistrationWhenUserSessionsAreDisabled()
+    {
+        using var h = new FrontendTestHarness(
+            extraSettings: [("UserSession:HmacKeyBase64", string.Empty)]);
+        var body = Body(table: "EndpointDataSprawlRemediator_CL");
+        var request = h.Request(false, body);
+        request.Headers[UserSessionOptions.RegistrationHeaderName] =
+            new string('x', 43);
+
+        var result = await h.Invoke(false, request);
+
+        AssertPublished(
+            h,
+            result,
+            body,
+            "EndpointDataSprawlRemediator_CL",
+            "EnterprisePki",
+            expectedUserCorrelationId: null);
+        Assert.Equal(0, h.UserSessions.ResolveCalls);
+        Assert.Empty(h.IntakeLogger.Messages);
+    }
+
+    [Fact]
     public async Task EndpointDataSprawlWithoutRegistrationPublishesNullCorrelation()
     {
         using var h = new FrontendTestHarness();

@@ -37,6 +37,12 @@ Describe 'Endpoint Data Sprawl App Configuration' {
             "param endpointDataSprawlAppConfigurationName = ''")
         $script:Parameters | Should -Match (
             "param endpointDataSprawlAppConfigurationLabel = 'prod'")
+        $script:MainBicep | Should -Match (
+            'var endpointDataSprawlConfigurationEnabled = userSessionEnabled \|\| sqlPersistenceEnabled')
+        $script:MainBicep | Should -Match (
+            'resource endpointDataSprawlAppConfiguration[\s\S]*= if \(endpointDataSprawlConfigurationEnabled\)')
+        $script:MainBicep | Should -Match (
+            'resource endpointDataSprawlKeyVault[\s\S]*= if \(userSessionEnabled\)')
     }
 
     It 'creates the exact labeled non-secret key set' {
@@ -90,6 +96,28 @@ Describe 'Endpoint Data Sprawl App Configuration' {
         $script:MainBicep | Should -Not -Match 'AppConfigurationDataOwner'
         $script:Workflow | Should -Match '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b'
         $script:Workflow | Should -Match 'App Configuration Data Owner permission did not propagate'
+    }
+
+    It 'does not provision purpose-specific resources for a generic deployment' {
+        $script:Parameters | Should -Not -Match 'EndpointDataSprawlRemediator_CL'
+        $script:Parameters | Should -Match 'param includeEndpointDataSprawlTable = false'
+        $script:MainBicep | Should -Match (
+            'var endpointDataSprawlTelemetryEnabled = includeEndpointDataSprawlTable \|\| endpointDataSprawlConfigurationEnabled')
+        $script:MainBicep | Should -Match (
+            '!contains\(additionalTelemetryTableNames, endpointDataSprawlTelemetryTable\.name\)')
+        $script:Workflow | Should -Match 'includeEndpointDataSprawlTable = \$true'
+        $script:MainBicep | Should -Match (
+            'resource userSessionTable[\s\S]*= if \(userSessionEnabled\)')
+        $script:MainBicep | Should -Match (
+            'resource raFrontendKeyVaultSecrets[\s\S]*= if \(userSessionEnabled\)')
+        $script:MainBicep | Should -Match (
+            'resource raFrontendAppConfiguration[\s\S]*= if \(userSessionEnabled\)')
+        $script:MainBicep | Should -Match (
+            'resource raWorkerAppConfiguration[\s\S]*= if \(sqlPersistenceEnabled\)')
+        $script:MainBicep | Should -Match (
+            "output endpointDataSprawlAppConfigurationName string = endpointDataSprawlConfigurationEnabled \?[\s\S]*: ''")
+        $script:MainBicep | Should -Match (
+            "output endpointDataSprawlKeyVaultName string = userSessionEnabled \?[\s\S]*: ''")
     }
 
     It 'publishes the exact store outputs' {

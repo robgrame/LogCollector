@@ -42,6 +42,7 @@ public sealed class TelemetryIngestFunction
     private readonly TelemetryIntakeOptions _options;
     private readonly EntraDeviceValidationOptions _entraDeviceValidation;
     private readonly GraphDeviceAuthorizer _deviceAuthorizer;
+    private readonly UserSessionOptions _userSessionOptions;
     private readonly IUserSessionStore _userSessionStore;
     private readonly ILogger<TelemetryIngestFunction> _log;
 
@@ -54,6 +55,7 @@ public sealed class TelemetryIngestFunction
         TelemetryIntakeOptions options,
         EntraDeviceValidationOptions entraDeviceValidation,
         GraphDeviceAuthorizer deviceAuthorizer,
+        UserSessionOptions userSessionOptions,
         IUserSessionStore userSessionStore,
         ILogger<TelemetryIngestFunction> log)
     {
@@ -63,6 +65,7 @@ public sealed class TelemetryIngestFunction
         _options = options;
         _entraDeviceValidation = entraDeviceValidation;
         _deviceAuthorizer = deviceAuthorizer;
+        _userSessionOptions = userSessionOptions;
         _userSessionStore = userSessionStore;
         _log = log;
     }
@@ -171,7 +174,8 @@ public sealed class TelemetryIngestFunction
         }
 
         string? userCorrelationId = null;
-        if (string.Equals(
+        if (_userSessionOptions.IsConfigured
+            && string.Equals(
             envelope.TableName,
             "EndpointDataSprawlRemediator_CL",
             StringComparison.Ordinal))

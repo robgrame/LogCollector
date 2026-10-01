@@ -3,7 +3,7 @@
 Purpose-independent, certificate-authenticated device telemetry ingestion into Azure Monitor.
 Inventory, remediation results, health checks and other scripts share the same ingestion platform.
 
-Current release versions: **Azure backend 1.15.1**, **LogCollector Core / Client 1.12.0**,
+Current release versions: **Azure backend 1.15.2**, **LogCollector Core / Client 1.12.0**,
 and **Custom Inventory 1.9.1**.
 
 A script on each device produces records, signs them with the device's own certificate, and
@@ -25,7 +25,7 @@ not another Function or a platform code change. See the
 [customer procedure for adding a telemetry collection](docs/customer-add-telemetry-collection.md)
 and [Adding a purpose](docs/operations.md#adding-a-purpose).
 
-Backend **1.15.1** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
+Backend **1.15.2** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
 `LOGCOLLECTOR-INVENTORY-V1` wire format. `/api/inventory` is an explicit compatibility alias through
 the **same** authentication and processing path. Existing inventory packages, table names, queues,
 retained blobs and spool entries are not renamed or rewritten.
@@ -274,7 +274,7 @@ with a local Microsoft `IntuneWinAppUtil.exe`. See
 [Intune Win32 deployment](docs/intune-win32-deployment.md) for the laboratory build
 command, install/uninstall commands, detection settings and requirements.
 The generated detection script pins the collector configuration SHA256, requires
-LogCollector Core 1.12.0, and checks task actions, SYSTEM identity and enablement
+LogCollector Core 1.11.1, and checks task actions, SYSTEM identity and enablement
 against the Core configuration. For collector-only updates, replace
 both the app content and its generated detection script in the same Required app;
 endpoint/customer/PKI changes require updating Core only.

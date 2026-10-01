@@ -80,9 +80,25 @@ internal sealed class FrontendTestHarness : IDisposable
             ("UserSession:HmacKeyBase64",
                 "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
         };
-        settings.AddRange(extraSettings);
+        foreach (var setting in extraSettings)
+        {
+            var existingIndex = settings.FindIndex(
+                existing => string.Equals(
+                    existing.Item1,
+                    setting.Key,
+                    StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+            {
+                settings[existingIndex] = setting;
+            }
+            else
+            {
+                settings.Add(setting);
+            }
+        }
         Config = TestCertificates.Config([.. settings]);
         var options = new TelemetryIntakeOptions(Config);
+        var userSessionOptions = new UserSessionOptions(Config);
         CertificateValidator =
             new ClientCertValidator(
                 Config,
@@ -107,6 +123,7 @@ internal sealed class FrontendTestHarness : IDisposable
             options,
             new EntraDeviceValidationOptions(Config),
             new GraphDeviceAuthorizer(new TestCredential(intune), _graphHttp),
+            userSessionOptions,
             UserSessions,
             IntakeLogger);
     }
@@ -190,6 +207,8 @@ internal sealed class FrontendTestHarness : IDisposable
         private readonly Dictionary<string, Session> _sessions =
             new(StringComparer.Ordinal);
 
+        public int ResolveCalls { get; private set; }
+
         public Task<CreatedUserSession> CreateAsync(
             Guid trustedDeviceId,
             string userCorrelationId,
@@ -213,6 +232,7 @@ internal sealed class FrontendTestHarness : IDisposable
             Guid trustedDeviceId,
             CancellationToken cancellationToken)
         {
+            ResolveCalls++;
             if (!_sessions.TryGetValue(registrationId, out var session))
             {
                 return Task.FromResult(

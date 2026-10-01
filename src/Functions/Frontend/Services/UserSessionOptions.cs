@@ -22,8 +22,10 @@ public sealed class UserSessionOptions
             configuration["UserSession:RequiredScope"]?.Trim() ?? string.Empty;
         MetadataAddress =
             configuration["UserSession:MetadataAddress"]?.Trim() ?? string.Empty;
-        TableName =
-            configuration["UserSession:TableName"]?.Trim() ?? "UserSessions";
+        var tableNameValue = configuration["UserSession:TableName"]?.Trim();
+        TableName = string.IsNullOrWhiteSpace(tableNameValue)
+            ? "UserSessions"
+            : tableNameValue;
         var keyValue = configuration["UserSession:HmacKeyBase64"];
 
         var ttlValue = configuration["UserSession:RegistrationTtlMinutes"];
