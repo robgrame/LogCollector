@@ -32,6 +32,165 @@ public sealed class TelemetryIngestionProcessorFailureTests
     }
 
     [Fact]
+    public async Task ProcessAsync_PersistsBeforePublishingToLogAnalytics()
+    {
+        var payload = WorkerTestHost.EnvelopePayload();
+        var persistence = new WorkerTestHost.RecordingPersistence(
+            (_, rows, _) =>
+            {
+                Assert.Equal(2, rows.Count);
+                return Task.FromResult(new PersistenceResult(
+                    true,
+                    rows.Count,
+                    LogAnalyticsDeliveryState.Pending));
+            });
+        var handler = WorkerTestHost.PipelineHandler(payload, HttpStatusCode.NoContent);
+        var processor = WorkerTestHost.Processor(
+            WorkerTestHost.Options(),
+            handler,
+            persistence: persistence);
+
+        var outcome = await processor.ProcessAsync(
+            WorkerTestHost.Pointer(payload),
+            CancellationToken.None);
+
+        Assert.True(outcome.Ok, outcome.Reason);
+        Assert.Equal(1, persistence.CallCount);
+        Assert.Equal(1, persistence.BeginPublishCallCount);
+        Assert.Equal(1, persistence.MarkPublishedCallCount);
+        Assert.Equal(1, handler.CountOf("POST", "/dataCollectionRules/"));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_SkipsLogAnalyticsWhenSqlLedgerAlreadyMarksItPublished()
+    {
+        var payload = WorkerTestHost.EnvelopePayload();
+        var persistence = new WorkerTestHost.RecordingPersistence(
+            (_, rows, _) => Task.FromResult(new PersistenceResult(
+                true,
+                rows.Count,
+                LogAnalyticsDeliveryState.Published)));
+        var handler = WorkerTestHost.PipelineHandler(payload, HttpStatusCode.NoContent);
+        var processor = WorkerTestHost.Processor(
+            WorkerTestHost.Options(deleteBlobAfterIngestion: true),
+            handler,
+            persistence: persistence);
+
+        var outcome = await processor.ProcessAsync(
+            WorkerTestHost.Pointer(payload),
+            CancellationToken.None);
+
+        Assert.True(outcome.Ok, outcome.Reason);
+        Assert.Equal(0, handler.CountOf("POST", "/dataCollectionRules/"));
+        Assert.Equal(1, handler.CountOf("DELETE", "/inventory-payloads/"));
+        Assert.Equal(0, persistence.MarkPublishedCallCount);
+        Assert.Equal(0, persistence.BeginPublishCallCount);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DeadLettersAnUnknownDeliveryWithoutDeletingTheBlob()
+    {
+        var payload = WorkerTestHost.EnvelopePayload();
+        var persistence = new WorkerTestHost.RecordingPersistence(
+            (_, rows, _) => Task.FromResult(new PersistenceResult(
+                true,
+                rows.Count,
+                LogAnalyticsDeliveryState.OutcomeUnknown)));
+        var handler = WorkerTestHost.PipelineHandler(payload, HttpStatusCode.NoContent);
+        var processor = WorkerTestHost.Processor(
+            WorkerTestHost.Options(deleteBlobAfterIngestion: true),
+            handler,
+            persistence: persistence);
+
+        var outcome = await processor.ProcessAsync(
+            WorkerTestHost.Pointer(payload),
+            CancellationToken.None);
+
+        Assert.True(outcome.Permanent);
+        Assert.Contains("reconciliation", outcome.Reason!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, handler.CountOf("POST", "/dataCollectionRules/"));
+        Assert.Equal(0, handler.CountOf("DELETE", "/inventory-payloads/"));
+        Assert.Equal(0, persistence.BeginPublishCallCount);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DeadLettersWhenLedgerMarkerFailsAfterLogAnalyticsCommitted()
+    {
+        var payload = WorkerTestHost.EnvelopePayload();
+        var persistence = new WorkerTestHost.RecordingPersistence(
+            (_, rows, _) => Task.FromResult(new PersistenceResult(
+                true,
+                rows.Count,
+                LogAnalyticsDeliveryState.Pending)),
+            (_, _) => throw new EndpointDataSprawlPersistenceException(
+                "ledger unavailable",
+                permanent: false));
+        var handler = WorkerTestHost.PipelineHandler(payload, HttpStatusCode.NoContent);
+        var processor = WorkerTestHost.Processor(
+            WorkerTestHost.Options(deleteBlobAfterIngestion: true),
+            handler,
+            persistence: persistence);
+
+        var outcome = await processor.ProcessAsync(
+            WorkerTestHost.Pointer(payload),
+            CancellationToken.None);
+
+        Assert.True(outcome.Permanent);
+        Assert.Contains("reconciliation", outcome.Reason!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, handler.CountOf("POST", "/dataCollectionRules/"));
+        Assert.Equal(0, handler.CountOf("DELETE", "/inventory-payloads/"));
+        Assert.Equal(1, persistence.MarkPublishedCallCount);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DeadLettersAPermanentSqlConflictWithoutPublishingToLogAnalytics()
+    {
+        var payload = WorkerTestHost.EnvelopePayload();
+        var persistence = new WorkerTestHost.RecordingPersistence(
+            (_, _, _) => throw new EndpointDataSprawlPersistenceException(
+                "submission digest conflict",
+                permanent: true));
+        var handler = WorkerTestHost.PipelineHandler(payload, HttpStatusCode.NoContent);
+        var processor = WorkerTestHost.Processor(
+            WorkerTestHost.Options(),
+            handler,
+            persistence: persistence);
+
+        var outcome = await processor.ProcessAsync(
+            WorkerTestHost.Pointer(payload),
+            CancellationToken.None);
+
+        Assert.True(outcome.Permanent);
+        Assert.Contains("digest conflict", outcome.Reason!, StringComparison.Ordinal);
+        Assert.Equal(0, handler.CountOf("POST", "/dataCollectionRules/"));
+        Assert.Equal(0, handler.CountOf("DELETE", "/inventory-payloads/"));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RethrowsATransientSqlFailureWithoutPublishingToLogAnalytics()
+    {
+        var payload = WorkerTestHost.EnvelopePayload();
+        var persistence = new WorkerTestHost.RecordingPersistence(
+            (_, _, _) => throw new EndpointDataSprawlPersistenceException(
+                "database unavailable",
+                permanent: false));
+        var handler = WorkerTestHost.PipelineHandler(payload, HttpStatusCode.NoContent);
+        var processor = WorkerTestHost.Processor(
+            WorkerTestHost.Options(),
+            handler,
+            persistence: persistence);
+
+        var exception = await Assert.ThrowsAsync<EndpointDataSprawlPersistenceException>(
+            () => processor.ProcessAsync(
+                WorkerTestHost.Pointer(payload),
+                CancellationToken.None));
+
+        Assert.False(exception.Permanent);
+        Assert.Equal(0, handler.CountOf("POST", "/dataCollectionRules/"));
+        Assert.Equal(0, handler.CountOf("DELETE", "/inventory-payloads/"));
+    }
+
+    [Fact]
     public async Task ProcessAsync_TurnsAPermanentIngestionRejectionIntoAPoisonOutcome()
     {
         var payload = WorkerTestHost.EnvelopePayload();

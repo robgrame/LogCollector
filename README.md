@@ -3,13 +3,14 @@
 Purpose-independent, certificate-authenticated device telemetry ingestion into Azure Monitor.
 Inventory, remediation results, health checks and other scripts share the same ingestion platform.
 
-Current release versions: **Azure backend 1.13.8**, **LogCollector Core / Client 1.11.1**,
+Current release versions: **Azure backend 1.14.0**, **LogCollector Core / Client 1.11.1**,
 and **Custom Inventory 1.9.1**.
 
 A script on each device produces records, signs them with the device's own certificate, and
 posts it over mutual TLS to a frontend Azure Function. The frontend authenticates the device, parks
 the payload in Blob storage, and enqueues a pointer on Service Bus. A worker Function drains the
-queue and writes rows to a Log Analytics custom table through the Azure Monitor Logs Ingestion API.
+queue, optionally persists designated streams to Azure SQL, and writes rows to a Log Analytics
+custom table through the Azure Monitor Logs Ingestion API.
 
 **There is no Function key, no shared secret, and no Log Analytics workspace key anywhere in this
 solution.** The device certificate is the only client credential, and every service-to-service hop
@@ -24,7 +25,7 @@ not another Function or a platform code change. See the
 [customer procedure for adding a telemetry collection](docs/customer-add-telemetry-collection.md)
 and [Adding a purpose](docs/operations.md#adding-a-purpose).
 
-Backend **1.13.8** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
+Backend **1.14.0** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
 `LOGCOLLECTOR-INVENTORY-V1` wire format. `/api/inventory` is an explicit compatibility alias through
 the **same** authentication and processing path. Existing inventory packages, table names, queues,
 retained blobs and spool entries are not renamed or rewritten.
@@ -63,6 +64,7 @@ retained blobs and spool entries are not renamed or rewritten.
    │  • chunk to ≤ 850 KB, retry honouring Retry-After
    │  • complete / dead-letter explicitly
    ▼
+ Azure SQL durable read model (configured streams)
  Azure Monitor Logs Ingestion API → DCE → DCR → Log Analytics custom table
 ```
 
@@ -374,8 +376,9 @@ Delivery is **at least once**, not exactly once. The authenticated body determin
 SHA-256 `CorrelationId`, and each projected row receives a server-assigned `RecordIndex`.
 Service Bus suppresses duplicate sends within its one-hour detection window. A worker crash
 after ingestion, a partially successful multi-chunk upload, or a later client retry can still
-produce duplicate Log Analytics rows. Use `(EntraDeviceId, CorrelationId, RecordIndex)` to
-deduplicate analytical queries; the Logs Ingestion API does not offer an idempotent write token.
+produce duplicate Log Analytics rows because the Logs Ingestion API does not offer an idempotent
+write token. Endpoint Data Sprawl rows have a server-generated stable `EventId`; deduplicate that
+stream on `EventId`. Other streams should use `(EntraDeviceId, CorrelationId, RecordIndex)`.
 
 ```kusto
 InventoryWindows_CL

@@ -150,6 +150,28 @@ param maxRequestBodyBytes int = 4194304
 @description('Delete the payload blob immediately after successful ingestion. Off by default so the lifecycle policy governs retention.')
 param deleteBlobAfterIngestion bool = false
 
+@description('Persist Endpoint Data Sprawl telemetry to Azure SQL before publishing to Log Analytics.')
+param sqlPersistenceEnabled bool = false
+
+@description('Microsoft Entra object id of the deployment principal configured as the SQL server administrator.')
+param sqlEntraAdminObjectId string = ''
+
+@description('Display name of the Microsoft Entra deployment principal configured as the SQL server administrator.')
+param sqlEntraAdminName string = ''
+
+@description('Microsoft Entra principal type of the SQL server administrator.')
+@allowed([
+  'User'
+  'Group'
+  'Application'
+])
+param sqlEntraAdminType string = 'Application'
+
+@description('Days to retain Endpoint Data Sprawl SQL events, cycles and inactive placements.')
+@minValue(30)
+@maxValue(3650)
+param sqlPersistenceRetentionDays int = 2555
+
 @description('Resource tags.')
 param tags object = {
   application: 'LogCollector'
@@ -182,6 +204,8 @@ var frontendAppName = '${namePrefix}-intake'
 var workerAppName = '${namePrefix}-worker'
 var frontendIdentityName = '${namePrefix}-intake-identity'
 var workerIdentityName = '${namePrefix}-worker-identity'
+var sqlServerName = toLower('${namePrefix}-endpoint-data-sprawl-sql')
+var sqlDatabaseName = 'EndpointDataSprawl'
 
 var frontendDeployContainer = 'intake-deploy'
 var workerDeployContainer = 'worker-deploy'
@@ -594,6 +618,53 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
   tags: tags
 }
 
+resource sqlServer 'Microsoft.Sql/servers@2022-05-01-preview' = if (sqlPersistenceEnabled) {
+  name: sqlServerName
+  location: location
+  tags: tags
+  properties: {
+    administrators: {
+      administratorType: 'ActiveDirectory'
+      principalType: sqlEntraAdminType
+      login: sqlEntraAdminName
+      sid: sqlEntraAdminObjectId
+      tenantId: subscription().tenantId
+      azureADOnlyAuthentication: true
+    }
+    minimalTlsVersion: '1.2'
+    publicNetworkAccess: 'Enabled'
+    restrictOutboundNetworkAccess: 'Disabled'
+  }
+}
+
+resource sqlDatabase 'Microsoft.Sql/servers/databases@2022-05-01-preview' = if (sqlPersistenceEnabled) {
+  parent: sqlServer
+  name: sqlDatabaseName
+  location: location
+  tags: tags
+  sku: {
+    name: 'GP_S_Gen5'
+    tier: 'GeneralPurpose'
+    family: 'Gen5'
+    capacity: 1
+  }
+  properties: {
+    autoPauseDelay: 60
+    minCapacity: json('0.5')
+    zoneRedundant: false
+    requestedBackupStorageRedundancy: 'Local'
+  }
+}
+
+resource sqlAllowAzureServices 'Microsoft.Sql/servers/firewallRules@2022-05-01-preview' = if (sqlPersistenceEnabled) {
+  parent: sqlServer
+  name: 'AllowAzureServices'
+  properties: {
+    startIpAddress: '0.0.0.0'
+    endIpAddress: '0.0.0.0'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Role assignments (least privilege)
 // ---------------------------------------------------------------------------
@@ -884,7 +955,7 @@ resource workerApp 'Microsoft.Web/sites@2023-12-01' = {
     siteConfig: {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      appSettings: [
+      appSettings: concat([
         { name: 'AzureWebJobsStorage__accountName', value: storage.name }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
         { name: 'AzureWebJobsStorage__clientId', value: workerIdentity.properties.clientId }
@@ -909,7 +980,17 @@ resource workerApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'Ingestion__MaxRetryDelaySeconds', value: '60' }
         { name: 'Ingestion__DeleteBlobAfterIngestion', value: string(deleteBlobAfterIngestion) }
         { name: 'Intake__MaxRecordsPerEnvelope', value: '50000' }
-      ]
+      ], sqlPersistenceEnabled ? [
+        { name: 'SqlPersistence__Enabled', value: 'true' }
+        {
+          name: 'SqlPersistence__ConnectionString'
+          value: 'Server=tcp:${sqlServer!.properties.fullyQualifiedDomainName},1433;Database=${sqlDatabase!.name};Authentication=Active Directory Managed Identity;User Id=${workerIdentity.properties.clientId};Encrypt=True;TrustServerCertificate=False;Connect Timeout=60;ConnectRetryCount=3;ConnectRetryInterval=10;'
+        }
+        { name: 'SqlPersistence__TargetTableName', value: 'EndpointDataSprawlRemediator_CL' }
+        { name: 'SqlPersistence__RetentionDays', value: string(sqlPersistenceRetentionDays) }
+      ] : [
+        { name: 'SqlPersistence__Enabled', value: 'false' }
+      ])
     }
   }
   dependsOn: [
@@ -947,3 +1028,8 @@ output frontendIdentityClientId string = frontendIdentity.properties.clientId
 output workerIdentityClientId string = workerIdentity.properties.clientId
 output frontendDeployContainerName string = frontendDeployContainer
 output workerDeployContainerName string = workerDeployContainer
+output sqlPersistenceEnabled bool = sqlPersistenceEnabled
+output sqlServerName string = sqlPersistenceEnabled ? sqlServer!.name : ''
+output sqlDatabaseName string = sqlPersistenceEnabled ? sqlDatabase!.name : ''
+output workerIdentityName string = workerIdentity.name
+output workerIdentityPrincipalId string = workerIdentity.properties.principalId

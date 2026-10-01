@@ -129,6 +129,27 @@ public sealed class TelemetryRowFactoryTests
     }
 
     [Fact]
+    public void BuildRows_AddsStableServerEventIdsOnlyForEndpointDataSprawl()
+    {
+        var endpointEnvelope = Envelope("{\"EventId\":\"forged\",\"RecordType\":\"FileResult\"}");
+        endpointEnvelope.TableName = "EndpointDataSprawlRemediator_CL";
+
+        var first = Assert.Single(
+            TelemetryRowFactory.BuildRows(endpointEnvelope, "stable-id", Ingested));
+        var retry = Assert.Single(
+            TelemetryRowFactory.BuildRows(endpointEnvelope, "stable-id", Ingested.AddMinutes(1)));
+        var inventory = Assert.Single(
+            TelemetryRowFactory.BuildRows(Envelope("{}"), "stable-id", Ingested));
+
+        Assert.Equal(64, first.GetProperty("EventId").GetString()!.Length);
+        Assert.Equal(
+            first.GetProperty("EventId").GetString(),
+            retry.GetProperty("EventId").GetString());
+        Assert.NotEqual("forged", first.GetProperty("EventId").GetString());
+        Assert.False(inventory.TryGetProperty("EventId", out _));
+    }
+
+    [Fact]
     public void BuildRows_ReturnsAnEmptyListForAnEnvelopeWithNoRecords()
     {
         var envelope = Envelope("{}");

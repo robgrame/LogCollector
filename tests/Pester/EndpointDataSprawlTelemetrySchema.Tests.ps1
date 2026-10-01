@@ -24,6 +24,7 @@ BeforeAll {
         IntuneDeviceId     = 'string'
         CorrelationId      = 'string'
         RecordIndex        = 'int'
+        EventId            = 'string'
         Source             = 'string'
         ClientVersion      = 'string'
         UserCorrelationId  = 'string'

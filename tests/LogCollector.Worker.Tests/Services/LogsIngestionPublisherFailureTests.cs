@@ -141,4 +141,21 @@ public sealed class LogsIngestionPublisherFailureTests
         Assert.Contains("No chunks committed", reason, StringComparison.Ordinal);
         Assert.Contains("replayed safely", reason, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void DescribePermanentIngestionFailure_TreatsMissingHttpResponseAsUnknown()
+    {
+        var ex = new LogsIngestionException(
+            "stub",
+            statusCode: 0,
+            permanent: true,
+            chunksCommitted: 0,
+            chunkCount: 3);
+
+        var reason = TelemetryIngestionProcessor.DescribePermanentIngestionFailure(ex);
+
+        Assert.Contains("no authoritative HTTP response", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Reconcile by EventId", reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("replayed safely", reason, StringComparison.Ordinal);
+    }
 }

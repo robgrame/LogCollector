@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using LogCollector.Shared.Models;
 
@@ -27,6 +29,7 @@ public static class TelemetryRowFactory
             "CorrelationId",
             "Source",
             "RecordIndex",
+            "EventId",
         };
 
     public static IReadOnlyList<JsonElement> BuildRows(
@@ -74,6 +77,16 @@ public static class TelemetryRowFactory
                 writer.WriteString("IntuneDeviceId", envelope.IntuneDeviceId ?? string.Empty);
                 writer.WriteString("CorrelationId", correlationId);
                 writer.WriteNumber("RecordIndex", recordIndex);
+                if (string.Equals(
+                    envelope.TableName,
+                    "EndpointDataSprawlRemediator_CL",
+                    StringComparison.Ordinal))
+                {
+                    writer.WriteString(
+                        "EventId",
+                        Convert.ToHexString(SHA256.HashData(
+                            Encoding.UTF8.GetBytes($"{correlationId}:{recordIndex}"))));
+                }
                 writer.WriteString("Source", envelope.Source ?? "Unknown");
 
                 writer.WriteEndObject();

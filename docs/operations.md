@@ -198,6 +198,8 @@ where `columns` contains `{ name, type }` entries. It provisions all those table
 pass-through data flows and both app mappings together. Include the platform columns
 `TimeGenerated` and `CollectedAtUtc` (datetime), `EntraDeviceId`, `DeviceName`, `IntuneDeviceId`,
 `CorrelationId` and `Source` (string), and `RecordIndex` (int), plus the purpose-specific columns.
+Endpoint Data Sprawl additionally includes the server-generated `EventId:string` used to
+deduplicate Log Analytics queries.
 Table names must be unique, including the default inventory table. Set `includeInventoryExample=false`
 for a new deployment with no inventory purpose; provide at least one additional table in that case.
 The default remains the original inventory example to preserve existing deployments and queries.
@@ -209,8 +211,33 @@ The production Endpoint Data Sprawl Remediator contract is authoritative in
 server-stamped platform identity fields and the client's stable cycle, file-result, count and
 pseudonymous `UserCorrelationId` fields. The generated `ingestionStreamMap` in `infra\main.bicep`
 wires `Custom-EndpointDataSprawlRemediator_CL` into both Function Apps; do not maintain separate
-manual mappings. Backend 1.13.8 adds the complete `Deferred:int` cycle-summary counter used for
-locked-file backlog and completion indicators even when individual file records are capped.
+manual mappings. Backend 1.14.0 adds idempotent Azure SQL persistence for Endpoint Data Sprawl
+telemetry while retaining the complete `Deferred:int` cycle-summary counter used for locked-file
+backlog and completion indicators even when individual file records are capped. The SQL read model
+retains `Moved`, `Planned`, and `Failed` destination states
+because the user experience distinguishes completed, pending, and retry-required work; consumers
+must filter `Status = 'Moved'` when only completed placements are required.
+
+SQL persistence uses `IngestionSubmissions` as the delivery ledger. `LogAnalyticsState` is
+`0` (pending), `1` (outcome unknown), or `2` (published). The Worker writes state `1` before the
+external upload, resets it to `0` only when no chunk was committed, and writes state `2` after a
+complete upload. Alert on state `1` beyond the normal ingestion window: the SQL read model is
+canonical, and operators must reconcile Log Analytics by stable `EventId` rather than blindly
+republishing. A transport failure with no authoritative HTTP response also remains state `1`
+because Log Analytics may have committed the current chunk. The Worker retains the existing
+dead-letter message and Blob payload for permanent or ambiguous Log Analytics failures.
+
+Infrastructure deployment reads `AZURE_DEPLOYMENT_OBJECT_ID` and `AZURE_DEPLOYMENT_NAME` from the
+protected GitHub `production` environment. They must identify the same fixed service principal used
+by `azure/login`; workflow callers cannot choose the SQL Entra administrator. The checked-in
+parameter file keeps SQL persistence disabled so direct Bicep commands remain safe; the protected
+deployment workflow enables it only after injecting those administrator values.
+
+`SqlPersistence__RetentionDays` defaults to 2555 days. A daily timer removes expired inactive
+placements, file events, cycle summaries and unreferenced submissions in dependency order using
+server-controlled accepted, inserted, and updated timestamps rather than client event time. This
+is the governed path for removing persisted file paths and device identifiers; reducing retention
+must follow the organization's audit and data-subject deletion requirements.
 
 Send existing record objects using shared client **1.5.0** or later:
 

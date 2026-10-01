@@ -28,6 +28,7 @@ public sealed class TelemetryIngestionProcessor
     };
 
     private readonly PayloadBlobReader _blobReader;
+    private readonly IEndpointDataSprawlPersistence _persistence;
     private readonly LogsIngestionPublisher _publisher;
     private readonly IngestionStreamMap _streamMap;
     private readonly WorkerIngestionOptions _options;
@@ -35,12 +36,14 @@ public sealed class TelemetryIngestionProcessor
 
     public TelemetryIngestionProcessor(
         PayloadBlobReader blobReader,
+        IEndpointDataSprawlPersistence persistence,
         LogsIngestionPublisher publisher,
         IngestionStreamMap streamMap,
         WorkerIngestionOptions options,
         ILogger<TelemetryIngestionProcessor> log)
     {
         _blobReader = blobReader;
+        _persistence = persistence;
         _publisher = publisher;
         _streamMap = streamMap;
         _options = options;
@@ -142,6 +145,51 @@ public sealed class TelemetryIngestionProcessor
             return ProcessingOutcome.Poison(batch.DescribeUningestibleRows());
         }
 
+        PersistenceResult persistence;
+        try
+        {
+            persistence = await _persistence
+                .PersistAsync(pointer, rows, ct)
+                .ConfigureAwait(false);
+        }
+        catch (EndpointDataSprawlPersistenceException ex) when (ex.Permanent)
+        {
+            _log.LogError(
+                ex,
+                "Permanent SQL persistence failure for correlationId={CorrelationId}.",
+                pointer.CorrelationId);
+
+            return ProcessingOutcome.Poison(
+                $"{ex.Message} The payload blob is retained for remediation.");
+        }
+
+        if (persistence.LogAnalyticsState == LogAnalyticsDeliveryState.Published)
+        {
+            if (_options.DeleteBlobAfterIngestion)
+                await _blobReader.TryDeleteAsync(pointer, read.ETag, ct).ConfigureAwait(false);
+
+            _log.LogInformation(
+                "Skipping Log Analytics publication for submission {CorrelationId} in SQL delivery state {DeliveryState}.",
+                pointer.CorrelationId,
+                persistence.LogAnalyticsState);
+
+            return ProcessingOutcome.Success(rows.Count);
+        }
+
+        if (persistence.LogAnalyticsState == LogAnalyticsDeliveryState.OutcomeUnknown)
+        {
+            _log.LogError(
+                "Submission {CorrelationId} has an unknown Log Analytics outcome and requires reconciliation by EventId.",
+                pointer.CorrelationId);
+
+            return ProcessingOutcome.Poison(
+                "Log Analytics delivery outcome is unknown. The payload blob was retained and the submission requires reconciliation by EventId.");
+        }
+
+        await _persistence
+            .BeginLogAnalyticsPublishAsync(pointer, ct)
+            .ConfigureAwait(false);
+
         LogsIngestionPublisher.UploadResult upload;
         try
         {
@@ -163,7 +211,36 @@ public sealed class TelemetryIngestionProcessor
                 "Permanent ingestion failure for correlationId={CorrelationId}: status={Status} chunksCommitted={Committed}/{Total}",
                 pointer.CorrelationId, ex.StatusCode, ex.ChunksCommitted, ex.ChunkCount);
 
+            if (ex.ChunksCommitted == 0 && ex.StatusCode > 0)
+            {
+                await TryResetLogAnalyticsStateAsync(pointer, ct).ConfigureAwait(false);
+            }
             return ProcessingOutcome.Poison(DescribePermanentIngestionFailure(ex));
+        }
+        catch (LogsIngestionException ex)
+        {
+            if (ex.ChunksCommitted == 0 && ex.StatusCode > 0)
+            {
+                await TryResetLogAnalyticsStateAsync(pointer, ct).ConfigureAwait(false);
+            }
+            throw;
+        }
+
+        try
+        {
+            await _persistence
+                .MarkLogAnalyticsPublishedAsync(pointer, ct)
+                .ConfigureAwait(false);
+        }
+        catch (EndpointDataSprawlPersistenceException ex)
+        {
+            _log.LogError(
+                ex,
+                "Log Analytics publication succeeded but its SQL ledger marker failed for correlationId={CorrelationId}.",
+                pointer.CorrelationId);
+
+            return ProcessingOutcome.Poison(
+                "Log Analytics accepted the payload, but its durable publication marker failed. The payload blob was retained and the submission requires reconciliation by EventId.");
         }
 
         // Reached only after every chunk committed, so deletion can never discard
@@ -185,12 +262,33 @@ public sealed class TelemetryIngestionProcessor
     {
         ArgumentNullException.ThrowIfNull(ex);
 
-        var partial = ex.ChunksCommitted > 0
-            ? $" WARNING: {ex.ChunksCommitted} of {ex.ChunkCount} chunk(s) had already committed, so a replay of this "
-                + "payload will duplicate those rows."
-            : " No chunks committed, so this payload can be replayed safely once the cause is fixed.";
+        var partial = ex.StatusCode == 0
+            ? " WARNING: no authoritative HTTP response was received, so Log Analytics might have committed the current chunk. Reconcile by EventId before any replay."
+            : ex.ChunksCommitted > 0
+                ? $" WARNING: {ex.ChunksCommitted} of {ex.ChunkCount} chunk(s) had already committed, so a replay of this "
+                    + "payload will duplicate those rows."
+                : " No chunks committed, so this payload can be replayed safely once the cause is fixed.";
 
         return $"Logs Ingestion permanently rejected this payload with status {ex.StatusCode}. "
             + $"{ex.Message}{partial} The payload blob is retained for remediation.";
+    }
+
+    private async Task TryResetLogAnalyticsStateAsync(
+        QueuedIngestionMessage pointer,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _persistence
+                .ResetLogAnalyticsPublishAsync(pointer, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (EndpointDataSprawlPersistenceException exception)
+        {
+            _log.LogError(
+                exception,
+                "Failed to reset SQL delivery state after a known Log Analytics failure for correlationId={CorrelationId}.",
+                pointer.CorrelationId);
+        }
     }
 }
