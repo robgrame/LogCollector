@@ -1,7 +1,7 @@
 # Custom Inventory 1.9.1 - distribuzione Intune Win32
 
 Il pacchetto installa il collector hardware/software e richiede **LogCollector Core
-1.11.1 o successivo** come dipendenza Intune. URL, ambiente, nome cliente,
+1.12.0 o successivo** come dipendenza Intune. URL, ambiente, nome cliente,
 abilitazione e criteri certificato/PKI sono letti dalla configurazione protetta del
 Core. Non servono Workspace ID, Primary Key, Function key o moduli da PowerShell Gallery.
 
@@ -178,7 +178,7 @@ Caricare **Detect.ps1 della stessa release**, disponibile accanto alla guida.
 | Enforce script signature check | No per i sorgenti non firmati del laboratorio |
 | Esecuzione | Contesto System, coerente con Install behavior |
 
-Lo script richiede Core 1.11.1, legge il relativo CustomerName e controlla l'hash
+Lo script richiede Core 1.12.0, legge il relativo CustomerName e controlla l'hash
 atteso di Config.psd1, PackageVersion, presenza dei file necessari e dei due task
 sotto `\LogCollector\`. Per ciascun task controlla abilitazione coerente con
 `SubmissionEnabled` del Core, principal SYSTEM con privilegi elevati
@@ -226,7 +226,7 @@ devono dichiarare LogCollector Core come dipendenza.
 | Rete per invio | HTTPS 443 all'Intake in contesto SYSTEM, senza interferenze TLS con mTLS; accesso PKI necessario secondo la catena |
 | Server | Trust CA, binding device, autorizzazione Entra per Intune, schemi/tabelle e mapping pronti |
 
-Configurare **LogCollector Core 1.11.1 o successivo come dependency applicativa
+Configurare **LogCollector Core 1.12.0 o successivo come dependency applicativa
 Intune**. Non serve un requirement script aggiuntivo.
 I prerequisiti di identita/certificato/rete sopra descritti sono operativi, non
 controlli automatici nella pagina Requirements. Non includere certificati o chiavi

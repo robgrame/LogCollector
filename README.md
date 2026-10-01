@@ -3,7 +3,7 @@
 Purpose-independent, certificate-authenticated device telemetry ingestion into Azure Monitor.
 Inventory, remediation results, health checks and other scripts share the same ingestion platform.
 
-Current release versions: **Azure backend 1.14.1**, **LogCollector Core / Client 1.11.1**,
+Current release versions: **Azure backend 1.15.0**, **LogCollector Core / Client 1.12.0**,
 and **Custom Inventory 1.9.1**.
 
 A script on each device produces records, signs them with the device's own certificate, and
@@ -25,7 +25,7 @@ not another Function or a platform code change. See the
 [customer procedure for adding a telemetry collection](docs/customer-add-telemetry-collection.md)
 and [Adding a purpose](docs/operations.md#adding-a-purpose).
 
-Backend **1.14.1** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
+Backend **1.15.0** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
 `LOGCOLLECTOR-INVENTORY-V1` wire format. `/api/inventory` is an explicit compatibility alias through
 the **same** authentication and processing path. Existing inventory packages, table names, queues,
 retained blobs and spool entries are not renamed or rewritten.
@@ -52,6 +52,8 @@ retained blobs and spool entries are not renamed or rewritten.
    │  • verify body signature with the certificate's public key
    │  • reserve (cert, nonce) atomically in Azure Table  → anti-replay
    │  • prove cert ↔ envelope Entra device id binding    → anti-IDOR
+   │  • optionally bind delegated user token deviceid ↔ certificate device
+   │  • resolve opaque, hashed EDSR user-session registrations
    │  • enforce the table → DCR stream allow-list
    │  • write payload blob, then enqueue a pointer
    ▼
@@ -272,7 +274,7 @@ with a local Microsoft `IntuneWinAppUtil.exe`. See
 [Intune Win32 deployment](docs/intune-win32-deployment.md) for the laboratory build
 command, install/uninstall commands, detection settings and requirements.
 The generated detection script pins the collector configuration SHA256, requires
-LogCollector Core 1.11.1, and checks task actions, SYSTEM identity and enablement
+LogCollector Core 1.12.0, and checks task actions, SYSTEM identity and enablement
 against the Core configuration. For collector-only updates, replace
 both the app content and its generated detection script in the same Required app;
 endpoint/customer/PKI changes require updating Core only.
@@ -437,6 +439,11 @@ az deployment group create `
 ```
 
 Record the outputs: `frontendIngestUrl`, `dataCollectionEndpoint`, `dataCollectionRuleImmutableId`.
+Endpoint Data Sprawl deployments also expose `endpointDataSprawlAppConfigurationName`,
+`endpointDataSprawlAppConfigurationEndpoint`, and
+`endpointDataSprawlAppConfigurationResourceId`. Standalone deployments derive the store name as
+`appcs-edsr-<deterministic hash>`; the unified deployment overrides it with
+`appcs-mslabs-edsr-prod`.
 For Intune fallback, either complete the administrator-operated Graph `Device.Read.All` grant or
 explicitly accept reduced tenant isolation as described in
 [the runbook](docs/operations.md#intune-fallback-entra-device-validation).
@@ -548,6 +555,9 @@ Full runbook, verification queries and troubleshooting: **[docs/operations.md](d
 | `ClientCert__SkipIntuneRevocationCheck` | `false` | Explicit Intune-only exception for chains without CRL/OCSP; enabled in the deployed parameters |
 | `Ingestion__StreamMap` | — | `Table_CL=Custom-Table_CL;…` allow-list |
 | `Intake__MaxRecordsPerEnvelope` | `50000` | Record ceiling |
+| `UserSession__TenantId` / `__Audience` / `__RequiredScope` / `__MetadataAddress` / `__TableName` | Labeled App Configuration references | Non-secret EDSR delegated-session contract |
+| `UserSession__RegistrationTtlMinutes` | App Configuration reference, seeded as `480` | Opaque registration lifetime; maximum 1440 minutes |
+| `UserSession__HmacKeyBase64` | Versionless Key Vault reference | EDSR correlation key; raw value is stored only in the deployment-managed vault secret so Frontend and dashboard follow the same rotations |
 
 ### Worker
 
@@ -560,6 +570,12 @@ Full runbook, verification queries and troubleshooting: **[docs/operations.md](d
 | `Ingestion__MaxAttempts` | `5` | Per-chunk attempts |
 | `Ingestion__BaseRetryDelayMs` / `__MaxRetryDelaySeconds` | `1000` / `60` | Backoff curve |
 | `Ingestion__DeleteBlobAfterIngestion` | `false` | Lifecycle governs retention by default |
+| `SqlPersistence__RetentionDays` | App Configuration reference, seeded as `2555` | Event and migration-cycle retention |
+| `SqlPersistence__PlacementRetentionDays` | App Configuration reference, seeded as `3650` | Longer bounded latest-placement retention |
+
+App Configuration uses the label from `endpointDataSprawlAppConfigurationLabel` (`prod` by
+default). Native Function App references are restart-based; there is no SDK dynamic refresh.
+Restart the affected Frontend or Worker after updating a key.
 
 ---
 

@@ -131,13 +131,24 @@ public sealed class TelemetryRowFactoryTests
     [Fact]
     public void BuildRows_AddsStableServerEventIdsOnlyForEndpointDataSprawl()
     {
-        var endpointEnvelope = Envelope("{\"EventId\":\"forged\",\"RecordType\":\"FileResult\"}");
+        const string userCorrelationId =
+            "82D2579F0E229B65080E0A50EC1C48702C44DCE5B48890769E108E937E479D22";
+        var endpointEnvelope = Envelope(
+            "{\"EventId\":\"forged\",\"UserCorrelationId\":\"forged\",\"RecordType\":\"FileResult\"}");
         endpointEnvelope.TableName = "EndpointDataSprawlRemediator_CL";
 
         var first = Assert.Single(
-            TelemetryRowFactory.BuildRows(endpointEnvelope, "stable-id", Ingested));
+            TelemetryRowFactory.BuildRows(
+                endpointEnvelope,
+                "stable-id",
+                Ingested,
+                userCorrelationId));
         var retry = Assert.Single(
-            TelemetryRowFactory.BuildRows(endpointEnvelope, "stable-id", Ingested.AddMinutes(1)));
+            TelemetryRowFactory.BuildRows(
+                endpointEnvelope,
+                "stable-id",
+                Ingested.AddMinutes(1),
+                userCorrelationId));
         var inventory = Assert.Single(
             TelemetryRowFactory.BuildRows(Envelope("{}"), "stable-id", Ingested));
 
@@ -146,7 +157,28 @@ public sealed class TelemetryRowFactoryTests
             first.GetProperty("EventId").GetString(),
             retry.GetProperty("EventId").GetString());
         Assert.NotEqual("forged", first.GetProperty("EventId").GetString());
+        Assert.Equal(
+            userCorrelationId,
+            first.GetProperty("UserCorrelationId").GetString());
         Assert.False(inventory.TryGetProperty("EventId", out _));
+    }
+
+    [Fact]
+    public void BuildRows_WritesNullServerCorrelationForAdministrativeEndpointDataSprawl()
+    {
+        var endpointEnvelope = Envelope(
+            "{\"RecordType\":\"CycleSummary\",\"UserCorrelationId\":\"forged\"}");
+        endpointEnvelope.TableName = "EndpointDataSprawlRemediator_CL";
+
+        var row = Assert.Single(
+            TelemetryRowFactory.BuildRows(
+                endpointEnvelope,
+                "stable-id",
+                Ingested));
+
+        Assert.Equal(
+            JsonValueKind.Null,
+            row.GetProperty("UserCorrelationId").ValueKind);
     }
 
     [Fact]

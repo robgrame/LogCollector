@@ -58,6 +58,10 @@ BEGIN
         CycleStartedAtUtc datetimeoffset(7) NULL,
         SourcePath nvarchar(2048) NULL,
         DestinationPath nvarchar(2048) NULL,
+        FileName nvarchar(260) NULL,
+        Extension nvarchar(64) NULL,
+        SourceCreatedAtUtc datetimeoffset(7) NULL,
+        SourceModifiedAtUtc datetimeoffset(7) NULL,
         Category nvarchar(256) NULL,
         CategoryProvider nvarchar(128) NULL,
         Bytes bigint NOT NULL,
@@ -129,6 +133,10 @@ BEGIN
         Status nvarchar(64) NOT NULL,
         Category nvarchar(256) NULL,
         Bytes bigint NOT NULL,
+        FileName nvarchar(260) NULL,
+        Extension nvarchar(64) NULL,
+        SourceCreatedAtUtc datetimeoffset(7) NULL,
+        SourceModifiedAtUtc datetimeoffset(7) NULL,
         EventTimeUtc datetimeoffset(7) NOT NULL,
         AcceptedAtUtc datetimeoffset(7) NOT NULL,
         LatestEventId char(64) NOT NULL,
@@ -143,6 +151,63 @@ BEGIN
     CREATE INDEX IX_FilePlacements_UserTime
         ON dbo.FilePlacements(UserCorrelationId, UpdatedAtUtc DESC)
         INCLUDE (DestinationPath, Status, Category, DeviceName, Bytes);
+END;
+
+IF COL_LENGTH(N'dbo.FileEvents', N'FileName') IS NULL
+    ALTER TABLE dbo.FileEvents ADD FileName nvarchar(260) NULL;
+IF COL_LENGTH(N'dbo.FileEvents', N'Extension') IS NULL
+    ALTER TABLE dbo.FileEvents ADD Extension nvarchar(64) NULL;
+ELSE IF COL_LENGTH(N'dbo.FileEvents', N'Extension') > 0
+        AND COL_LENGTH(N'dbo.FileEvents', N'Extension') < 128
+    ALTER TABLE dbo.FileEvents ALTER COLUMN Extension nvarchar(64) NULL;
+IF COL_LENGTH(N'dbo.FileEvents', N'SourceCreatedAtUtc') IS NULL
+    ALTER TABLE dbo.FileEvents ADD SourceCreatedAtUtc datetimeoffset(7) NULL;
+IF COL_LENGTH(N'dbo.FileEvents', N'SourceModifiedAtUtc') IS NULL
+    ALTER TABLE dbo.FileEvents ADD SourceModifiedAtUtc datetimeoffset(7) NULL;
+
+IF COL_LENGTH(N'dbo.FilePlacements', N'FileName') IS NULL
+    ALTER TABLE dbo.FilePlacements ADD FileName nvarchar(260) NULL;
+IF COL_LENGTH(N'dbo.FilePlacements', N'Extension') IS NULL
+    ALTER TABLE dbo.FilePlacements ADD Extension nvarchar(64) NULL;
+ELSE IF COL_LENGTH(N'dbo.FilePlacements', N'Extension') > 0
+        AND COL_LENGTH(N'dbo.FilePlacements', N'Extension') < 128
+    ALTER TABLE dbo.FilePlacements ALTER COLUMN Extension nvarchar(64) NULL;
+IF COL_LENGTH(N'dbo.FilePlacements', N'SourceCreatedAtUtc') IS NULL
+    ALTER TABLE dbo.FilePlacements ADD SourceCreatedAtUtc datetimeoffset(7) NULL;
+IF COL_LENGTH(N'dbo.FilePlacements', N'SourceModifiedAtUtc') IS NULL
+    ALTER TABLE dbo.FilePlacements ADD SourceModifiedAtUtc datetimeoffset(7) NULL;
+GO
+
+IF NOT EXISTS
+(
+    SELECT 1
+    FROM sys.indexes
+    WHERE object_id = OBJECT_ID(N'dbo.FilePlacements')
+      AND name = N'IX_FilePlacements_UserDeviceStatusTime'
+)
+BEGIN
+    CREATE INDEX IX_FilePlacements_UserDeviceStatusTime
+        ON dbo.FilePlacements
+        (
+            UserCorrelationId,
+            EntraDeviceId,
+            Status,
+            SourceModifiedAtUtc DESC,
+            EventTimeUtc DESC,
+            DestinationPathHash
+        )
+        INCLUDE
+        (
+            DestinationPath,
+            FileName,
+            Extension,
+            SourceCreatedAtUtc,
+            Category,
+            DeviceName,
+            Bytes,
+            UpdatedAtUtc,
+            LatestEventId
+        );
 END;
 GO
 
@@ -239,6 +304,10 @@ BEGIN
         CycleStartedAtUtc datetimeoffset(7) NULL,
         SourcePath nvarchar(2048) NULL,
         DestinationPath nvarchar(2048) NULL,
+        FileName nvarchar(260) NULL,
+        Extension nvarchar(64) NULL,
+        SourceCreatedAtUtc datetimeoffset(7) NULL,
+        SourceModifiedAtUtc datetimeoffset(7) NULL,
         Category nvarchar(256) NULL,
         CategoryProvider nvarchar(128) NULL,
         Bytes bigint NOT NULL,
@@ -288,6 +357,10 @@ BEGIN
         END,
         NULLIF(LEFT(source.SourcePath, 2048), N''),
         NULLIF(LEFT(source.DestinationPath, 2048), N''),
+        NULLIF(LEFT(source.FileName, 260), N''),
+        NULLIF(LEFT(source.Extension, 64), N''),
+        source.SourceCreatedAtUtc,
+        source.SourceModifiedAtUtc,
         NULLIF(source.Category, N''),
         NULLIF(source.CategoryProvider, N''),
         COALESCE(source.Bytes, 0),
@@ -316,6 +389,10 @@ BEGIN
         CycleStartedAtUtc datetimeoffset(7) '$.CycleStartedAtUtc',
         SourcePath nvarchar(max) '$.SourcePath',
         DestinationPath nvarchar(max) '$.DestinationPath',
+        FileName nvarchar(max) '$.FileName',
+        Extension nvarchar(max) '$.Extension',
+        SourceCreatedAtUtc datetimeoffset(7) '$.SourceCreatedAtUtc',
+        SourceModifiedAtUtc datetimeoffset(7) '$.SourceModifiedAtUtc',
         Category nvarchar(256) '$.Category',
         CategoryProvider nvarchar(128) '$.CategoryProvider',
         Bytes bigint '$.Bytes',
@@ -349,6 +426,10 @@ BEGIN
         CycleStartedAtUtc,
         SourcePath,
         DestinationPath,
+        FileName,
+        Extension,
+        SourceCreatedAtUtc,
+        SourceModifiedAtUtc,
         Category,
         CategoryProvider,
         Bytes,
@@ -373,6 +454,10 @@ BEGIN
         source.CycleStartedAtUtc,
         source.SourcePath,
         source.DestinationPath,
+        source.FileName,
+        source.Extension,
+        source.SourceCreatedAtUtc,
+        source.SourceModifiedAtUtc,
         source.Category,
         source.CategoryProvider,
         source.Bytes,
@@ -508,11 +593,19 @@ BEGIN
     UPDATE target
     SET DestinationPath = source.DestinationPath,
         EntraDeviceId = @EntraDeviceId,
-        DeviceName = @DeviceName,
+        DeviceName = COALESCE(@DeviceName, target.DeviceName),
         ExecutionId = source.ExecutionId,
         Status = source.Status,
-        Category = source.Category,
+        Category = COALESCE(source.Category, target.Category),
         Bytes = source.Bytes,
+        FileName = COALESCE(source.FileName, target.FileName),
+        Extension = COALESCE(source.Extension, target.Extension),
+        SourceCreatedAtUtc = COALESCE(
+            source.SourceCreatedAtUtc,
+            target.SourceCreatedAtUtc),
+        SourceModifiedAtUtc = COALESCE(
+            source.SourceModifiedAtUtc,
+            target.SourceModifiedAtUtc),
         EventTimeUtc = source.EventTimeUtc,
         AcceptedAtUtc = @AcceptedAtUtc,
         LatestEventId = source.EventId,
@@ -559,6 +652,10 @@ BEGIN
         Status,
         Category,
         Bytes,
+        FileName,
+        Extension,
+        SourceCreatedAtUtc,
+        SourceModifiedAtUtc,
         EventTimeUtc,
         AcceptedAtUtc,
         LatestEventId
@@ -573,6 +670,10 @@ BEGIN
         source.Status,
         source.Category,
         source.Bytes,
+        source.FileName,
+        source.Extension,
+        source.SourceCreatedAtUtc,
+        source.SourceModifiedAtUtc,
         source.EventTimeUtc,
         @AcceptedAtUtc,
         source.EventId
@@ -657,7 +758,8 @@ GO
 
 CREATE OR ALTER PROCEDURE dbo.PurgeEndpointDataSprawlHistory
     @RetentionDays int,
-    @DeletedRows int OUTPUT
+    @DeletedRows int OUTPUT,
+    @PlacementRetentionDays int = 3650
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -667,15 +769,23 @@ BEGIN
     BEGIN
         THROW 51004, 'Retention days must be between 30 and 3650.', 1;
     END;
+    IF @PlacementRetentionDays < 31 OR @PlacementRetentionDays > 36500
+       OR @PlacementRetentionDays <= @RetentionDays
+    BEGIN
+        THROW 51005, 'Placement retention days must be between 31 and 36500 and greater than event retention days.', 1;
+    END;
 
     DECLARE @Cutoff datetimeoffset(7) = DATEADD(day, -@RetentionDays, SYSUTCDATETIME());
+    DECLARE @PlacementCutoff datetimeoffset(7) =
+        DATEADD(day, -@PlacementRetentionDays, SYSUTCDATETIME());
     DECLARE @Count int = 0;
     DECLARE @BatchCount int;
 
     WHILE 1 = 1
     BEGIN
-        DELETE TOP (5000) FROM dbo.FilePlacements
-        WHERE UpdatedAtUtc < @Cutoff;
+        DELETE TOP (5000) placements
+        FROM dbo.FilePlacements AS placements
+        WHERE placements.UpdatedAtUtc < @PlacementCutoff;
         SET @BatchCount = @@ROWCOUNT;
         SET @Count += @BatchCount;
         IF @BatchCount = 0 BREAK;
@@ -732,9 +842,179 @@ BEGIN
 END;
 GO
 
+-- KPI semantics: FilePlacements is the durable latest-placement snapshot, with
+-- one row per user, device, and destination path accumulated across the
+-- deployment lifetime. Total, status counts, BytesMoved, Devices, Categories,
+-- and LatestActivity below all derive from that same snapshot; MigrationCycles
+-- counters are intentionally not mixed into these placement aggregates.
+CREATE OR ALTER PROCEDURE dbo.GetEndpointDataSprawlUserSummary
+    @UserCorrelationId char(64)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF LEN(@UserCorrelationId) <> 64
+       OR UPPER(@UserCorrelationId) COLLATE Latin1_General_100_BIN2 LIKE '%[^0-9A-F]%'
+    BEGIN
+        THROW 51010, 'UserCorrelationId must be a 64-character hexadecimal value.', 1;
+    END;
+
+    SELECT
+        COUNT_BIG(*) AS Total,
+        COALESCE(SUM(CASE WHEN Status = N'Moved' THEN CONVERT(bigint, 1) ELSE 0 END), 0)
+            AS Moved,
+        COALESCE(SUM(CASE WHEN Status = N'Planned' THEN CONVERT(bigint, 1) ELSE 0 END), 0)
+            AS Planned,
+        COALESCE(SUM(CASE WHEN Status = N'Failed' THEN CONVERT(bigint, 1) ELSE 0 END), 0)
+            AS Failed,
+        COALESCE(SUM(CASE WHEN Status = N'Moved' THEN Bytes ELSE 0 END), 0)
+            AS BytesMoved,
+        COUNT(DISTINCT EntraDeviceId) AS Devices,
+        COUNT(DISTINCT NULLIF(Category, N'')) AS Categories,
+        MAX(EventTimeUtc) AS LatestActivity
+    FROM dbo.FilePlacements
+    WHERE UserCorrelationId = @UserCorrelationId;
+END;
+GO
+
+-- Per-device KPIs use the same durable latest-placement snapshot and status
+-- definitions as the user summary so totals reconcile when grouped by device.
+CREATE OR ALTER PROCEDURE dbo.GetEndpointDataSprawlUserDevices
+    @UserCorrelationId char(64)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF LEN(@UserCorrelationId) <> 64
+       OR UPPER(@UserCorrelationId) COLLATE Latin1_General_100_BIN2 LIKE '%[^0-9A-F]%'
+    BEGIN
+        THROW 51010, 'UserCorrelationId must be a 64-character hexadecimal value.', 1;
+    END;
+
+    SELECT
+        COALESCE(MAX(DeviceName), N'') AS DeviceName,
+        EntraDeviceId,
+        COUNT_BIG(*) AS Total,
+        COALESCE(SUM(CASE WHEN Status = N'Moved' THEN CONVERT(bigint, 1) ELSE 0 END), 0)
+            AS Moved,
+        COALESCE(SUM(CASE WHEN Status = N'Planned' THEN CONVERT(bigint, 1) ELSE 0 END), 0)
+            AS Planned,
+        COALESCE(SUM(CASE WHEN Status = N'Failed' THEN CONVERT(bigint, 1) ELSE 0 END), 0)
+            AS Failed,
+        COALESCE(SUM(CASE WHEN Status = N'Moved' THEN Bytes ELSE 0 END), 0)
+            AS BytesMoved,
+        MAX(EventTimeUtc) AS LatestActivity
+    FROM dbo.FilePlacements
+    WHERE UserCorrelationId = @UserCorrelationId
+    GROUP BY EntraDeviceId
+    ORDER BY
+        LatestActivity DESC,
+        EntraDeviceId;
+END;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.GetEndpointDataSprawlUserDeviceFiles
+    @UserCorrelationId char(64),
+    @EntraDeviceId uniqueidentifier,
+    @FileName nvarchar(260) = NULL,
+    @Extension nvarchar(64) = NULL,
+    @CreatedFromUtc datetimeoffset = NULL,
+    @CreatedToUtc datetimeoffset = NULL,
+    @ModifiedFromUtc datetimeoffset = NULL,
+    @ModifiedToUtc datetimeoffset = NULL,
+    @Offset int,
+    @PageSize int
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF LEN(@UserCorrelationId) <> 64
+       OR UPPER(@UserCorrelationId) COLLATE Latin1_General_100_BIN2 LIKE '%[^0-9A-F]%'
+    BEGIN
+        THROW 51010, 'UserCorrelationId must be a 64-character hexadecimal value.', 1;
+    END;
+
+    IF @Offset IS NULL OR @Offset < 0
+        THROW 51011, 'Offset must be zero or greater.', 1;
+    IF @PageSize IS NULL OR @PageSize < 1 OR @PageSize > 200
+        THROW 51012, 'PageSize must be between 1 and 200.', 1;
+    IF @CreatedFromUtc > @CreatedToUtc
+        THROW 51013, 'Source creation date range is invalid.', 1;
+    IF @ModifiedFromUtc > @ModifiedToUtc
+        THROW 51014, 'Source modification date range is invalid.', 1;
+
+    SET @FileName = NULLIF(LTRIM(RTRIM(@FileName)), N'');
+    SET @Extension = NULLIF(LTRIM(RTRIM(@Extension)), N'');
+
+    DECLARE @EscapedFileName nvarchar(1040) = REPLACE(
+        REPLACE(
+            REPLACE(
+                REPLACE(@FileName, N'\', N'\\'),
+                N'%', N'\%'),
+            N'_', N'\_'),
+        N'[', N'\[');
+
+    SELECT COUNT_BIG(*) AS TotalRows
+    FROM dbo.FilePlacements AS placement
+    WHERE placement.UserCorrelationId = @UserCorrelationId
+      AND placement.EntraDeviceId = @EntraDeviceId
+      AND placement.Status = N'Moved'
+      AND (@EscapedFileName IS NULL
+           OR placement.FileName LIKE N'%' + @EscapedFileName + N'%' ESCAPE N'\')
+      AND (@Extension IS NULL OR placement.Extension = @Extension)
+      AND (@CreatedFromUtc IS NULL
+           OR placement.SourceCreatedAtUtc >= @CreatedFromUtc)
+      AND (@CreatedToUtc IS NULL
+           OR placement.SourceCreatedAtUtc < @CreatedToUtc)
+      AND (@ModifiedFromUtc IS NULL
+           OR placement.SourceModifiedAtUtc >= @ModifiedFromUtc)
+      AND (@ModifiedToUtc IS NULL
+           OR placement.SourceModifiedAtUtc < @ModifiedToUtc);
+
+    SELECT
+        placement.DestinationPath,
+        placement.FileName,
+        placement.Extension,
+        placement.SourceCreatedAtUtc,
+        placement.SourceModifiedAtUtc,
+        placement.DeviceName,
+        placement.EntraDeviceId,
+        placement.Category,
+        placement.Bytes,
+        placement.EventTimeUtc,
+        placement.ExecutionId
+    FROM dbo.FilePlacements AS placement
+    WHERE placement.UserCorrelationId = @UserCorrelationId
+      AND placement.EntraDeviceId = @EntraDeviceId
+      AND placement.Status = N'Moved'
+      AND (@EscapedFileName IS NULL
+           OR placement.FileName LIKE N'%' + @EscapedFileName + N'%' ESCAPE N'\')
+      AND (@Extension IS NULL OR placement.Extension = @Extension)
+      AND (@CreatedFromUtc IS NULL
+           OR placement.SourceCreatedAtUtc >= @CreatedFromUtc)
+      AND (@CreatedToUtc IS NULL
+           OR placement.SourceCreatedAtUtc < @CreatedToUtc)
+      AND (@ModifiedFromUtc IS NULL
+           OR placement.SourceModifiedAtUtc >= @ModifiedFromUtc)
+      AND (@ModifiedToUtc IS NULL
+           OR placement.SourceModifiedAtUtc < @ModifiedToUtc)
+    ORDER BY
+        placement.SourceModifiedAtUtc DESC,
+        placement.EventTimeUtc DESC,
+        placement.DestinationPath ASC
+    OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+END;
+GO
+
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'endpoint_data_sprawl_ingestor')
 BEGIN
     CREATE ROLE endpoint_data_sprawl_ingestor;
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'endpoint_data_sprawl_reader')
+BEGIN
+    CREATE ROLE endpoint_data_sprawl_reader;
 END;
 GO
 
@@ -761,16 +1041,73 @@ BEGIN
 END;
 GO
 
+IF __DASHBOARD_IDENTITY_ENABLED__ = 1
+   AND EXISTS
+   (
+       SELECT 1
+       FROM sys.database_principals
+       WHERE name = N'__DASHBOARD_IDENTITY_NAME__'
+         AND
+         (
+             type <> 'E'
+             OR sid <> 0x__DASHBOARD_IDENTITY_SID_HEX__
+         )
+   )
+BEGIN
+    THROW 51015, 'Dashboard database principal exists with a different type or SID.', 1;
+END;
+GO
+
+IF __DASHBOARD_IDENTITY_ENABLED__ = 1
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM sys.database_principals
+       WHERE name = N'__DASHBOARD_IDENTITY_NAME__'
+   )
+BEGIN
+    CREATE USER [__DASHBOARD_IDENTITY_NAME__]
+        WITH SID = 0x__DASHBOARD_IDENTITY_SID_HEX__, TYPE = E;
+END;
+GO
+
+IF __DASHBOARD_IDENTITY_ENABLED__ = 1
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM sys.database_role_members AS membership
+       INNER JOIN sys.database_principals AS rolePrincipal
+           ON rolePrincipal.principal_id = membership.role_principal_id
+       INNER JOIN sys.database_principals AS memberPrincipal
+           ON memberPrincipal.principal_id = membership.member_principal_id
+       WHERE rolePrincipal.name = N'endpoint_data_sprawl_reader'
+         AND memberPrincipal.name = N'__DASHBOARD_IDENTITY_NAME__'
+   )
+BEGIN
+    ALTER ROLE endpoint_data_sprawl_reader ADD MEMBER [__DASHBOARD_IDENTITY_NAME__];
+END;
+GO
+
 GRANT EXECUTE ON dbo.PersistEndpointDataSprawlBatch TO endpoint_data_sprawl_ingestor;
 GRANT EXECUTE ON dbo.BeginEndpointDataSprawlLogAnalyticsPublish TO endpoint_data_sprawl_ingestor;
 GRANT EXECUTE ON dbo.MarkEndpointDataSprawlLogAnalyticsPublished TO endpoint_data_sprawl_ingestor;
 GRANT EXECUTE ON dbo.ResetEndpointDataSprawlLogAnalyticsPublish TO endpoint_data_sprawl_ingestor;
 GRANT EXECUTE ON dbo.PurgeEndpointDataSprawlHistory TO endpoint_data_sprawl_ingestor;
+GRANT EXECUTE ON dbo.GetEndpointDataSprawlUserSummary TO endpoint_data_sprawl_reader;
+GRANT EXECUTE ON dbo.GetEndpointDataSprawlUserDevices TO endpoint_data_sprawl_reader;
+GRANT EXECUTE ON dbo.GetEndpointDataSprawlUserDeviceFiles TO endpoint_data_sprawl_reader;
 GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.SchemaVersions WHERE VersionNumber = 1)
 BEGIN
     INSERT dbo.SchemaVersions(VersionNumber, Description)
     VALUES (1, N'Endpoint Data Sprawl durable ingestion and read model');
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.SchemaVersions WHERE VersionNumber = 2)
+BEGIN
+    INSERT dbo.SchemaVersions(VersionNumber, Description)
+    VALUES (2, N'Endpoint Data Sprawl dashboard file drilldown');
 END;
 GO

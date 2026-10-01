@@ -16,6 +16,12 @@ param(
     [ValidatePattern('^[0-9a-fA-F-]{36}$')]
     [string]$WorkerIdentityClientId,
 
+    [ValidatePattern('^[A-Za-z0-9-]{2,128}$')]
+    [string]$DashboardIdentityName,
+
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')]
+    [string]$DashboardIdentityClientId,
+
     [Parameter(Mandatory)]
     [ValidatePattern('^[A-Za-z0-9._()-]{1,90}$')]
     [string]$ResourceGroup,
@@ -31,6 +37,11 @@ $ErrorActionPreference = 'Stop'
 
 if (-not (Test-Path -LiteralPath $SchemaPath -PathType Leaf)) {
     throw "SQL schema file not found: $SchemaPath"
+}
+
+if ([string]::IsNullOrWhiteSpace($DashboardIdentityName) -ne
+    [string]::IsNullOrWhiteSpace($DashboardIdentityClientId)) {
+    throw 'DashboardIdentityName and DashboardIdentityClientId must both be supplied or both omitted.'
 }
 
 $publicIp = (Invoke-RestMethod -Uri 'https://api.ipify.org?format=json' -TimeoutSec 30).ip
@@ -63,15 +74,24 @@ try {
     }
     $ruleCreated = $true
 
+    $initializerArguments = @(
+        '--server', $ServerName,
+        '--database', $DatabaseName,
+        '--worker-identity-name', $WorkerIdentityName,
+        '--worker-identity-client-id', $WorkerIdentityClientId,
+        '--schema', $SchemaPath
+    )
+    if (-not [string]::IsNullOrWhiteSpace($DashboardIdentityName)) {
+        $initializerArguments += @(
+            '--dashboard-identity-name', $DashboardIdentityName,
+            '--dashboard-identity-client-id', $DashboardIdentityClientId
+        )
+    }
+
     dotnet run `
         --project $initializerProject `
         --configuration Release `
-        -- `
-        --server $ServerName `
-        --database $DatabaseName `
-        --worker-identity-name $WorkerIdentityName `
-        --worker-identity-client-id $WorkerIdentityClientId `
-        --schema $SchemaPath
+        -- @initializerArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to initialize database '$DatabaseName' on server '$ServerName'."
     }
@@ -105,4 +125,10 @@ if ($null -ne $primaryError) {
     throw $primaryError
 }
 
-Write-Output "Initialized $ServerName/$DatabaseName for worker identity $WorkerIdentityName."
+$dashboardMessage = if ([string]::IsNullOrWhiteSpace($DashboardIdentityName)) {
+    ' without a dashboard identity'
+}
+else {
+    " and dashboard identity $DashboardIdentityName"
+}
+Write-Output "Initialized $ServerName/$DatabaseName for worker identity $WorkerIdentityName$dashboardMessage."

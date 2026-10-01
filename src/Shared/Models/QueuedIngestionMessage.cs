@@ -58,6 +58,13 @@ public sealed class QueuedIngestionMessage
     [JsonPropertyName("certificateThumbprint")]
     public string? CertificateThumbprint { get; set; }
 
+    /// <summary>
+    /// Server-generated user authorization partition resolved by the Frontend.
+    /// Null means device/admin telemetry that is not authorized for user placements.
+    /// </summary>
+    [JsonPropertyName("userCorrelationId")]
+    public string? UserCorrelationId { get; set; }
+
     public sealed record ValidationResult(bool Ok, string? Reason);
 
     public ValidationResult Validate()
@@ -76,6 +83,18 @@ public sealed class QueuedIngestionMessage
             return new ValidationResult(false, "correlationId is required");
         if (!Guid.TryParse(EntraDeviceId, out _))
             return new ValidationResult(false, "entraDeviceId must be a GUID");
+        if (UserCorrelationId is not null &&
+            (UserCorrelationId.Length != 64 ||
+             !UserCorrelationId.All(Uri.IsHexDigit) ||
+             !string.Equals(
+                 UserCorrelationId,
+                 UserCorrelationId.ToUpperInvariant(),
+                 StringComparison.Ordinal)))
+        {
+            return new ValidationResult(
+                false,
+                "userCorrelationId must be null or canonical uppercase SHA-256 hexadecimal");
+        }
         if (PayloadBytes <= 0)
             return new ValidationResult(false, "payloadBytes must be positive");
         Span<byte> digest = stackalloc byte[32];

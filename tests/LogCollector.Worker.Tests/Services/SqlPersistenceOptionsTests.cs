@@ -18,6 +18,42 @@ public sealed class SqlPersistenceOptionsTests
             SqlPersistenceOptions.DefaultTargetTable,
             options.TargetTableName);
         Assert.Equal(2_555, options.RetentionDays);
+        Assert.Equal(3_650, options.PlacementRetentionDays);
+    }
+
+    [Theory]
+    [InlineData("3651", 3651)]
+    [InlineData("99999", 36500)]
+    public void Constructor_ClampsPlacementRetentionDays(
+        string configured,
+        int expected)
+    {
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["SqlPersistence:PlacementRetentionDays"] = configured,
+        });
+
+        var options = new SqlPersistenceOptions(configuration);
+
+        Assert.Equal(expected, options.PlacementRetentionDays);
+    }
+
+    [Fact]
+    public void Constructor_RequiresPlacementRetentionLongerThanEventRetention()
+    {
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["SqlPersistence:RetentionDays"] = "365",
+            ["SqlPersistence:PlacementRetentionDays"] = "365",
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => new SqlPersistenceOptions(configuration));
+
+        Assert.Contains(
+            "PlacementRetentionDays",
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     [Theory]

@@ -11,6 +11,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
@@ -72,6 +74,40 @@ builder.Services.AddSingleton<RequestSignatureVerifier>();
 builder.Services.AddSingleton<ClientCertValidator>();
 builder.Services.AddSingleton<IngestionStreamMap>();
 builder.Services.AddSingleton<TelemetryIntakeOptions>();
+builder.Services.AddSingleton<UserSessionOptions>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddHttpClient("OpenIdConnectMetadata", client =>
+    client.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddSingleton<IConfigurationManager<OpenIdConnectConfiguration>>(sp =>
+{
+    var options = sp.GetRequiredService<UserSessionOptions>();
+    return new ConfigurationManager<OpenIdConnectConfiguration>(
+        options.IsConfigured
+            ? options.MetadataAddress
+            : "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
+        new OpenIdConnectConfigurationRetriever(),
+        new HttpDocumentRetriever(
+            sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient("OpenIdConnectMetadata"))
+        {
+            RequireHttps = true,
+        });
+});
+builder.Services.AddSingleton<IDelegatedTokenValidator, EntraDelegatedTokenValidator>();
+builder.Services.AddSingleton<IUserSessionStore>(sp =>
+{
+    var account = Require(builder.Configuration, "Storage:AccountName");
+    var options = sp.GetRequiredService<UserSessionOptions>();
+    var service = new TableServiceClient(
+        new Uri($"https://{account}.table.core.windows.net"),
+        sp.GetRequiredService<Azure.Core.TokenCredential>());
+    return new AzureTableUserSessionStore(
+        service.GetTableClient(options.TableName),
+        options,
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<AzureTableUserSessionStore>>());
+});
+builder.Services.AddHostedService<UserSessionCleanupService>();
 builder.Services.AddSingleton(sp =>
 {
     var options = new EntraDeviceValidationOptions(builder.Configuration);

@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using LogCollector.Frontend.Functions;
+using LogCollector.Frontend.Services;
+using LogCollector.Shared.Ingestion;
 using LogCollector.Shared.Models;
 using LogCollector.Shared.Security;
 using LogCollector.Shared.Tests;
@@ -247,6 +249,94 @@ public sealed class TelemetryIngestFunctionTests
         h.AssertNoPublication();
     }
 
+    [Fact]
+    public async Task EndpointDataSprawlRegistrationStampsTrustedPointerCorrelation()
+    {
+        const string correlation =
+            "106BDD9FC64C41084F52B4CD0D8C11AFCD0E40B04071E36ABA97B8B149FD95C6";
+        using var h = new FrontendTestHarness();
+        var registrationId = h.UserSessions.Add(
+            Guid.Parse(FrontendTestHarness.DeviceId),
+            correlation);
+        var body = Body(
+            table: "EndpointDataSprawlRemediator_CL",
+            records:
+                """[{"RecordType":"FileResult","Status":"Moved","UserCorrelationId":"CLIENT-CONTROLLED"}]""");
+        var request = h.Request(false, body);
+        request.Headers[UserSessionOptions.RegistrationHeaderName] =
+            registrationId;
+
+        var result = await h.Invoke(false, request);
+
+        AssertPublished(
+            h,
+            result,
+            body,
+            "EndpointDataSprawlRemediator_CL",
+            "EnterprisePki",
+            correlation);
+    }
+
+    [Theory]
+    [InlineData("invalid")]
+    [InlineData("expired")]
+    [InlineData("revoked")]
+    [InlineData("other-device")]
+    public async Task EndpointDataSprawlIngestsUnusableRegistrationWithoutUserCorrelation(
+        string condition)
+    {
+        const string correlation =
+            "106BDD9FC64C41084F52B4CD0D8C11AFCD0E40B04071E36ABA97B8B149FD95C6";
+        using var h = new FrontendTestHarness();
+        var registrationId = condition == "invalid"
+            ? new string('x', 43)
+            : h.UserSessions.Add(
+                condition == "other-device"
+                    ? Guid.Parse(FrontendTestHarness.OtherDeviceId)
+                    : Guid.Parse(FrontendTestHarness.DeviceId),
+                correlation,
+                condition == "expired"
+                    ? DateTimeOffset.UtcNow.AddMinutes(-1)
+                    : null,
+                revoked: condition == "revoked");
+        var body = Body(table: "EndpointDataSprawlRemediator_CL");
+        var request = h.Request(false, body);
+        request.Headers[UserSessionOptions.RegistrationHeaderName] =
+            registrationId;
+
+        var result = await h.Invoke(false, request);
+
+        AssertPublished(
+            h,
+            result,
+            body,
+            "EndpointDataSprawlRemediator_CL",
+            "EnterprisePki",
+            expectedUserCorrelationId: null);
+        var warning = Assert.Single(h.IntakeLogger.Messages);
+        Assert.Contains("correlation was omitted", warning);
+        Assert.DoesNotContain(registrationId, warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task EndpointDataSprawlWithoutRegistrationPublishesNullCorrelation()
+    {
+        using var h = new FrontendTestHarness();
+        var body = Body(
+            table: "EndpointDataSprawlRemediator_CL",
+            records: """[{"RecordType":"CycleSummary","UserCorrelationId":"forged"}]""");
+
+        var result = await h.Invoke(false, h.Request(false, body));
+
+        AssertPublished(
+            h,
+            result,
+            body,
+            "EndpointDataSprawlRemediator_CL",
+            "EnterprisePki",
+            expectedUserCorrelationId: null);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -297,7 +387,12 @@ public sealed class TelemetryIngestFunctionTests
     }
 
     internal static void AssertPublished(
-        FrontendTestHarness h, IActionResult result, byte[] body, string table, string trustTier)
+        FrontendTestHarness h,
+        IActionResult result,
+        byte[] body,
+        string table,
+        string trustTier,
+        string? expectedUserCorrelationId = null)
     {
         var response = Assert.IsType<ObjectResult>(result);
         Assert.Equal(202, response.StatusCode);
@@ -314,7 +409,9 @@ public sealed class TelemetryIngestFunctionTests
         var message = Assert.Single(h.ServiceBus.Messages);
         var pointer = JsonSerializer.Deserialize<QueuedIngestionMessage>(message.Body.ToArray())!;
         Assert.True(pointer.Validate().Ok, pointer.Validate().Reason);
-        var submissionId = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
+        var submissionId = SubmissionIdentity.FromBodyAndUserContext(
+            body,
+            expectedUserCorrelationId);
         Assert.Equal(submissionId, pointer.CorrelationId);
         Assert.Equal(submissionId, accepted.GetProperty("correlationId").GetString());
         Assert.Equal(table, pointer.TableName);
@@ -328,6 +425,7 @@ public sealed class TelemetryIngestFunctionTests
         Assert.Equal("PurposeIndependentAgent", pointer.Source);
         Assert.Equal(DateTimeOffset.Parse("2026-09-01T12:34:56Z"), pointer.CollectedAtUtc);
         Assert.Equal(h.Leaf.Thumbprint, pointer.CertificateThumbprint);
+        Assert.Equal(expectedUserCorrelationId, pointer.UserCorrelationId);
         Assert.Equal(submissionId, upload.Headers["x-ms-meta-correlationId"]);
         Assert.Equal(table, upload.Headers["x-ms-meta-tableName"]);
         Assert.Equal(FrontendTestHarness.DeviceId, upload.Headers["x-ms-meta-entraDeviceId"]);

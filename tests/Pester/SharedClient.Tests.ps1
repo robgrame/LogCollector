@@ -43,16 +43,80 @@ Describe 'Shared client facade' {
     }
 
     It 'exports the documented public surface' {
-        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.11.1'
+        (Get-Module LogCollector.Client).Version.ToString() | Should -BeExactly '1.12.0'
         $commands = @(Get-Command -Module LogCollector.Client).Name | Sort-Object
         $expected = @('Get-DeviceIdentitySnapshot', 'Get-ClientCertificate', 'New-SignedInventoryRequest',
             'New-InventoryEnvelope', 'Get-LogCollectorSpoolPath', 'Export-LogCollectorSchema',
-            'Send-LogCollectorData', 'Sync-LogCollectorSpool', 'Send-LogAnalyticsData',
+            'Send-LogCollectorData', 'Sync-LogCollectorSpool', 'Register-LogCollectorUserSession',
+            'Revoke-LogCollectorUserSession',
+            'Send-LogAnalyticsData',
             'Send-LogCollectorOperationalEvent',
             'Get-LogCollectorEndpointConfiguration', 'Get-LogCollectorConfigurationPath', 'Get-LogCollectorDataRoot',
             'Assert-LogCollectorApplicationFiles', 'Write-CMTraceLog', 'Get-CMTraceLogPath',
             'Get-CMTraceCustomerName') | Sort-Object
         ($commands -join ',') | Should -BeExactly ($expected -join ',')
+    }
+
+    It 'registers the delegated token only in the Authorization header' {
+        $accessToken = 'DO-NOT-LOG-OR-SPOOL-ACCESS-TOKEN'
+        $registrationId = 'a' * 43
+        Mock -ModuleName LogCollector.Client Invoke-LogCollectorUserSessionRegistrationRequest {
+            [pscustomobject]@{
+                StatusCode = 201
+                Content = (@{
+                    registrationId = $registrationId
+                    expiresAtUtc = [DateTimeOffset]::UtcNow.AddMinutes(30).ToString('o')
+                } | ConvertTo-Json -Compress)
+            }
+        }
+
+        $result = Register-LogCollectorUserSession -FrontendUrl $script:Endpoint `
+            -AccessToken $accessToken
+
+        $result.RegistrationId | Should -BeExactly $registrationId
+        Should -Invoke -ModuleName LogCollector.Client Invoke-LogCollectorUserSessionRegistrationRequest -Times 1 -Exactly -ParameterFilter {
+            $Uri.AbsolutePath -eq '/api/user-sessions/register' -and
+            $AccessToken -eq $accessToken -and
+            $null -ne $Certificate
+        }
+        Test-Path -LiteralPath $script:Root | Should -BeFalse
+        ($result | ConvertTo-Json -Compress) | Should -Not -Match [regex]::Escape($accessToken)
+    }
+
+    It 'revokes the opaque registration through the mTLS-bound revoke endpoint' {
+        $registrationId = 'r' * 43
+        Mock -ModuleName LogCollector.Client Invoke-LogCollectorUserSessionRevocationRequest {
+            return 204
+        }
+
+        $result = Revoke-LogCollectorUserSession `
+            -FrontendUrl $script:Endpoint `
+            -RegistrationId $registrationId
+
+        $result | Should -BeTrue
+        Should -Invoke -ModuleName LogCollector.Client Invoke-LogCollectorUserSessionRevocationRequest `
+            -Times 1 -Exactly -ParameterFilter {
+                $Uri.AbsolutePath -eq '/api/user-sessions/revoke' -and
+                $RegistrationId -eq $registrationId -and
+                $null -ne $Certificate
+            }
+    }
+
+    It 'does not allow spool drain to substitute a current registration' {
+            (Get-Command Sync-LogCollectorSpool).Parameters.Keys |
+                Should -Not -Contain 'UserSessionRegistrationId'
+    }
+
+    It 'passes the opaque registration header at delivery time' {
+        $registrationId = 'b' * 43
+        $result = Send-LogCollectorData -FrontendUrl $script:Endpoint -TableName 'T_CL' `
+            -Records @(@{ A = 1 }) -Source 'Pester' -SpoolRoot $script:Root `
+            -SkipDrain -UserSessionRegistrationId $registrationId
+
+        $result.Disposition | Should -BeExactly 'Delivered'
+        Should -Invoke -ModuleName InventoryClient Invoke-InventoryHttpPost -Times 1 -Exactly -ParameterFilter {
+            $UserSessionRegistrationId -eq $registrationId
+        }
     }
 
     It 'exports representative final rows without identity, certificate or network access' {
@@ -488,7 +552,7 @@ Describe 'Shared module packaging' {
         $result.ModuleVersion | Should -BeExactly $expectedVersion
         $result.PackageSha256 | Should -Match '^[A-F0-9]{64}$'
         $manifest = Test-ModuleManifest (Join-Path $result.ModulePath 'LogCollector.Client.psd1')
-        $manifest.ExportedFunctions.Count | Should -Be 17
+        $manifest.ExportedFunctions.Count | Should -Be 19
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($result.PackagePath)
         try {

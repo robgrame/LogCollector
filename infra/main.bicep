@@ -50,6 +50,11 @@ param payloadContainerName string = 'inventory-payloads'
 @description('Azure Table used for the distributed replay-nonce store.')
 param nonceTableName string = 'RequestNonces'
 
+@description('Azure Table used for hashed Endpoint Data Sprawl user-session registrations.')
+@minLength(3)
+@maxLength(63)
+param userSessionTableName string = 'UserSessions'
+
 @description('Primary Log Analytics custom table for Windows inventory.')
 param inventoryTableName string = 'InventoryWindows_CL'
 
@@ -167,10 +172,57 @@ param sqlEntraAdminName string = ''
 ])
 param sqlEntraAdminType string = 'Application'
 
-@description('Days to retain Endpoint Data Sprawl SQL events, cycles and inactive placements.')
+@description('Days to retain Endpoint Data Sprawl SQL events and cycles.')
 @minValue(30)
 @maxValue(3650)
 param sqlPersistenceRetentionDays int = 2555
+
+@description('Days to retain durable latest file placements. Must be greater than sqlPersistenceRetentionDays.')
+@minValue(31)
+@maxValue(36500)
+param sqlPlacementRetentionDays int = 3650
+
+@description('Single Microsoft Entra tenant accepted for delegated Endpoint Data Sprawl user sessions.')
+param userSessionTenantId string = tenant().tenantId
+
+@description('Provision and configure delegated Endpoint Data Sprawl user sessions.')
+param userSessionEnabled bool = false
+
+@description('Exact audience of the single-tenant Endpoint Data Sprawl API.')
+param userSessionAudience string = ''
+
+@description('Exact delegated scope required in the access-token scp claim.')
+param userSessionRequiredScope string = ''
+
+@description('HTTPS OpenID Connect metadata endpoint for the configured single tenant.')
+param userSessionMetadataAddress string = ''
+
+@description('Maximum lifetime in minutes of an opaque user-session registration.')
+@minValue(1)
+@maxValue(1440)
+param userSessionRegistrationTtlMinutes int = 480
+
+@secure()
+@description('Base64 HMAC key that decodes to at least 32 bytes. Bicep stores it as a Key Vault secret and exposes only a Key Vault reference to the Frontend.')
+param userSessionHmacKeyBase64 string = ''
+
+@description('Optional deterministic Endpoint Data Sprawl Key Vault name override. Use the same vault from the unified dashboard deployment.')
+@maxLength(24)
+param endpointDataSprawlKeyVaultName string = ''
+
+@description('Optional Endpoint Data Sprawl App Configuration store name override. Leave empty for a deterministic standalone name.')
+@maxLength(50)
+param endpointDataSprawlAppConfigurationName string = ''
+
+@description('Label applied to Endpoint Data Sprawl App Configuration key-values and native Function App references.')
+@minLength(1)
+@maxLength(256)
+param endpointDataSprawlAppConfigurationLabel string = 'prod'
+
+@description('Key Vault secret name shared by LogCollector and the unified Endpoint Data Sprawl dashboard.')
+@minLength(1)
+@maxLength(127)
+param userSessionHmacSecretName string = 'user-correlation-hmac-key'
 
 @description('Resource tags.')
 param tags object = {
@@ -206,6 +258,22 @@ var frontendIdentityName = '${namePrefix}-intake-identity'
 var workerIdentityName = '${namePrefix}-worker-identity'
 var sqlServerName = toLower('${namePrefix}-endpoint-data-sprawl-sql')
 var sqlDatabaseName = 'EndpointDataSprawl'
+var endpointDataSprawlKeyVaultNameResolved = empty(endpointDataSprawlKeyVaultName)
+  ? 'edsr-${take(uniqueString(subscription().id, resourceGroup().id, customerPrefixSafe), 13)}'
+  : toLower(endpointDataSprawlKeyVaultName)
+var endpointDataSprawlAppConfigurationNameResolved = empty(endpointDataSprawlAppConfigurationName)
+  ? 'appcs-edsr-${take(uniqueString(subscription().id, resourceGroup().id, customerPrefixSafe), 13)}'
+  : toLower(endpointDataSprawlAppConfigurationName)
+
+var appConfigurationKeyUserSessionTenantId = 'EndpointDataSprawl:UserSession:TenantId'
+var appConfigurationKeyUserSessionAudience = 'EndpointDataSprawl:UserSession:Audience'
+var appConfigurationKeyUserSessionRequiredScope = 'EndpointDataSprawl:UserSession:RequiredScope'
+var appConfigurationKeyUserSessionMetadataAddress = 'EndpointDataSprawl:UserSession:MetadataAddress'
+var appConfigurationKeyUserSessionRegistrationTtlMinutes = 'EndpointDataSprawl:UserSession:RegistrationTtlMinutes'
+var appConfigurationKeyUserSessionTableName = 'EndpointDataSprawl:UserSession:TableName'
+var appConfigurationKeySqlRetentionDays = 'EndpointDataSprawl:SqlPersistence:RetentionDays'
+var appConfigurationKeySqlPlacementRetentionDays = 'EndpointDataSprawl:SqlPersistence:PlacementRetentionDays'
+var appConfigurationLabelSeparator = '$'
 
 var frontendDeployContainer = 'intake-deploy'
 var workerDeployContainer = 'worker-deploy'
@@ -236,6 +304,8 @@ var roleServiceBusSender = subscriptionResourceId('Microsoft.Authorization/roleD
 var roleServiceBusReceiver = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
 var roleMonitoringMetricsPublisher = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
 var roleMonitoringReader = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
+var roleKeyVaultSecretsUser = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var roleAppConfigurationDataReader = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '516239f1-63e1-4d78-a4de-a74fb236a071')
 
 // Default inventory example: the flat column set emitted by TelemetryRowFactory plus every field the
 // collector script produces. Column names are unique across record types on
@@ -563,6 +633,11 @@ resource nonceTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023
   name: nonceTableName
 }
 
+resource userSessionTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: userSessionTableName
+}
+
 // ---------------------------------------------------------------------------
 // Service Bus (Standard) - pointer messages only
 // ---------------------------------------------------------------------------
@@ -616,6 +691,128 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
   name: workerIdentityName
   location: location
   tags: tags
+}
+
+resource endpointDataSprawlAppConfiguration 'Microsoft.AppConfiguration/configurationStores@2024-05-01' = {
+  name: endpointDataSprawlAppConfigurationNameResolved
+  location: location
+  tags: union(tags, {
+    solution: 'EndpointDataSprawlRemediator'
+  })
+  sku: {
+    name: 'standard'
+  }
+  properties: {
+    dataPlaneProxy: {
+      authenticationMode: 'Pass-through'
+      privateLinkDelegation: 'Disabled'
+    }
+    disableLocalAuth: true
+    enablePurgeProtection: true
+    publicNetworkAccess: 'Enabled'
+    softDeleteRetentionInDays: 7
+  }
+}
+
+resource appConfigurationUserSessionTenantId 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeyUserSessionTenantId}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: userSessionTenantId
+  }
+}
+
+resource appConfigurationUserSessionAudience 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeyUserSessionAudience}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: userSessionAudience
+  }
+}
+
+resource appConfigurationUserSessionRequiredScope 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeyUserSessionRequiredScope}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: userSessionRequiredScope
+  }
+}
+
+resource appConfigurationUserSessionMetadataAddress 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeyUserSessionMetadataAddress}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: userSessionMetadataAddress
+  }
+}
+
+resource appConfigurationUserSessionRegistrationTtlMinutes 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeyUserSessionRegistrationTtlMinutes}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: string(userSessionRegistrationTtlMinutes)
+  }
+}
+
+resource appConfigurationUserSessionTableName 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeyUserSessionTableName}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: userSessionTableName
+  }
+}
+
+resource appConfigurationSqlRetentionDays 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeySqlRetentionDays}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: string(sqlPersistenceRetentionDays)
+  }
+}
+
+resource appConfigurationSqlPlacementRetentionDays 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
+  parent: endpointDataSprawlAppConfiguration
+  name: '${appConfigurationKeySqlPlacementRetentionDays}${appConfigurationLabelSeparator}${endpointDataSprawlAppConfigurationLabel}'
+  properties: {
+    contentType: 'text/plain'
+    value: string(sqlPlacementRetentionDays)
+  }
+}
+
+resource endpointDataSprawlKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: endpointDataSprawlKeyVaultNameResolved
+  location: location
+  tags: union(tags, {
+    solution: 'EndpointDataSprawlRemediator'
+  })
+  properties: {
+    tenantId: tenant().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    enableRbacAuthorization: true
+    enablePurgeProtection: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource userSessionHmacSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (userSessionEnabled) {
+  parent: endpointDataSprawlKeyVault
+  name: userSessionHmacSecretName
+  properties: {
+    value: userSessionHmacKeyBase64
+    contentType: 'application/vnd.logcollector.user-correlation-hmac+base64'
+  }
 }
 
 resource sqlServer 'Microsoft.Sql/servers@2022-05-01-preview' = if (sqlPersistenceEnabled) {
@@ -702,6 +899,26 @@ resource raFrontendTable 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
+resource raFrontendKeyVaultSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(endpointDataSprawlKeyVault.id, frontendIdentity.id, 'secrets-user')
+  scope: endpointDataSprawlKeyVault
+  properties: {
+    roleDefinitionId: roleKeyVaultSecretsUser
+    principalId: frontendIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource raFrontendAppConfiguration 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(endpointDataSprawlAppConfiguration.id, frontendIdentity.id, 'app-configuration-reader')
+  scope: endpointDataSprawlAppConfiguration
+  properties: {
+    roleDefinitionId: roleAppConfigurationDataReader
+    principalId: frontendIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Send only. The frontend must never be able to read or delete queue messages.
 resource raFrontendServiceBus 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(inventoryQueue.id, frontendIdentity.id, 'sb-send')
@@ -738,6 +955,16 @@ resource raWorkerTable 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: storage
   properties: {
     roleDefinitionId: roleTableDataContributor
+    principalId: workerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource raWorkerAppConfiguration 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(endpointDataSprawlAppConfiguration.id, workerIdentity.id, 'app-configuration-reader')
+  scope: endpointDataSprawlAppConfiguration
+  properties: {
+    roleDefinitionId: roleAppConfigurationDataReader
     principalId: workerIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
@@ -853,6 +1080,37 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'Replay__MaxTimestampSkewSeconds', value: string(maxTimestampSkewSeconds) }
         { name: 'Replay__NonceRetentionSeconds', value: string(nonceRetentionSeconds) }
 
+        {
+          name: 'UserSession__TenantId'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeyUserSessionTenantId};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
+        {
+          name: 'UserSession__Audience'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeyUserSessionAudience};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
+        {
+          name: 'UserSession__RequiredScope'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeyUserSessionRequiredScope};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
+        {
+          name: 'UserSession__MetadataAddress'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeyUserSessionMetadataAddress};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
+        {
+          name: 'UserSession__RegistrationTtlMinutes'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeyUserSessionRegistrationTtlMinutes};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
+        {
+          name: 'UserSession__TableName'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeyUserSessionTableName};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
+        {
+          name: 'UserSession__HmacKeyBase64'
+          value: !userSessionEnabled
+            ? ''
+            : '@Microsoft.KeyVault(SecretUri=${userSessionHmacSecret!.properties.secretUri})'
+        }
+
         { name: 'RequestSignature__Required', value: 'true' }
         { name: 'RequestSignature__MaxBodyBytes', value: string(maxRequestBodyBytes) }
 
@@ -890,8 +1148,17 @@ resource frontendApp 'Microsoft.Web/sites@2023-12-01' = {
     raFrontendBlob
     raFrontendQueue
     raFrontendTable
+    raFrontendKeyVaultSecrets
+    raFrontendAppConfiguration
     raFrontendServiceBus
+    appConfigurationUserSessionTenantId
+    appConfigurationUserSessionAudience
+    appConfigurationUserSessionRequiredScope
+    appConfigurationUserSessionMetadataAddress
+    appConfigurationUserSessionRegistrationTtlMinutes
+    appConfigurationUserSessionTableName
     nonceTable
+    userSessionTable
     payloadContainer
   ]
 }
@@ -987,7 +1254,14 @@ resource workerApp 'Microsoft.Web/sites@2023-12-01' = {
           value: 'Server=tcp:${sqlServer!.properties.fullyQualifiedDomainName},1433;Database=${sqlDatabase!.name};Authentication=Active Directory Managed Identity;User Id=${workerIdentity.properties.clientId};Encrypt=True;TrustServerCertificate=False;Connect Timeout=60;ConnectRetryCount=3;ConnectRetryInterval=10;'
         }
         { name: 'SqlPersistence__TargetTableName', value: 'EndpointDataSprawlRemediator_CL' }
-        { name: 'SqlPersistence__RetentionDays', value: string(sqlPersistenceRetentionDays) }
+        {
+          name: 'SqlPersistence__RetentionDays'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeySqlRetentionDays};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
+        {
+          name: 'SqlPersistence__PlacementRetentionDays'
+          value: '@Microsoft.AppConfiguration(Endpoint=${endpointDataSprawlAppConfiguration.properties.endpoint};Key=${appConfigurationKeySqlPlacementRetentionDays};Label=${endpointDataSprawlAppConfigurationLabel})'
+        }
       ] : [
         { name: 'SqlPersistence__Enabled', value: 'false' }
       ])
@@ -997,9 +1271,12 @@ resource workerApp 'Microsoft.Web/sites@2023-12-01' = {
     raWorkerBlob
     raWorkerQueue
     raWorkerTable
+    raWorkerAppConfiguration
     raWorkerServiceBus
     raWorkerDcr
     raWorkerDce
+    appConfigurationSqlRetentionDays
+    appConfigurationSqlPlacementRetentionDays
     workerDeploy
     payloadContainer
   ]
@@ -1033,3 +1310,11 @@ output sqlServerName string = sqlPersistenceEnabled ? sqlServer!.name : ''
 output sqlDatabaseName string = sqlPersistenceEnabled ? sqlDatabase!.name : ''
 output workerIdentityName string = workerIdentity.name
 output workerIdentityPrincipalId string = workerIdentity.properties.principalId
+output endpointDataSprawlAppConfigurationName string = endpointDataSprawlAppConfiguration.name
+output endpointDataSprawlAppConfigurationEndpoint string = endpointDataSprawlAppConfiguration.properties.endpoint
+output endpointDataSprawlAppConfigurationResourceId string = endpointDataSprawlAppConfiguration.id
+output endpointDataSprawlKeyVaultName string = endpointDataSprawlKeyVault.name
+output endpointDataSprawlKeyVaultUri string = endpointDataSprawlKeyVault.properties.vaultUri
+output userSessionHmacSecretUri string = !userSessionEnabled
+  ? ''
+  : userSessionHmacSecret!.properties.secretUri

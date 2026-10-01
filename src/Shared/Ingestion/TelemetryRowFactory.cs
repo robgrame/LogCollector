@@ -30,12 +30,14 @@ public static class TelemetryRowFactory
             "Source",
             "RecordIndex",
             "EventId",
+            "UserCorrelationId",
         };
 
     public static IReadOnlyList<JsonElement> BuildRows(
         TelemetryEnvelope envelope,
         string correlationId,
-        DateTimeOffset ingestedAtUtc)
+        DateTimeOffset ingestedAtUtc,
+        string? userCorrelationId = null)
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
@@ -82,10 +84,29 @@ public static class TelemetryRowFactory
                     "EndpointDataSprawlRemediator_CL",
                     StringComparison.Ordinal))
                 {
+                    if (userCorrelationId is not null &&
+                        (userCorrelationId.Length != 64 ||
+                         !userCorrelationId.All(Uri.IsHexDigit)))
+                    {
+                        throw new ArgumentException(
+                            "Endpoint Data Sprawl UserCorrelationId must be null or a server-generated 64-character hexadecimal value.",
+                            nameof(userCorrelationId));
+                    }
+
                     writer.WriteString(
                         "EventId",
                         Convert.ToHexString(SHA256.HashData(
                             Encoding.UTF8.GetBytes($"{correlationId}:{recordIndex}"))));
+                    if (userCorrelationId is null)
+                    {
+                        writer.WriteNull("UserCorrelationId");
+                    }
+                    else
+                    {
+                        writer.WriteString(
+                            "UserCorrelationId",
+                            userCorrelationId.ToUpperInvariant());
+                    }
                 }
                 writer.WriteString("Source", envelope.Source ?? "Unknown");
 

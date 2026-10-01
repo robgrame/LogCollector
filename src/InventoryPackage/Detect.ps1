@@ -5,7 +5,7 @@ $expectedConfigurationSha256 = '__LOGCOLLECTOR_CONFIGURATION_SHA256__'
 if ($expectedConfigurationSha256 -notmatch '^[0-9A-F]{64}$') { exit 1 }
 try {
     $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-    Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
+    Import-Module $coreManifest -MinimumVersion 1.12.0 -ErrorAction Stop
     $coreConfiguration = Get-LogCollectorEndpointConfiguration
 }
 catch { exit 1 }

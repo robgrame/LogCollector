@@ -7,6 +7,7 @@
   <Folder Name="/src/Functions/" />
   <Folder Name="/src/Functions/Frontend/" />
   <Folder Name="/tests/">
+    <Project Path="tests/LogCollector.DatabaseInitializer.Tests/LogCollector.DatabaseInitializer.Tests.csproj" />
     <Project Path="tests/LogCollector.Frontend.Tests/LogCollector.Frontend.Tests.csproj" />
     <Project Path="tests/LogCollector.Shared.Tests/LogCollector.Shared.Tests.csproj" />
     <Project Path="tests/LogCollector.Worker.Tests/LogCollector.Worker.Tests.csproj" />

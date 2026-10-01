@@ -65,6 +65,13 @@ jobs:
           CUSTOMER_PREFIX: ${{ inputs.customer_prefix }}
           SQL_ENTRA_ADMIN_OBJECT_ID: ${{ secrets.AZURE_DEPLOYMENT_OBJECT_ID }}
           SQL_ENTRA_ADMIN_NAME: ${{ secrets.AZURE_DEPLOYMENT_NAME }}
+          USER_SESSION_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          USER_SESSION_AUDIENCE: ${{ vars.ENDPOINT_DATA_SPRAWL_API_AUDIENCE }}
+          USER_SESSION_REQUIRED_SCOPE: ${{ vars.ENDPOINT_DATA_SPRAWL_API_SCOPE }}
+          USER_SESSION_METADATA_ADDRESS: ${{ vars.ENDPOINT_DATA_SPRAWL_OPENID_METADATA_ADDRESS }}
+          USER_SESSION_HMAC_KEY_BASE64: ${{ secrets.ENDPOINT_DATA_SPRAWL_USER_CORRELATION_HMAC_KEY_BASE64 }}
+          ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME: appcs-mslabs-edsr-prod
+          ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_LABEL: prod
         run: |
           if ($env:RESOURCE_GROUP -notmatch '^[A-Za-z0-9._()-]{1,90}$') {
               throw 'resource_group contains unsupported characters.'
@@ -97,6 +104,21 @@ jobs:
               if ($env:SQL_ENTRA_ADMIN_NAME -notmatch '^[A-Za-z0-9 ._()-]{2,128}$') {
                   throw 'sql_entra_admin_name contains unsupported characters.'
               }
+              if ($env:USER_SESSION_TENANT_ID -notmatch '^[0-9a-fA-F-]{36}$') {
+                  throw 'user_session_tenant_id must be the Entra tenant GUID.'
+              }
+              if ([string]::IsNullOrWhiteSpace($env:USER_SESSION_AUDIENCE)) {
+                  throw 'ENDPOINT_DATA_SPRAWL_API_AUDIENCE is required.'
+              }
+              if ($env:USER_SESSION_REQUIRED_SCOPE -notmatch '^[A-Za-z0-9._-]{1,128}$') {
+                  throw 'ENDPOINT_DATA_SPRAWL_API_SCOPE is invalid.'
+              }
+              if ($env:USER_SESSION_METADATA_ADDRESS -notmatch '^https://') {
+                  throw 'ENDPOINT_DATA_SPRAWL_OPENID_METADATA_ADDRESS must be HTTPS.'
+              }
+              if ([string]::IsNullOrWhiteSpace($env:USER_SESSION_HMAC_KEY_BASE64)) {
+                  throw 'ENDPOINT_DATA_SPRAWL_USER_CORRELATION_HMAC_KEY_BASE64 is required.'
+              }
           }
 
       - name: Set up .NET 10
@@ -122,12 +144,118 @@ jobs:
           SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           SQL_ENTRA_ADMIN_OBJECT_ID: ${{ secrets.AZURE_DEPLOYMENT_OBJECT_ID }}
           SQL_ENTRA_ADMIN_NAME: ${{ secrets.AZURE_DEPLOYMENT_NAME }}
+          USER_SESSION_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          USER_SESSION_AUDIENCE: ${{ vars.ENDPOINT_DATA_SPRAWL_API_AUDIENCE }}
+          USER_SESSION_REQUIRED_SCOPE: ${{ vars.ENDPOINT_DATA_SPRAWL_API_SCOPE }}
+          USER_SESSION_METADATA_ADDRESS: ${{ vars.ENDPOINT_DATA_SPRAWL_OPENID_METADATA_ADDRESS }}
+          USER_SESSION_HMAC_KEY_BASE64: ${{ secrets.ENDPOINT_DATA_SPRAWL_USER_CORRELATION_HMAC_KEY_BASE64 }}
+          ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME: appcs-mslabs-edsr-prod
+          ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_LABEL: prod
         run: |
           if ((az group exists --name $env:RESOURCE_GROUP --subscription $env:SUBSCRIPTION_ID) -ne 'true') {
               az group create --name $env:RESOURCE_GROUP --location $env:LOCATION `
                   --subscription $env:SUBSCRIPTION_ID --only-show-errors | Out-Null
               if ($LASTEXITCODE -ne 0) { throw "Failed to create resource group $env:RESOURCE_GROUP." }
           }
+          if ([string]::IsNullOrWhiteSpace($env:USER_SESSION_HMAC_KEY_BASE64)) {
+              throw 'ENDPOINT_DATA_SPRAWL_USER_CORRELATION_HMAC_KEY_BASE64 is required.'
+          }
+
+          $appConfiguration = az appconfig show `
+              --subscription $env:SUBSCRIPTION_ID `
+              --resource-group $env:RESOURCE_GROUP `
+              --name $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME `
+              --output json `
+              --only-show-errors 2>$null
+          if ($LASTEXITCODE -ne 0) {
+              az appconfig create `
+                  --subscription $env:SUBSCRIPTION_ID `
+                  --resource-group $env:RESOURCE_GROUP `
+                  --name $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME `
+                  --location $env:LOCATION `
+                  --sku Standard `
+                  --disable-local-auth true `
+                  --enable-purge-protection true `
+                  --retention-days 7 `
+                  --arm-auth-mode pass-through `
+                  --output none `
+                  --only-show-errors
+              if ($LASTEXITCODE -ne 0) { throw 'Failed to create the App Configuration store.' }
+          }
+          else {
+              az appconfig update `
+                  --subscription $env:SUBSCRIPTION_ID `
+                  --resource-group $env:RESOURCE_GROUP `
+                  --name $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME `
+                  --disable-local-auth true `
+                  --arm-auth-mode pass-through `
+                  --output none `
+                  --only-show-errors
+              if ($LASTEXITCODE -ne 0) { throw 'Failed to configure App Configuration pass-through authentication.' }
+          }
+
+          $appConfigurationResourceId = az appconfig show `
+              --subscription $env:SUBSCRIPTION_ID `
+              --resource-group $env:RESOURCE_GROUP `
+              --name $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME `
+              --query id `
+              --output tsv `
+              --only-show-errors
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appConfigurationResourceId)) {
+              throw 'Failed to resolve the App Configuration resource ID.'
+          }
+          $appConfigurationDataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b'
+          $existingDataOwnerAssignment = az role assignment list `
+              --subscription $env:SUBSCRIPTION_ID `
+              --scope $appConfigurationResourceId `
+              --assignee-object-id $env:SQL_ENTRA_ADMIN_OBJECT_ID `
+              --role $appConfigurationDataOwnerRoleId `
+              --include-inherited `
+              --query '[0].id' `
+              --output tsv `
+              --only-show-errors
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to inspect App Configuration deployment permissions.' }
+          if ([string]::IsNullOrWhiteSpace($existingDataOwnerAssignment)) {
+              az role assignment create `
+                  --subscription $env:SUBSCRIPTION_ID `
+                  --scope $appConfigurationResourceId `
+                  --assignee-object-id $env:SQL_ENTRA_ADMIN_OBJECT_ID `
+                  --assignee-principal-type ServicePrincipal `
+                  --role $appConfigurationDataOwnerRoleId `
+                  --output none `
+                  --only-show-errors
+              if ($LASTEXITCODE -ne 0) { throw 'Failed to grant App Configuration deployment permissions.' }
+          }
+          $appConfigurationAccessReady = $false
+          $appConfigurationProbeKey = "__deployment-permission-probe-$env:GITHUB_RUN_ID"
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+              az appconfig kv set `
+                  --subscription $env:SUBSCRIPTION_ID `
+                  --name $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME `
+                  --auth-mode login `
+                  --key $appConfigurationProbeKey `
+                  --value $attempt `
+                  --yes `
+                  --output none `
+                  --only-show-errors 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                  $appConfigurationAccessReady = $true
+                  break
+              }
+              Start-Sleep -Seconds 10
+          }
+          if (-not $appConfigurationAccessReady) {
+              throw 'App Configuration Data Owner permission did not propagate before deployment.'
+          }
+          az appconfig kv delete `
+              --subscription $env:SUBSCRIPTION_ID `
+              --name $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME `
+              --auth-mode login `
+              --key $appConfigurationProbeKey `
+              --yes `
+              --output none `
+              --only-show-errors
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to remove the App Configuration permission probe.' }
 
           $compiled = az bicep build-params --file infra\logcollector.bicepparam --stdout | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Failed to compile infra\logcollector.bicepparam.' }
@@ -151,6 +279,14 @@ jobs:
               sqlEntraAdminObjectId = $env:SQL_ENTRA_ADMIN_OBJECT_ID
               sqlEntraAdminName = $env:SQL_ENTRA_ADMIN_NAME
               sqlEntraAdminType = 'Application'
+              userSessionEnabled = $true
+              userSessionTenantId = $env:USER_SESSION_TENANT_ID
+              userSessionAudience = $env:USER_SESSION_AUDIENCE
+              userSessionRequiredScope = $env:USER_SESSION_REQUIRED_SCOPE
+              userSessionMetadataAddress = $env:USER_SESSION_METADATA_ADDRESS
+              userSessionHmacKeyBase64 = $env:USER_SESSION_HMAC_KEY_BASE64
+              endpointDataSprawlAppConfigurationName = $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_NAME
+              endpointDataSprawlAppConfigurationLabel = $env:ENDPOINT_DATA_SPRAWL_APP_CONFIGURATION_LABEL
           }.GetEnumerator()) {
               if (-not $parameters.parameters.PSObject.Properties[$entry.Key]) {
                   $parameters.parameters | Add-Member -NotePropertyName $entry.Key -NotePropertyValue ([pscustomobject]@{ value = $entry.Value })
@@ -184,6 +320,12 @@ jobs:
           "worker_identity_client_id=$($outputs.workerIdentityClientId.value)" >> $env:GITHUB_OUTPUT
           "sql_server_name=$($outputs.sqlServerName.value)" >> $env:GITHUB_OUTPUT
           "sql_database_name=$($outputs.sqlDatabaseName.value)" >> $env:GITHUB_OUTPUT
+          "endpoint_data_sprawl_app_configuration_name=$($outputs.endpointDataSprawlAppConfigurationName.value)" >> $env:GITHUB_OUTPUT
+          "endpoint_data_sprawl_app_configuration_endpoint=$($outputs.endpointDataSprawlAppConfigurationEndpoint.value)" >> $env:GITHUB_OUTPUT
+          "endpoint_data_sprawl_app_configuration_resource_id=$($outputs.endpointDataSprawlAppConfigurationResourceId.value)" >> $env:GITHUB_OUTPUT
+          "endpoint_data_sprawl_key_vault_name=$($outputs.endpointDataSprawlKeyVaultName.value)" >> $env:GITHUB_OUTPUT
+          "endpoint_data_sprawl_key_vault_uri=$($outputs.endpointDataSprawlKeyVaultUri.value)" >> $env:GITHUB_OUTPUT
+          "user_session_hmac_secret_uri=$($outputs.userSessionHmacSecretUri.value)" >> $env:GITHUB_OUTPUT
 
       - name: Initialize Endpoint Data Sprawl database
         if: (inputs.target == 'infrastructure' || inputs.target == 'all') && steps.infrastructure.outputs.sql_server_name != ''

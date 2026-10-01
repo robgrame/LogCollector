@@ -42,6 +42,7 @@ public sealed class TelemetryIngestFunction
     private readonly TelemetryIntakeOptions _options;
     private readonly EntraDeviceValidationOptions _entraDeviceValidation;
     private readonly GraphDeviceAuthorizer _deviceAuthorizer;
+    private readonly IUserSessionStore _userSessionStore;
     private readonly ILogger<TelemetryIngestFunction> _log;
 
     public TelemetryIngestFunction(
@@ -53,6 +54,7 @@ public sealed class TelemetryIngestFunction
         TelemetryIntakeOptions options,
         EntraDeviceValidationOptions entraDeviceValidation,
         GraphDeviceAuthorizer deviceAuthorizer,
+        IUserSessionStore userSessionStore,
         ILogger<TelemetryIngestFunction> log)
     {
         _authenticator = new TelemetryRequestAuthenticator(certValidator, signatureVerifier, replayProtector);
@@ -61,6 +63,7 @@ public sealed class TelemetryIngestFunction
         _options = options;
         _entraDeviceValidation = entraDeviceValidation;
         _deviceAuthorizer = deviceAuthorizer;
+        _userSessionStore = userSessionStore;
         _log = log;
     }
 
@@ -166,9 +169,48 @@ public sealed class TelemetryIngestFunction
             _log.LogWarning("Intune device {DeviceId} is absent or disabled in the frontend identity's tenant.", binding.BoundDeviceId);
             return Problem(StatusCodes.Status403Forbidden, "device is not authorized in this tenant", correlationId);
         }
-        var submissionId = SubmissionIdentity.FromBody(bodyBytes);
+
+        string? userCorrelationId = null;
+        if (string.Equals(
+            envelope.TableName,
+            "EndpointDataSprawlRemediator_CL",
+            StringComparison.Ordinal))
+        {
+            var registrationId =
+                req.Headers[UserSessionOptions.RegistrationHeaderName].ToString();
+            if (!string.IsNullOrWhiteSpace(registrationId))
+            {
+                var registration = await _userSessionStore
+                    .ResolveAsync(
+                        registrationId,
+                        Guid.Parse(binding.BoundDeviceId!),
+                        ct)
+                    .ConfigureAwait(false);
+                if (!registration.Resolved)
+                {
+                    _log.LogWarning(
+                        "Endpoint Data Sprawl user-session correlation was omitted for device {DeviceId}: {Reason}",
+                        binding.BoundDeviceId,
+                        registration.FailureReason);
+                }
+                else
+                {
+                    userCorrelationId = registration.UserCorrelationId;
+                }
+            }
+        }
+
+        var submissionId = SubmissionIdentity.FromBodyAndUserContext(
+            bodyBytes,
+            userCorrelationId);
         var pointer = await _publisher
-            .PublishAsync(envelope, bodyBytes, submissionId, auth.Certificate!.Thumbprint, ct)
+            .PublishAsync(
+                envelope,
+                bodyBytes,
+                submissionId,
+                auth.Certificate!.Thumbprint,
+                userCorrelationId,
+                ct)
             .ConfigureAwait(false);
 
         return new ObjectResult(new

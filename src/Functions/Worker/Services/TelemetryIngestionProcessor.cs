@@ -127,7 +127,11 @@ public sealed class TelemetryIngestionProcessor
         if (!string.Equals(envelope.TableName, pointer.TableName, StringComparison.Ordinal))
             return ProcessingOutcome.Poison("payload table name does not match the pointer table name");
 
-        var rows = TelemetryRowFactory.BuildRows(envelope, pointer.CorrelationId, DateTimeOffset.UtcNow);
+        var rows = TelemetryRowFactory.BuildRows(
+            envelope,
+            pointer.CorrelationId,
+            DateTimeOffset.UtcNow,
+            pointer.UserCorrelationId);
 
         // Chunk and detect uningestible rows BEFORE any upload. A row larger than
         // the chunk budget can never be ingested, so this payload will never

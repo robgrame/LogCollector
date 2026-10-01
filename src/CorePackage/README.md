@@ -1,6 +1,6 @@
 # LogCollector Core — shared telemetry dependency
 
-Version 1.11.1
+Version 1.12.0
 
 This package installs **LogCollector.Client** machine-wide. It is a *dependency*: it
 registers no scheduled task and collects nothing by itself. Install it on every device that
@@ -197,9 +197,9 @@ In both layouts, the utility must have a valid Microsoft Authenticode signature.
 ## Uninstall
 
 ```powershell
-.\Uninstall.ps1 -ExpectedVersion 1.11.1                      # module only
-.\Uninstall.ps1 -ExpectedVersion 1.11.1 -RemoveConfiguration # also drop the endpoint
-.\Uninstall.ps1 -ExpectedVersion 1.11.1 -RemoveSpool         # also discard pending records
+.\Uninstall.ps1 -ExpectedVersion 1.12.0                      # module only
+.\Uninstall.ps1 -ExpectedVersion 1.12.0 -RemoveConfiguration # also drop the endpoint
+.\Uninstall.ps1 -ExpectedVersion 1.12.0 -RemoveSpool         # also discard pending records
 ```
 
 The Intune command always passes the package version. If a newer Core is already installed

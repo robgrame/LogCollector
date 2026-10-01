@@ -15,6 +15,8 @@ using LogCollector.Shared.Tests;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace LogCollector.Frontend.Tests;
@@ -26,7 +28,8 @@ internal sealed class FrontendTestHarness : IDisposable
     public const string ContainerName = "telemetry-test-payloads";
     public const string StreamMap =
         "RemediationResults_CL=Custom-RemediationResults_CL;HealthChecks_CL=Custom-HealthChecks_CL;"
-        + "InventoryWindows_CL=Custom-InventoryWindows_CL";
+        + "InventoryWindows_CL=Custom-InventoryWindows_CL;"
+        + "EndpointDataSprawlRemediator_CL=Custom-EndpointDataSprawlRemediator_CL";
 
     private readonly HttpClient _blobHttp;
     private readonly HttpClient _graphHttp;
@@ -35,11 +38,15 @@ internal sealed class FrontendTestHarness : IDisposable
     public X509Certificate2 Root { get; }
     public X509Certificate2 Leaf { get; }
     public X509Certificate2 PresentedCertificate { get; }
+    public IConfiguration Config { get; }
+    public ClientCertValidator CertificateValidator { get; }
     public InMemoryReplayNonceStore Nonces { get; } = new();
     public List<string> Events { get; } = [];
     public BlobHandler Blobs { get; }
     public RecordingServiceBusClient ServiceBus { get; }
     public GraphHandler Graph { get; }
+    public InMemoryUserSessionStore UserSessions { get; }
+    public RecordingLogger<TelemetryIngestFunction> IntakeLogger { get; } = new();
     public TelemetryIngestFunction Function { get; }
 
     public FrontendTestHarness(
@@ -63,10 +70,23 @@ internal sealed class FrontendTestHarness : IDisposable
             ("ClientCert:RevocationMode", "NoCheck"),
             ("Ingestion:StreamMap", StreamMap),
             ("Storage:PayloadContainer", ContainerName),
+            ("UserSession:TenantId", "11111111-2222-3333-4444-555555555555"),
+            ("UserSession:Audience", "api://edsr-test"),
+            ("UserSession:RequiredScope", "EndpointDataSprawl.Register"),
+            ("UserSession:MetadataAddress",
+                "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0/.well-known/openid-configuration"),
+            ("UserSession:RegistrationTtlMinutes", "480"),
+            ("UserSession:TableName", "UserSessions"),
+            ("UserSession:HmacKeyBase64",
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
         };
         settings.AddRange(extraSettings);
-        var config = TestCertificates.Config([.. settings]);
-        var options = new TelemetryIntakeOptions(config);
+        Config = TestCertificates.Config([.. settings]);
+        var options = new TelemetryIntakeOptions(Config);
+        CertificateValidator =
+            new ClientCertValidator(
+                Config,
+                NullLogger<ClientCertValidator>.Instance);
         Blobs = new BlobHandler(Events);
         _blobHttp = new HttpClient(Blobs);
         var blobOptions = new BlobClientOptions { Transport = new HttpClientTransport(_blobHttp) };
@@ -75,18 +95,20 @@ internal sealed class FrontendTestHarness : IDisposable
             new Uri($"https://frontend-tests.invalid/{ContainerName}"), blobOptions);
         ServiceBus = new RecordingServiceBusClient(Events);
         Graph = new GraphHandler(intune);
+        UserSessions = new InMemoryUserSessionStore();
         _graphHttp = new HttpClient(Graph);
         Function = new TelemetryIngestFunction(
-            new ClientCertValidator(config, NullLogger<ClientCertValidator>.Instance),
-            new RequestSignatureVerifier(config),
-            new ReplayProtector(Nonces, config),
+            CertificateValidator,
+            new RequestSignatureVerifier(Config),
+            new ReplayProtector(Nonces, Config),
             new TelemetryPointerPublisher(container, ServiceBus, options,
                 NullLogger<TelemetryPointerPublisher>.Instance),
-            new IngestionStreamMap(config),
+            new IngestionStreamMap(Config),
             options,
-            new EntraDeviceValidationOptions(config),
+            new EntraDeviceValidationOptions(Config),
             new GraphDeviceAuthorizer(new TestCredential(intune), _graphHttp),
-            NullLogger<TelemetryIngestFunction>.Instance);
+            UserSessions,
+            IntakeLogger);
     }
 
     public HttpRequest Request(
@@ -161,6 +183,152 @@ internal sealed class FrontendTestHarness : IDisposable
             }
             return Task.FromResult(removed);
         }
+    }
+
+    internal sealed class InMemoryUserSessionStore : IUserSessionStore
+    {
+        private readonly Dictionary<string, Session> _sessions =
+            new(StringComparer.Ordinal);
+
+        public Task<CreatedUserSession> CreateAsync(
+            Guid trustedDeviceId,
+            string userCorrelationId,
+            DateTimeOffset tokenExpiresAtUtc,
+            CancellationToken cancellationToken)
+        {
+            var id = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+            _sessions[id] = new Session(
+                trustedDeviceId,
+                userCorrelationId,
+                tokenExpiresAtUtc,
+                false);
+            return Task.FromResult(new CreatedUserSession(id, tokenExpiresAtUtc));
+        }
+
+        public Task<ResolvedUserSession> ResolveAsync(
+            string registrationId,
+            Guid trustedDeviceId,
+            CancellationToken cancellationToken)
+        {
+            if (!_sessions.TryGetValue(registrationId, out var session))
+            {
+                return Task.FromResult(
+                    ResolvedUserSession.Failure(
+                        "User-session registration is invalid."));
+            }
+
+            if (session.Revoked)
+            {
+                return Task.FromResult(
+                    ResolvedUserSession.Failure(
+                        "User-session registration has been revoked."));
+            }
+
+            if (session.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+            {
+                return Task.FromResult(
+                    ResolvedUserSession.Failure(
+                        "User-session registration has expired."));
+            }
+
+            if (session.DeviceId != trustedDeviceId)
+            {
+                return Task.FromResult(
+                    ResolvedUserSession.Failure(
+                        "User-session registration is bound to another device."));
+            }
+
+            return Task.FromResult(
+                session.CorrelationId is null
+                    ? ResolvedUserSession.Failure(
+                        "User-session registration metadata is invalid.")
+                    : ResolvedUserSession.Success(session.CorrelationId));
+        }
+
+        public Task<bool> RevokeAsync(
+            string registrationId,
+            Guid trustedDeviceId,
+            CancellationToken cancellationToken)
+        {
+            if (!_sessions.TryGetValue(registrationId, out var session) ||
+                session.DeviceId != trustedDeviceId)
+            {
+                return Task.FromResult(false);
+            }
+
+            _sessions[registrationId] = session with { Revoked = true };
+            _sessions[registrationId] =
+                _sessions[registrationId] with { CorrelationId = null };
+            return Task.FromResult(true);
+        }
+
+        public Task<int> PurgeExpiredAsync(
+            DateTimeOffset cutoff,
+            int maxEntities,
+            CancellationToken cancellationToken)
+        {
+            var expired = _sessions
+                .Where(item => item.Value.ExpiresAtUtc <= cutoff)
+                .Take(maxEntities)
+                .Select(item => item.Key)
+                .ToArray();
+            foreach (var key in expired)
+            {
+                _sessions.Remove(key);
+            }
+
+            return Task.FromResult(expired.Length);
+        }
+
+        public string Add(
+            Guid deviceId,
+            string correlationId,
+            DateTimeOffset? expiresAtUtc = null,
+            bool revoked = false)
+        {
+            var id = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+            _sessions[id] = new Session(
+                deviceId,
+                correlationId,
+                expiresAtUtc ?? DateTimeOffset.UtcNow.AddMinutes(30),
+                revoked);
+            return id;
+        }
+
+        public string? GetCorrelation(string registrationId) =>
+            _sessions.TryGetValue(registrationId, out var session)
+                ? session.CorrelationId
+                : null;
+
+        private sealed record Session(
+            Guid DeviceId,
+            string? CorrelationId,
+            DateTimeOffset ExpiresAtUtc,
+            bool Revoked);
+    }
+
+    internal sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 
     internal sealed class BlobHandler(List<string> events) : HttpMessageHandler

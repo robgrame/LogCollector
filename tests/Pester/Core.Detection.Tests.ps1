@@ -37,7 +37,7 @@ BeforeAll {
         Environment                   = 'Production'
         CustomerName                  = 'Example'
         SubmissionEnabled             = $true
-        PackageVersion                = '1.11.1'
+        PackageVersion                = '1.12.0'
         CertificateThumbprint         = ''
         CertificateSubjectLike        = ''
         CertificateIssuerLike         = ''
@@ -108,6 +108,8 @@ Describe 'Core package configuration-bound detection' {
         $deploymentPublisherText | Should -Match 'intentionally \*\*not bundled\*\*'
         $deploymentPublisherText | Should -Match 'frontendIdentityName'
         $helperText | Should -Match 'Device\.Read\.All'
+        $helperText | Should -Not -Match 'DeviceManagementManagedDevices\.Read\.All'
+        $helperText | Should -Not -Match 'WorkerIdentityName'
         $helperText | Should -Match 'appRoleAssignments'
         $publisherText | Should -Match 'Device\.Read\.All'
         $publisherText | Should -Match 'entraDeviceValidationEnabled = false'
@@ -246,7 +248,7 @@ Describe 'Core package configuration-bound detection' {
 
         $verifier = $verifierMatch.Groups[1].Value.
             Replace('__SOLUTION_VERSION__', '1.13.3').
-            Replace('__CORE_VERSION__', '1.11.1').
+            Replace('__CORE_VERSION__', '1.12.0').
             Replace('__INVENTORY_VERSION__', '1.9.1').
             Replace('__SOURCE_COMMIT__', 'test-commit').
             Replace(
@@ -263,7 +265,7 @@ Describe 'Core package configuration-bound detection' {
         }
         $manifest = [ordered]@{
             SolutionVersion = '1.13.3'
-            CorePackageVersion = '1.11.1'
+            CorePackageVersion = '1.12.0'
             InventoryPackageVersion = '1.9.1'
             FileCount = $hashes.Count
             SourceCommit = 'test-commit'
@@ -278,7 +280,7 @@ Describe 'Core package configuration-bound detection' {
             -Value 'customer-edited' -NoNewline
         foreach ($relative in @(
                 '1-Azure\Logs\deployment.log',
-                '2-Intune\Output\1.11.1\Package\Install.intunewin',
+                '2-Intune\Output\1.12.0\Package\Install.intunewin',
                 '2-Intune\Tools\IntuneWinAppUtil.exe')) {
             $path = Join-Path $root $relative
             $null = New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force

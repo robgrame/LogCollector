@@ -17,7 +17,7 @@ BeforeAll {
     }
     $env:PSModulePath = (Split-Path $moduleRoot -Parent) +
         [IO.Path]::PathSeparator + $env:PSModulePath
-    Import-Module LogCollector.Client -RequiredVersion 1.11.1 -Force -ErrorAction Stop
+    Import-Module LogCollector.Client -RequiredVersion 1.12.0 -Force -ErrorAction Stop
     $script:DefaultConfigText = Get-Content (Join-Path $script:Source 'Config.psd1') -Raw
     $script:Fixture = Join-Path $TestDrive 'Package'
     $null = New-Item -ItemType Directory -Path $script:Fixture -Force
@@ -434,7 +434,7 @@ Describe 'inventory package installer' {
 
 Describe 'inventory distribution builder' {
     It 'keeps the minimum Core dependency consistent across every entry point' {
-        $minimum = '1.11.1'
+        $minimum = '1.12.0'
         foreach ($file in @('Install.ps1', 'Detect.ps1', 'Inventory.Runtime.psm1',
                 'Run-Inventory.ps1', 'Sync-Spool.ps1', 'Uninstall.ps1')) {
             Get-Content -LiteralPath (Join-Path $script:Source $file) -Raw |
@@ -450,7 +450,7 @@ Describe 'inventory distribution builder' {
         $result = & $builder -OutputRoot $output
         $result.FileCount | Should -Be 11
         $result.PackageVersion | Should -BeExactly '1.9.1'
-        $result.MinimumCoreVersion | Should -BeExactly '1.11.1'
+        $result.MinimumCoreVersion | Should -BeExactly '1.12.0'
         (Get-Content (Join-Path $result.PackagePath 'Version') -Raw).Trim() | Should -BeExactly '1.9.1'
         $result.ConfigurationSha256 | Should -BeExactly (Get-FileHash (Join-Path $result.PackagePath 'Config.psd1')).Hash
         (Get-Content (Join-Path $result.PackagePath 'Detect.ps1') -Raw) | Should -Match $result.ConfigurationSha256

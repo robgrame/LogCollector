@@ -65,6 +65,17 @@ public sealed class SqlPersistenceOptions
         RetentionDays = int.TryParse(configuration["SqlPersistence:RetentionDays"], out var retentionDays)
             ? Math.Clamp(retentionDays, 30, 3_650)
             : 2_555;
+        PlacementRetentionDays = int.TryParse(
+            configuration["SqlPersistence:PlacementRetentionDays"],
+            out var placementRetentionDays)
+            ? Math.Clamp(placementRetentionDays, 31, 36_500)
+            : Math.Max(3_650, RetentionDays + 1);
+
+        if (PlacementRetentionDays <= RetentionDays)
+        {
+            throw new InvalidOperationException(
+                "SqlPersistence:PlacementRetentionDays must be greater than SqlPersistence:RetentionDays.");
+        }
 
         if (Enabled && string.IsNullOrWhiteSpace(ConnectionString))
         {
@@ -93,6 +104,8 @@ public sealed class SqlPersistenceOptions
     public string TargetTableName { get; }
 
     public int RetentionDays { get; }
+
+    public int PlacementRetentionDays { get; }
 }
 
 public sealed class EndpointDataSprawlSqlPersistence(
@@ -270,6 +283,8 @@ public sealed class EndpointDataSprawlSqlPersistence(
                 CommandTimeout = 180,
             };
             command.Parameters.Add("@RetentionDays", SqlDbType.Int).Value = options.RetentionDays;
+            command.Parameters.Add("@PlacementRetentionDays", SqlDbType.Int).Value =
+                options.PlacementRetentionDays;
             var deletedParameter = command.Parameters.Add("@DeletedRows", SqlDbType.Int);
             deletedParameter.Direction = ParameterDirection.Output;
 

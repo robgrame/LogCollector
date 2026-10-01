@@ -17,13 +17,13 @@ Removes the module only when its manifest still has this version. Intune supplie
 version from the app being removed, so an obsolete uninstall command cannot remove a newer
 Core release that has already replaced it at the stable path.
 .NOTES
-Version 1.11.1.
+Version 1.12.0.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [switch] $RemoveConfiguration,
     [switch] $RemoveSpool,
-    [version] $ExpectedVersion = '1.11.1'
+    [version] $ExpectedVersion = '1.12.0'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest

@@ -13,7 +13,7 @@ try {
     $customerName = $null
     try {
         $coreManifest = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
-        Import-Module $coreManifest -MinimumVersion 1.11.1 -ErrorAction Stop
+        Import-Module $coreManifest -MinimumVersion 1.12.0 -ErrorAction Stop
         $customerName = (Get-LogCollectorEndpointConfiguration).CustomerName
     }
     catch {
