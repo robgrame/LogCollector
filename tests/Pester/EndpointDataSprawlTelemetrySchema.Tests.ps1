@@ -1,20 +1,23 @@
 BeforeAll {
     $script:RepoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
-    $script:ParameterPath = Join-Path $script:RepoRoot 'infra\logcollector.bicepparam'
     $script:MainBicepPath = Join-Path $script:RepoRoot 'infra\main.bicep'
 
-    $parameterText = [IO.File]::ReadAllText($script:ParameterPath)
-    $tableStart = $parameterText.IndexOf("name: 'EndpointDataSprawlRemediator_CL'", [StringComparison]::Ordinal)
-    if ($tableStart -lt 0) { throw 'EndpointDataSprawlRemediator_CL is missing from logcollector.bicepparam.' }
-    $remainingText = $parameterText.Substring($tableStart + 1)
-    $nextTableMatch = [regex]::Match($remainingText, '(?m)^  \{\r?\n    name:')
-    if (-not $nextTableMatch.Success) {
+    $script:MainBicepText = [IO.File]::ReadAllText($script:MainBicepPath)
+    $tableStart = $script:MainBicepText.IndexOf(
+        'var endpointDataSprawlTelemetryTable = {',
+        [StringComparison]::Ordinal)
+    if ($tableStart -lt 0) { throw 'The built-in Endpoint Data Sprawl table is missing from main.bicep.' }
+    $remainingText = $script:MainBicepText.Substring($tableStart + 1)
+    $nextVariableMatch = [regex]::Match(
+        $remainingText,
+        '(?m)^var additionalTelemetryTableNames =')
+    if (-not $nextVariableMatch.Success) {
         throw 'Unable to find the end of the Endpoint Data Sprawl table definition.'
     }
-    $nextTable = $tableStart + 1 + $nextTableMatch.Index
-    $script:EndpointTableText = $parameterText.Substring($tableStart, $nextTable - $tableStart)
-
-    $script:MainBicepText = [IO.File]::ReadAllText($script:MainBicepPath)
+    $nextVariable = $tableStart + 1 + $nextVariableMatch.Index
+    $script:EndpointTableText = $script:MainBicepText.Substring(
+        $tableStart,
+        $nextVariable - $tableStart)
 
     $script:ExpectedColumns = [ordered]@{
         TimeGenerated      = 'datetime'
@@ -74,7 +77,7 @@ Describe 'Endpoint Data Sprawl Remediator telemetry schema' {
     }
 
     It 'does not retain the pre-rename destination' {
-        ([IO.File]::ReadAllText($script:ParameterPath)) | Should -Not -Match 'OneDriveFileOrganizer_CL'
+        $script:MainBicepText | Should -Not -Match 'OneDriveFileOrganizer_CL'
     }
 
     It 'generates the DCR streams and both Function App mappings from one table definition' {

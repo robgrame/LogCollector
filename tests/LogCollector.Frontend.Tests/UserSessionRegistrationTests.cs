@@ -47,6 +47,30 @@ public sealed class UserSessionRegistrationTests
     }
 
     [Fact]
+    public void OptionsAllowDisabledConfigurationWithEmptyAppSettings()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["UserSession:TenantId"] = string.Empty,
+            ["UserSession:Audience"] = string.Empty,
+            ["UserSession:RequiredScope"] = string.Empty,
+            ["UserSession:MetadataAddress"] = string.Empty,
+            ["UserSession:TableName"] = string.Empty,
+            ["UserSession:HmacKeyBase64"] = string.Empty,
+            ["UserSession:RegistrationTtlMinutes"] = string.Empty,
+        };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
+        var options = new UserSessionOptions(configuration);
+
+        Assert.False(options.IsConfigured);
+        Assert.Equal("UserSessions", options.TableName);
+        Assert.Equal(TimeSpan.FromMinutes(480), options.RegistrationTtl);
+    }
+
+    [Fact]
     public void OptionsDeriveIssuerFromConfiguredAuthority()
     {
         var options = new UserSessionOptions(SessionConfiguration(

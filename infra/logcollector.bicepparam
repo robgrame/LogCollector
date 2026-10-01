@@ -4,6 +4,7 @@ param location = 'italynorth'
 param appName = 'LogCollector'
 param environment = 'prod'
 param frontendPlanSku = 'B1'
+param includeEndpointDataSprawlTable = false
 param sqlPersistenceEnabled = false
 param sqlEntraAdminObjectId = ''
 param sqlEntraAdminName = ''
@@ -21,48 +22,6 @@ param endpointDataSprawlAppConfigurationLabel = 'prod'
 // the pass-through data flow and the Ingestion__StreamMap entry on both apps.
 // Keep this list authoritative: a table created out of band is reverted here.
 param additionalTelemetryTables = [
-  {
-    name: 'EndpointDataSprawlRemediator_CL'
-    columns: [
-      { name: 'TimeGenerated', type: 'datetime' }
-      { name: 'CollectedAtUtc', type: 'datetime' }
-      { name: 'EntraDeviceId', type: 'string' }
-      { name: 'DeviceName', type: 'string' }
-      { name: 'IntuneDeviceId', type: 'string' }
-      { name: 'CorrelationId', type: 'string' }
-      { name: 'RecordIndex', type: 'int' }
-      { name: 'EventId', type: 'string' }
-      { name: 'Source', type: 'string' }
-      { name: 'ClientVersion', type: 'string' }
-      { name: 'UserCorrelationId', type: 'string' }
-      { name: 'EventTimeUtc', type: 'datetime' }
-      { name: 'CycleStartedAtUtc', type: 'datetime' }
-      { name: 'ExecutionId', type: 'string' }
-      { name: 'RecordType', type: 'string' }
-      { name: 'ClientType', type: 'string' }
-      { name: 'Status', type: 'string' }
-      { name: 'DryRun', type: 'boolean' }
-      { name: 'SourcePath', type: 'string' }
-      { name: 'DestinationPath', type: 'string' }
-      { name: 'FileName', type: 'string' }
-      { name: 'Extension', type: 'string' }
-      { name: 'SourceCreatedAtUtc', type: 'datetime' }
-      { name: 'SourceModifiedAtUtc', type: 'datetime' }
-      { name: 'Category', type: 'string' }
-      { name: 'CategoryProvider', type: 'string' }
-      { name: 'Bytes', type: 'long' }
-      { name: 'DurationMs', type: 'long' }
-      { name: 'ResultCode', type: 'string' }
-      { name: 'Detail', type: 'string' }
-      { name: 'Discovered', type: 'int' }
-      { name: 'Planned', type: 'int' }
-      { name: 'Moved', type: 'int' }
-      { name: 'Skipped', type: 'int' }
-      { name: 'Failed', type: 'int' }
-      { name: 'Deferred', type: 'int' }
-      { name: 'OmittedFileResults', type: 'int' }
-    ]
-  }
   {
     name: 'DeviceInventory_CL'
     columns: [

@@ -211,11 +211,18 @@ Keep additional schemas in the environment's parameter file so later infrastruct
 do not replace a manually extended DCR/map with the default example.
 
 The production Endpoint Data Sprawl Remediator contract is authoritative in
-`infra\logcollector.bicepparam` as `EndpointDataSprawlRemediator_CL`. Its schema includes the
+`infra\main.bicep` as `endpointDataSprawlTelemetryTable`. Set
+`includeEndpointDataSprawlTable=true` for a Log Analytics-only deployment; SQL persistence and
+user sessions enable it automatically. Do not repeat this table in `additionalTelemetryTables`;
+legacy parameter files that still contain it remain supported and their caller-supplied definition
+takes precedence over the built-in schema. Its schema includes the
 server-stamped platform identity fields and the client's stable cycle, file-result, count and
 pseudonymous `UserCorrelationId` fields. The generated `ingestionStreamMap` in `infra\main.bicep`
 wires `Custom-EndpointDataSprawlRemediator_CL` into both Function Apps; do not maintain separate
-manual mappings. Backend 1.14.0 adds idempotent Azure SQL persistence for Endpoint Data Sprawl
+manual mappings. Before redeploying an existing EDSR environment with a manually compiled
+`infra\logcollector.bicepparam`, set `includeEndpointDataSprawlTable=true`; otherwise the
+authoritative deployment removes the EDSR DCR stream and application mapping. Backend 1.14.0
+adds idempotent Azure SQL persistence for Endpoint Data Sprawl
 telemetry while retaining the complete `Deferred:int` cycle-summary counter used for locked-file
 backlog and completion indicators even when individual file records are capped. The SQL read model
 retains `Moved`, `Planned`, and `Failed` destination states

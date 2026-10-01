@@ -6,12 +6,18 @@ namespace LogCollector.Frontend.Services;
 
 public sealed class UserSessionCleanupService(
     IUserSessionStore store,
+    UserSessionOptions options,
     TimeProvider timeProvider,
     ILogger<UserSessionCleanupService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
+        if (!options.IsConfigured)
+        {
+            return;
+        }
+
         using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
         try
         {
