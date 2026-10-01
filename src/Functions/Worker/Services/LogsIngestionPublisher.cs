@@ -168,6 +168,17 @@ public sealed class LogsIngestionPublisher
             }
             catch (RequestFailedException ex)
             {
+                if (ex.Status == 0)
+                {
+                    throw new LogsIngestionException(
+                        $"Logs Ingestion returned no authoritative response for chunk "
+                        + $"{chunkNumber}/{chunkCount} of stream '{streamName}': {ex.Message}",
+                        ex.Status,
+                        permanent: true,
+                        chunksCommitted,
+                        chunkCount);
+                }
+
                 // Normalise onto LogsIngestionException so callers classify one
                 // exception type. A raw RequestFailedException escaping here would
                 // be indistinguishable from a transient fault and would silently

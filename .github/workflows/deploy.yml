@@ -63,6 +63,8 @@ jobs:
           FRONTEND_APP_NAME: ${{ inputs.frontend_app_name }}
           WORKER_APP_NAME: ${{ inputs.worker_app_name }}
           CUSTOMER_PREFIX: ${{ inputs.customer_prefix }}
+          SQL_ENTRA_ADMIN_OBJECT_ID: ${{ secrets.AZURE_DEPLOYMENT_OBJECT_ID }}
+          SQL_ENTRA_ADMIN_NAME: ${{ secrets.AZURE_DEPLOYMENT_NAME }}
         run: |
           if ($env:RESOURCE_GROUP -notmatch '^[A-Za-z0-9._()-]{1,90}$') {
               throw 'resource_group contains unsupported characters.'
@@ -88,6 +90,14 @@ jobs:
           if ($env:TARGET -eq 'all' -and ($env:FRONTEND_APP_NAME -or $env:WORKER_APP_NAME)) {
               throw 'App-name inputs must be empty for target all; infrastructure outputs are used.'
           }
+          if ($env:TARGET -in @('infrastructure', 'all')) {
+              if ($env:SQL_ENTRA_ADMIN_OBJECT_ID -notmatch '^[0-9a-fA-F-]{36}$') {
+                  throw 'sql_entra_admin_object_id must be the deployment service principal object GUID.'
+              }
+              if ($env:SQL_ENTRA_ADMIN_NAME -notmatch '^[A-Za-z0-9 ._()-]{2,128}$') {
+                  throw 'sql_entra_admin_name contains unsupported characters.'
+              }
+          }
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
@@ -110,6 +120,8 @@ jobs:
           LOCATION: ${{ inputs.location }}
           CUSTOMER_PREFIX: ${{ inputs.customer_prefix }}
           SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          SQL_ENTRA_ADMIN_OBJECT_ID: ${{ secrets.AZURE_DEPLOYMENT_OBJECT_ID }}
+          SQL_ENTRA_ADMIN_NAME: ${{ secrets.AZURE_DEPLOYMENT_NAME }}
         run: |
           if ((az group exists --name $env:RESOURCE_GROUP --subscription $env:SUBSCRIPTION_ID) -ne 'true') {
               az group create --name $env:RESOURCE_GROUP --location $env:LOCATION `
@@ -134,6 +146,19 @@ jobs:
                   $parameters.parameters.customerPrefix.value = $env:CUSTOMER_PREFIX
               }
           }
+          foreach ($entry in @{
+              sqlPersistenceEnabled = $true
+              sqlEntraAdminObjectId = $env:SQL_ENTRA_ADMIN_OBJECT_ID
+              sqlEntraAdminName = $env:SQL_ENTRA_ADMIN_NAME
+              sqlEntraAdminType = 'Application'
+          }.GetEnumerator()) {
+              if (-not $parameters.parameters.PSObject.Properties[$entry.Key]) {
+                  $parameters.parameters | Add-Member -NotePropertyName $entry.Key -NotePropertyValue ([pscustomobject]@{ value = $entry.Value })
+              }
+              else {
+                  $parameters.parameters.($entry.Key).value = $entry.Value
+              }
+          }
           $parameterFile = Join-Path $env:RUNNER_TEMP 'deployment.parameters.json'
           $parameters | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $parameterFile -Encoding utf8
 
@@ -155,6 +180,29 @@ jobs:
           $outputs = $outputsJson | ConvertFrom-Json
           "frontend_app_name=$($outputs.frontendAppName.value)" >> $env:GITHUB_OUTPUT
           "worker_app_name=$($outputs.workerAppName.value)" >> $env:GITHUB_OUTPUT
+          "worker_identity_name=$($outputs.workerIdentityName.value)" >> $env:GITHUB_OUTPUT
+          "worker_identity_client_id=$($outputs.workerIdentityClientId.value)" >> $env:GITHUB_OUTPUT
+          "sql_server_name=$($outputs.sqlServerName.value)" >> $env:GITHUB_OUTPUT
+          "sql_database_name=$($outputs.sqlDatabaseName.value)" >> $env:GITHUB_OUTPUT
+
+      - name: Initialize Endpoint Data Sprawl database
+        if: (inputs.target == 'infrastructure' || inputs.target == 'all') && steps.infrastructure.outputs.sql_server_name != ''
+        shell: pwsh
+        env:
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          SQL_SERVER_NAME: ${{ steps.infrastructure.outputs.sql_server_name }}
+          SQL_DATABASE_NAME: ${{ steps.infrastructure.outputs.sql_database_name }}
+          WORKER_IDENTITY_NAME: ${{ steps.infrastructure.outputs.worker_identity_name }}
+          WORKER_IDENTITY_CLIENT_ID: ${{ steps.infrastructure.outputs.worker_identity_client_id }}
+        run: |
+          .\scripts\Initialize-EndpointDataSprawlDatabase.ps1 `
+              -ServerName $env:SQL_SERVER_NAME `
+              -DatabaseName $env:SQL_DATABASE_NAME `
+              -WorkerIdentityName $env:WORKER_IDENTITY_NAME `
+              -WorkerIdentityClientId $env:WORKER_IDENTITY_CLIENT_ID `
+              -ResourceGroup $env:RESOURCE_GROUP `
+              -SubscriptionId $env:SUBSCRIPTION_ID
 
       - name: Deploy Frontend
         id: frontend

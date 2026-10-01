@@ -4,6 +4,11 @@ param location = 'italynorth'
 param appName = 'LogCollector'
 param environment = 'prod'
 param frontendPlanSku = 'B1'
+param sqlPersistenceEnabled = false
+param sqlEntraAdminObjectId = ''
+param sqlEntraAdminName = ''
+param sqlEntraAdminType = 'Application'
+param sqlPersistenceRetentionDays = 2555
 
 // Purpose-specific tables in addition to the InventoryWindows_CL example.
 // Provisions the Log Analytics table, the Custom-<name> DCR stream declaration,
@@ -20,6 +25,7 @@ param additionalTelemetryTables = [
       { name: 'IntuneDeviceId', type: 'string' }
       { name: 'CorrelationId', type: 'string' }
       { name: 'RecordIndex', type: 'int' }
+      { name: 'EventId', type: 'string' }
       { name: 'Source', type: 'string' }
       { name: 'ClientVersion', type: 'string' }
       { name: 'UserCorrelationId', type: 'string' }

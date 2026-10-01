@@ -113,7 +113,10 @@ internal static class WorkerTestHost
     }
 
     public static TelemetryIngestionProcessor Processor(
-        WorkerIngestionOptions options, HttpMessageHandler handler, string streamMap = StreamMap)
+        WorkerIngestionOptions options,
+        HttpMessageHandler handler,
+        string streamMap = StreamMap,
+        IEndpointDataSprawlPersistence? persistence = null)
     {
         var blobOptions = new BlobClientOptions();
         blobOptions.Retry.MaxRetries = 0;
@@ -126,10 +129,63 @@ internal static class WorkerTestHost
 
         return new TelemetryIngestionProcessor(
             new PayloadBlobReader(blobService, options, NullLogger<PayloadBlobReader>.Instance),
+            persistence ?? new RecordingPersistence(),
             Publisher(options, handler),
             new IngestionStreamMap(streamMap),
             options,
             NullLogger<TelemetryIngestionProcessor>.Instance);
+    }
+
+    internal sealed class RecordingPersistence(
+        Func<QueuedIngestionMessage, IReadOnlyList<JsonElement>, CancellationToken, Task<PersistenceResult>>? handler = null,
+        Func<QueuedIngestionMessage, CancellationToken, Task>? markPublishedHandler = null)
+        : IEndpointDataSprawlPersistence
+    {
+        public int CallCount { get; private set; }
+
+        public int MarkPublishedCallCount { get; private set; }
+
+        public int BeginPublishCallCount { get; private set; }
+
+        public int ResetPublishCallCount { get; private set; }
+
+        public Task<PersistenceResult> PersistAsync(
+            QueuedIngestionMessage pointer,
+            IReadOnlyList<JsonElement> rows,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return handler?.Invoke(pointer, rows, cancellationToken)
+                ?? Task.FromResult(PersistenceResult.Skipped);
+        }
+
+        public Task MarkLogAnalyticsPublishedAsync(
+            QueuedIngestionMessage pointer,
+            CancellationToken cancellationToken)
+        {
+            MarkPublishedCallCount++;
+            return markPublishedHandler?.Invoke(pointer, cancellationToken)
+                ?? Task.CompletedTask;
+        }
+
+        public Task BeginLogAnalyticsPublishAsync(
+            QueuedIngestionMessage pointer,
+            CancellationToken cancellationToken)
+        {
+            BeginPublishCallCount++;
+            return Task.CompletedTask;
+        }
+
+        public Task ResetLogAnalyticsPublishAsync(
+            QueuedIngestionMessage pointer,
+            CancellationToken cancellationToken)
+        {
+            ResetPublishCallCount++;
+            return Task.CompletedTask;
+        }
+
+        public Task<int> PurgeExpiredAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(0);
     }
 
     /// <summary>Builds a row of roughly <paramref name="padBytes"/> payload bytes.</summary>

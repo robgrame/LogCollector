@@ -34,6 +34,7 @@ builder.Services.AddSingleton<Azure.Core.TokenCredential>(_ =>
 
 builder.Services.AddSingleton<WorkerIngestionOptions>();
 builder.Services.AddSingleton<IngestionStreamMap>();
+builder.Services.AddSingleton<SqlPersistenceOptions>();
 
 builder.Services.AddSingleton(sp =>
 {
@@ -59,6 +60,7 @@ builder.Services.AddSingleton(sp =>
 });
 
 builder.Services.AddSingleton<PayloadBlobReader>();
+builder.Services.AddSingleton<IEndpointDataSprawlPersistence, EndpointDataSprawlSqlPersistence>();
 builder.Services.AddSingleton<LogsIngestionPublisher>();
 builder.Services.AddSingleton<TelemetryIngestionProcessor>();
 
