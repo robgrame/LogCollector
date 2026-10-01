@@ -30,7 +30,7 @@ public sealed class DatabaseInitializationOptionsParserTests
     [Fact]
     public void RenderSchema_UsesManagedIdentityApplicationIdBytesForSid()
     {
-        var dashboardClientId = Guid.Parse("00112233-4455-6677-8899-aabbccddeeff");
+        var dashboardClientId = Guid.Parse("22222222-2222-2222-2222-222222222222");
         var options = DatabaseInitializationOptionsParser.Parse(
             RequiredArguments()
                 .Concat(

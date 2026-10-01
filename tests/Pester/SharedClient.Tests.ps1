@@ -58,7 +58,7 @@ Describe 'Shared client facade' {
     }
 
     It 'registers the delegated token only in the Authorization header' {
-        $accessToken = 'DO-NOT-LOG-OR-SPOOL-ACCESS-TOKEN'
+        $accessToken = '<delegated-token>'
         $registrationId = 'a' * 43
         Mock -ModuleName LogCollector.Client Invoke-LogCollectorUserSessionRegistrationRequest {
             [pscustomobject]@{

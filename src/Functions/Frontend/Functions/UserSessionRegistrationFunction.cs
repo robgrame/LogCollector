@@ -159,16 +159,14 @@ public sealed class UserSessionRegistrationFunction(
             .ConfigureAwait(false))
         {
             logger.LogWarning(
-                "User-session revocation did not match device {DeviceId}.",
-                trustedDeviceId);
+                "User-session revocation did not match the authenticated device.");
             return Problem(
                 StatusCodes.Status404NotFound,
                 "user-session registration was not found for this device");
         }
 
         logger.LogInformation(
-            "User-session registration was revoked for device {DeviceId}.",
-            trustedDeviceId);
+            "User-session registration was revoked for the authenticated device.");
         return new StatusCodeResult(StatusCodes.Status204NoContent);
     }
 
