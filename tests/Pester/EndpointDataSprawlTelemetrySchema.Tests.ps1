@@ -47,6 +47,7 @@ BeforeAll {
         Moved              = 'int'
         Skipped            = 'int'
         Failed             = 'int'
+        Deferred           = 'int'
         OmittedFileResults = 'int'
     }
 

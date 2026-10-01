@@ -43,6 +43,7 @@ param additionalTelemetryTables = [
       { name: 'Moved', type: 'int' }
       { name: 'Skipped', type: 'int' }
       { name: 'Failed', type: 'int' }
+      { name: 'Deferred', type: 'int' }
       { name: 'OmittedFileResults', type: 'int' }
     ]
   }

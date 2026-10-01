@@ -209,7 +209,8 @@ The production Endpoint Data Sprawl Remediator contract is authoritative in
 server-stamped platform identity fields and the client's stable cycle, file-result, count and
 pseudonymous `UserCorrelationId` fields. The generated `ingestionStreamMap` in `infra\main.bicep`
 wires `Custom-EndpointDataSprawlRemediator_CL` into both Function Apps; do not maintain separate
-manual mappings.
+manual mappings. Backend 1.13.8 adds the complete `Deferred:int` cycle-summary counter used for
+locked-file backlog and completion indicators even when individual file records are capped.
 
 Send existing record objects using shared client **1.5.0** or later:
 
