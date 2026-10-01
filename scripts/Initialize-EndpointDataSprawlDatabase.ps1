@@ -46,6 +46,8 @@ else {
 }
 $firewallRuleName = "Deployment-$ruleSuffix"
 $initializerProject = Join-Path $PSScriptRoot '..\tools\LogCollector.DatabaseInitializer\LogCollector.DatabaseInitializer.csproj'
+$ruleCreated = $false
+$primaryError = $null
 
 try {
     az sql server firewall-rule create `
@@ -59,6 +61,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to create temporary SQL firewall rule '$firewallRuleName'."
     }
+    $ruleCreated = $true
 
     dotnet run `
         --project $initializerProject `
@@ -73,14 +76,33 @@ try {
         throw "Failed to initialize database '$DatabaseName' on server '$ServerName'."
     }
 }
+catch {
+    $primaryError = $_
+}
 finally {
-    $null = az sql server firewall-rule delete `
-        --resource-group $ResourceGroup `
-        --server $ServerName `
-        --name $firewallRuleName `
-        --subscription $SubscriptionId `
-        --yes `
-        --only-show-errors 2>&1
+    if ($ruleCreated) {
+        az sql server firewall-rule delete `
+            --resource-group $ResourceGroup `
+            --server $ServerName `
+            --name $firewallRuleName `
+            --subscription $SubscriptionId `
+            --only-show-errors | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $cleanupError = [InvalidOperationException]::new(
+                "Failed to remove temporary SQL firewall rule '$firewallRuleName'.")
+            if ($null -ne $primaryError) {
+                throw [AggregateException]::new(
+                    'Database initialization and firewall cleanup both failed.',
+                    @($primaryError.Exception, $cleanupError))
+            }
+
+            throw $cleanupError
+        }
+    }
+}
+
+if ($null -ne $primaryError) {
+    throw $primaryError
 }
 
 Write-Output "Initialized $ServerName/$DatabaseName for worker identity $WorkerIdentityName."

@@ -3,7 +3,7 @@
 Purpose-independent, certificate-authenticated device telemetry ingestion into Azure Monitor.
 Inventory, remediation results, health checks and other scripts share the same ingestion platform.
 
-Current release versions: **Azure backend 1.14.0**, **LogCollector Core / Client 1.11.1**,
+Current release versions: **Azure backend 1.14.1**, **LogCollector Core / Client 1.11.1**,
 and **Custom Inventory 1.9.1**.
 
 A script on each device produces records, signs them with the device's own certificate, and
@@ -25,7 +25,7 @@ not another Function or a platform code change. See the
 [customer procedure for adding a telemetry collection](docs/customer-add-telemetry-collection.md)
 and [Adding a purpose](docs/operations.md#adding-a-purpose).
 
-Backend **1.14.0** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
+Backend **1.14.1** accepts `LOGCOLLECTOR-TELEMETRY-V1` and the legacy
 `LOGCOLLECTOR-INVENTORY-V1` wire format. `/api/inventory` is an explicit compatibility alias through
 the **same** authentication and processing path. Existing inventory packages, table names, queues,
 retained blobs and spool entries are not renamed or rewritten.
