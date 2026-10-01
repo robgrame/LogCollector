@@ -85,6 +85,13 @@ Describe 'Endpoint Data Sprawl Azure SQL persistence' {
         $script:Workflow | Should -Match 'sql_entra_admin_object_id'
         $script:InitializerScript | Should -Match 'firewall-rule create'
         $script:InitializerScript | Should -Match 'firewall-rule delete'
+        $deleteBlock = [regex]::Match(
+            $script:InitializerScript,
+            '(?s)az sql server firewall-rule delete.*?if \(\$LASTEXITCODE -ne 0\)')
+        $deleteBlock.Success | Should -BeTrue
+        $deleteBlock.Value | Should -Not -Match '--yes'
+        $script:InitializerScript | Should -Match 'Failed to remove temporary SQL firewall rule'
+        $script:InitializerScript | Should -Match 'Database initialization and firewall cleanup both failed'
         $script:InitializerScript | Should -Not -Match 'az sql db query'
         $script:InitializerProject | Should -Match 'ActiveDirectoryDefault'
         $script:InitializerProject | Should -Match 'worker-identity-client-id'
