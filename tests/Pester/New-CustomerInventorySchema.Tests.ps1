@@ -21,7 +21,8 @@ Describe 'New-CustomerInventorySchema' {
         $errors.Count | Should -Be 0
         $text = Get-Content -LiteralPath $script:Tool -Raw
         $text | Should -Not -Match 'azurewebsites\.net'
-        $text | Should -Not -Match '(?i)sharedkey|workspacekey|az login|Connect-AzAccount'
+        $text | Should -Not -Match '(?i)az login|Connect-AzAccount'
+        $text | Should -Not -Match "(?i)(sharedkey|workspacekey)\s*=\s*['""]"
     }
 
     Context 'FromSample mode' {
@@ -193,6 +194,235 @@ Send-LogCollectorData -FrontendUrl $FrontendUrl -TableName 'AssetTagInventory_CL
             ($result.CustomColumns | Where-Object Name -eq 'AssetTag').Type | Should -Be 'string'
             ($result.CustomColumns | Where-Object Name -eq 'UnitCount').Type | Should -Be 'int'
             $result.BicepEntryWritten | Should -BeTrue
+        }
+
+        It 'captures Send-LogAnalyticsData while suppressing local and operational logs' {
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-Registry.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+Import-Module LogCollector.Client -MinimumVersion 1.12.0 -ErrorAction Stop
+
+$records = @(
+    [pscustomobject]@{
+        RegistryPath = 'HKLM:\SOFTWARE\Example'
+        ValueName = 'ProductName'
+        ValueType = 'String'
+        ValueData = 'Windows 11 Pro'
+    }
+)
+
+$logPath = Write-CMTraceLog -ApplicationName 'RegistryInventory' -Level Info `
+    -Message 'Collected.' -PassThru
+if (-not $logPath) { throw 'Suppressed logger did not preserve PassThru.' }
+Send-LogCollectorOperationalEvent -PackageName 'Registry Inventory' -PackageVersion '1.0.0' `
+    -ScriptName 'Collect-Registry.ps1' -EventName 'CollectionCompleted' -Level Info `
+    -Message 'Collected.'
+
+Send-LogAnalyticsData -LogType 'RegistryInventory' -Body $records -Source 'Collect-Registry.ps1'
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            $outDir = Join-Path $TestDrive 'out-from-send-log-analytics'
+            $result = & $script:Tool -CollectorScriptPath $collectorPath -TableName 'RegistryInventory_CL' `
+                -Source 'Collect-Registry.ps1' -OutputDirectory $outDir
+
+            $result.RecordCount | Should -Be 1
+            ($result.CustomColumns | Where-Object Name -eq 'RegistryPath').Type | Should -Be 'string'
+            ($result.CustomColumns | Where-Object Name -eq 'ValueData').Type | Should -Be 'string'
+            $result.CustomColumns.Name | Should -Not -Contain 'PackageName'
+            $result.CustomColumns.Name | Should -Not -Contain 'EventName'
+            $result.BicepEntryWritten | Should -BeTrue
+        }
+
+        It 'preserves PowerShell module autoloading for non-LogCollector collector commands' {
+            $moduleRoot = Join-Path $TestDrive 'modules'
+            $moduleDirectory = Join-Path $moduleRoot 'SchemaHelper'
+            $null = New-Item -ItemType Directory -Path $moduleDirectory -Force
+            @'
+function Get-SchemaHelperRecord {
+    [pscustomobject]@{ AssetTag = 'AUTOLOAD-1'; UnitCount = 1 }
+}
+Export-ModuleMember -Function Get-SchemaHelperRecord
+'@ | Set-Content -LiteralPath (Join-Path $moduleDirectory 'SchemaHelper.psm1') -Encoding utf8
+
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-Autoload.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+$records = @(Get-SchemaHelperRecord)
+Send-LogAnalyticsData -LogType 'AssetTagInventory' -Body $records `
+    -Source 'Collect-Autoload.ps1'
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            $previousModulePath = $env:PSModulePath
+            try {
+                $env:PSModulePath = "$moduleRoot$([IO.Path]::PathSeparator)$previousModulePath"
+                $result = & $script:Tool -CollectorScriptPath $collectorPath `
+                    -TableName 'AssetTagInventory_CL' -Source 'Collect-Autoload.ps1' `
+                    -OutputDirectory (Join-Path $TestDrive 'out-autoload')
+            }
+            finally {
+                $env:PSModulePath = $previousModulePath
+            }
+
+            $result.RecordCount | Should -Be 1
+            ($result.CustomColumns | Where-Object Name -eq 'AssetTag').Type | Should -Be 'string'
+        }
+
+        It 'captures object, JSON and byte bodies and preserves the legacy return contract' {
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-Legacy.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+Import-Module LogCollector.Client -MinimumVersion 1.12.0 -ErrorAction Stop
+
+$objectRecord = [pscustomobject]@{ AssetTag = 'A-0001'; UnitCount = 1 }
+$jsonRecords = @(
+    [pscustomobject]@{ AssetTag = 'A-0002'; UnitCount = 2 },
+    [pscustomobject]@{ AssetTag = 'A-0003'; UnitCount = 3 }
+) | ConvertTo-Json -Compress
+$byteRecords = [Text.Encoding]::UTF8.GetBytes((@(
+    [pscustomobject]@{ AssetTag = 'A-0004'; UnitCount = 4 },
+    [pscustomobject]@{ AssetTag = 'A-0005'; UnitCount = 5 }
+) | ConvertTo-Json -Compress))
+
+$null = Send-LogAnalyticsData -LogType 'AssetTagInventory' -Body $objectRecord `
+    -customerId 'ignored' -sharedKey 'ignored'
+$null = Send-LogAnalyticsData -LogType 'AssetTagInventory' -Body $jsonRecords `
+    -WorkspaceId 'ignored' -WorkspaceKey 'ignored'
+$response = Send-LogAnalyticsData -LogType 'AssetTagInventory' -Body $byteRecords
+if ($response -notmatch '200 :') { throw 'Legacy response contract was not preserved.' }
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            $outDir = Join-Path $TestDrive 'out-from-legacy-bodies'
+            $result = & $script:Tool -CollectorScriptPath $collectorPath -TableName 'AssetTagInventory_CL' `
+                -Source 'Collect-Legacy.ps1' -OutputDirectory $outDir
+
+            $result.RecordCount | Should -Be 5
+            ($result.CustomColumns | Where-Object Name -eq 'AssetTag').Type | Should -Be 'string'
+            ($result.CustomColumns | Where-Object Name -eq 'UnitCount').Type | Should -Be 'int'
+        }
+
+        It 'rejects module-qualified LogCollector calls that would bypass the mocks' {
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-Qualified.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+$records = @([pscustomobject]@{ AssetTag = 'A-0001' })
+LogCollector.Client\Send-LogAnalyticsData -LogType 'AssetTagInventory' `
+    -Body $records -Source 'Collect-Qualified.ps1'
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            { & $script:Tool -CollectorScriptPath $collectorPath -TableName 'AssetTagInventory_CL' `
+                    -Source 'Collect-Qualified.ps1' `
+                    -OutputDirectory (Join-Path $TestDrive 'out-qualified') } |
+                Should -Throw -ExpectedMessage '*module-qualified LogCollector commands*'
+        }
+
+        It 'rejects dynamic command invocation that cannot be verified against the mocks' {
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-Dynamic.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+$records = @([pscustomobject]@{ AssetTag = 'A-0001' })
+$command = 'LogCollector.Client\Send-LogAnalyticsData'
+& $command -LogType 'AssetTagInventory' -Body $records -Source 'Collect-Dynamic.ps1'
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            { & $script:Tool -CollectorScriptPath $collectorPath -TableName 'AssetTagInventory_CL' `
+                    -Source 'Collect-Dynamic.ps1' `
+                    -OutputDirectory (Join-Path $TestDrive 'out-dynamic') } |
+                Should -Throw -ExpectedMessage '*dynamic command invocation*'
+        }
+
+        It 'rejects module-qualified Import-Module even when its module path is dynamic' {
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-QualifiedImport.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+$modulePath = 'C:\Program Files\WindowsPowerShell\Modules\LogCollector.Client\LogCollector.Client.psd1'
+Microsoft.PowerShell.Core\Import-Module $modulePath
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            { & $script:Tool -CollectorScriptPath $collectorPath -TableName 'AssetTagInventory_CL' `
+                    -Source 'Collect-QualifiedImport.ps1' `
+                    -OutputDirectory (Join-Path $TestDrive 'out-qualified-import') } |
+                Should -Throw -ExpectedMessage '*module-qualified Import-Module*'
+        }
+
+        It 'rejects Invoke-Expression command strings that could bypass the mocks' {
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-Expression.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+$commandText = "LogCollector.Client\Send-LogAnalyticsData -LogType 'AssetTagInventory' -Body @{}"
+Invoke-Expression $commandText
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            { & $script:Tool -CollectorScriptPath $collectorPath -TableName 'AssetTagInventory_CL' `
+                    -Source 'Collect-Expression.ps1' `
+                    -OutputDirectory (Join-Path $TestDrive 'out-expression') } |
+                Should -Throw -ExpectedMessage '*runtime code evaluation*'
+        }
+
+        It 'rejects fully qualified ScriptBlock Create and direct child shells' {
+            $scriptBlockCollector = Join-Path $script:ScriptDir 'Collect-ScriptBlockCreate.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+[System.Management.Automation.ScriptBlock]::Create(
+    "LogCollector.Client\Send-LogAnalyticsData -LogType 'AssetTagInventory' -Body @{}"
+).Invoke()
+'@ | Set-Content -LiteralPath $scriptBlockCollector -Encoding utf8
+
+            { & $script:Tool -CollectorScriptPath $scriptBlockCollector `
+                    -TableName 'AssetTagInventory_CL' -Source 'Collect-ScriptBlockCreate.ps1' `
+                    -OutputDirectory (Join-Path $TestDrive 'out-scriptblock-create') } |
+                Should -Throw -ExpectedMessage '*runtime code evaluation*'
+
+            $shellCollector = Join-Path $script:ScriptDir 'Collect-ChildShell.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+pwsh -NoProfile -Command "'child process'"
+'@ | Set-Content -LiteralPath $shellCollector -Encoding utf8
+
+            { & $script:Tool -CollectorScriptPath $shellCollector `
+                    -TableName 'AssetTagInventory_CL' -Source 'Collect-ChildShell.ps1' `
+                    -OutputDirectory (Join-Path $TestDrive 'out-child-shell') } |
+                Should -Throw -ExpectedMessage '*child execution*'
+        }
+
+        It 'suppresses LogCollector imports using FullyQualifiedName' {
+            $collectorPath = Join-Path $script:ScriptDir 'Collect-ModuleSpecification.ps1'
+            @'
+[CmdletBinding()]
+param()
+
+Import-Module -FullyQualifiedName @{
+    ModuleName = 'LogCollector.Client'
+    ModuleVersion = '1.12.0'
+} -ErrorAction Stop
+
+$records = @([pscustomobject]@{ AssetTag = 'A-0001'; UnitCount = 1 })
+Send-LogAnalyticsData -LogType 'AssetTagInventory' -Body $records `
+    -Source 'Collect-ModuleSpecification.ps1'
+'@ | Set-Content -LiteralPath $collectorPath -Encoding utf8
+
+            $result = & $script:Tool -CollectorScriptPath $collectorPath `
+                -TableName 'AssetTagInventory_CL' -Source 'Collect-ModuleSpecification.ps1' `
+                -OutputDirectory (Join-Path $TestDrive 'out-module-specification')
+
+            $result.RecordCount | Should -Be 1
         }
     }
 }

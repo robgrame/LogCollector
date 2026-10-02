@@ -21,9 +21,15 @@
 
       -CollectorScriptPath    Best-effort automatic capture. Runs the customer's existing
                               collection script in a separate child PowerShell process, with
-                              Send-LogCollectorData, Export-LogCollectorSchema and the
+                              the unqualified commands Send-LogCollectorData, Send-LogAnalyticsData,
+                              Export-LogCollectorSchema, operational/local logging and the
                               LogCollector.Client Import-Module call replaced by local mocks
-                              that only capture the record objects the script would have sent
+                              that only capture the inventory record objects the script would
+                              have sent. Module-qualified calls to those commands are rejected
+                              before execution so they cannot bypass the mocks. Dynamic command
+                              invocation, runtime code evaluation, child jobs/processes and
+                              module-qualified Import-Module are not supported in capture mode;
+                              use -SchemaSampleJsonPath for such collectors.
                               (no real network call or module load happens through those three
                               calls). IMPORTANT: this is process separation for convenience, not
                               a security sandbox - every other statement in the customer's
@@ -78,6 +84,8 @@
 
 .EXAMPLE
     .\New-CustomerInventorySchema.ps1 -CollectorScriptPath .\Collect-AssetTags.ps1 -TableName 'AssetTagInventory_CL' -Source 'AssetTagCollector'
+.NOTES
+    Version 1.1.0.
 #>
 [CmdletBinding(DefaultParameterSetName = 'FromSample')]
 param(
@@ -189,13 +197,99 @@ function Get-LcCapturedRecordsFromScript {
     <#
     .SYNOPSIS
     Runs the customer's collection script in a separate child process (not a security sandbox)
-    and captures the
-    record objects it would have submitted, without any network call or device lookup.
+    and captures the record objects it would have submitted through Send-LogCollectorData,
+    Send-LogAnalyticsData or Export-LogCollectorSchema, without any network call, logging
+    side effect or device lookup.
     #>
     param(
         [Parameter(Mandatory)] [string] $ScriptPath,
         [Parameter(Mandatory)] [string] $CapturedOutputPath
     )
+
+    $tokens = $null
+    $parseErrors = $null
+    $collectorAst = [Management.Automation.Language.Parser]::ParseFile(
+        $ScriptPath,
+        [ref] $tokens,
+        [ref] $parseErrors)
+    if (@($parseErrors).Count -gt 0) {
+        throw "Collector script '$ScriptPath' contains PowerShell parser errors."
+    }
+    $dynamicInvocations = @($collectorAst.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.CommandAst] -and
+                    $null -eq $node.GetCommandName()
+            }, $true))
+    if ($dynamicInvocations.Count -gt 0) {
+        throw ('Collector script uses dynamic command invocation, which is not supported by the ' +
+            'schema harness because it cannot be verified against the mocked LogCollector commands. ' +
+            'Use direct command calls or -SchemaSampleJsonPath.')
+    }
+    $unsupportedRuntimeCommands = @(
+        'Invoke-Expression',
+        'iex',
+        'Invoke-Command',
+        'icm',
+        'Start-Job',
+        'sajb',
+        'Start-ThreadJob',
+        'Start-Process',
+        'saps',
+        'pwsh',
+        'pwsh.exe',
+        'powershell',
+        'powershell.exe',
+        'cmd',
+        'cmd.exe',
+        'cscript',
+        'cscript.exe',
+        'wscript',
+        'wscript.exe',
+        'mshta',
+        'mshta.exe'
+    )
+    $runtimeEvaluation = @($collectorAst.FindAll({
+                param($node)
+                if ($node -isnot [Management.Automation.Language.CommandAst]) { return $false }
+                $commandName = $node.GetCommandName()
+                return $commandName -and $commandName -in $unsupportedRuntimeCommands
+            }, $true))
+    if ($runtimeEvaluation.Count -gt 0 -or
+        $collectorAst.Extent.Text -match
+            '(?i)\[\s*(System\.Management\.Automation\.)?ScriptBlock\s*\]\s*::\s*Create\s*\(') {
+        throw ('Collector script uses runtime code evaluation or child execution, which is not ' +
+            'supported by the schema harness. Use direct command calls or -SchemaSampleJsonPath.')
+    }
+    $mockedCommands = @(
+        'Send-LogCollectorData',
+        'Send-LogAnalyticsData',
+        'Export-LogCollectorSchema',
+        'Write-CMTraceLog',
+        'Send-LogCollectorOperationalEvent'
+    )
+    $qualifiedBypasses = @($collectorAst.FindAll({
+                param($node)
+                if ($node -isnot [Management.Automation.Language.CommandAst]) { return $false }
+                $commandName = $node.GetCommandName()
+                if (-not $commandName -or $commandName -notmatch '\\') { return $false }
+                $leafName = $commandName.Substring($commandName.LastIndexOf('\') + 1)
+                return $leafName -in $mockedCommands
+            }, $true))
+    if ($qualifiedBypasses.Count -gt 0) {
+        $names = @($qualifiedBypasses | ForEach-Object { $_.GetCommandName() } | Select-Object -Unique)
+        throw ("Collector script uses module-qualified LogCollector commands that would bypass schema mocks: " +
+            "$($names -join ', '). Use the unqualified command names for schema capture.")
+    }
+    $qualifiedImports = @($collectorAst.FindAll({
+                param($node)
+                if ($node -isnot [Management.Automation.Language.CommandAst]) { return $false }
+                $commandName = $node.GetCommandName()
+                return $commandName -and $commandName -match '\\Import-Module$'
+            }, $true))
+    if ($qualifiedImports.Count -gt 0) {
+        throw ('Collector script uses module-qualified Import-Module, which would bypass the schema ' +
+            'harness mock. Use unqualified Import-Module or -SchemaSampleJsonPath.')
+    }
 
     $harnessPath = Join-Path ([IO.Path]::GetTempPath()) "LogCollector-SchemaHarness-$([guid]::NewGuid()).ps1"
     $optionsPath = Join-Path ([IO.Path]::GetTempPath()) "LogCollector-SchemaHarness-$([guid]::NewGuid()).json"
@@ -220,17 +314,55 @@ function Import-Module {
     [CmdletBinding()]
     param(
         [Parameter(Position = 0)] $Name,
+        [Microsoft.PowerShell.Commands.ModuleSpecification[]] $FullyQualifiedName,
         [switch] $Force,
         [switch] $Global,
-        [switch] $DisableNameChecking
+        [switch] $DisableNameChecking,
+        [version] $MinimumVersion,
+        [version] $RequiredVersion,
+        [version] $MaximumVersion,
+        [string] $Scope,
+        [string] $Prefix,
+        [object[]] $ArgumentList,
+        [string[]] $Function,
+        [string[]] $Cmdlet,
+        [string[]] $Variable,
+        [string[]] $Alias,
+        [switch] $PassThru,
+        [switch] $AsCustomObject,
+        [switch] $NoClobber,
+        [switch] $SkipEditionCheck,
+        [switch] $UseWindowsPowerShell
     )
-    $nameText = "$Name"
+    $nameText = if ($FullyQualifiedName) {
+        (@($FullyQualifiedName | ForEach-Object { $_.Name }) -join ',')
+    }
+    else {
+        "$Name"
+    }
     if ($nameText -match 'LogCollector\.Client') {
         Write-Verbose "Schema harness: skipping real Import-Module for '$nameText'."
         return
     }
-    Microsoft.PowerShell.Core\Import-Module -Name $Name -Force:$Force -Global:$Global `
-        -DisableNameChecking:$DisableNameChecking -ErrorAction Continue
+    Microsoft.PowerShell.Core\Import-Module @PSBoundParameters
+}
+
+function Add-SchemaHarnessRecords {
+    param([Parameter(Mandatory)] $Body)
+
+    $records = if ($Body -is [byte[]]) {
+        @(([Text.Encoding]::UTF8.GetString($Body) | ConvertFrom-Json))
+    }
+    elseif ($Body -is [string]) {
+        @(($Body | ConvertFrom-Json))
+    }
+    else {
+        @($Body)
+    }
+    foreach ($record in $records) {
+        if ($null -ne $record) { $global:CapturedRecords.Add($record) }
+    }
+    return [object[]] $records
 }
 
 function Send-LogCollectorData {
@@ -249,6 +381,79 @@ function Send-LogCollectorData {
     [pscustomobject]@{
         Disposition = 'CapturedForSchema'; StatusCode = 202; Attempts = 1
         Spooled = $false; SpoolDirectory = $null
+    }
+}
+
+function Send-LogAnalyticsData {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string] $LogType,
+        [Parameter(Mandatory)] $Body,
+        [Alias('WorkspaceId')] [string] $CustomerId,
+        [Alias('WorkspaceKey')] [string] $SharedKey,
+        [Uri] $FrontendUrl,
+        [string] $Source,
+        [hashtable] $Properties,
+        [switch] $QueueOnly,
+        [scriptblock] $DiagnosticSink
+    )
+    $records = @(Add-SchemaHarnessRecords -Body $Body)
+    $tableName = if ($LogType.EndsWith('_CL', [StringComparison]::OrdinalIgnoreCase)) {
+        $LogType
+    }
+    else {
+        "${LogType}_CL"
+    }
+    $response = [pscustomobject]@{
+        StatusCode = 200; Delivered = $true; Disposition = 'CapturedForSchema'
+        TableName = $tableName; RecordCount = $records.Count
+        Detail = 'Upload payload captured for schema'
+    }
+    $response | Add-Member -MemberType ScriptMethod -Name ToString -Force -Value {
+        '{0} : {1}' -f $this.StatusCode, $this.Detail
+    }
+    return $response
+}
+
+function Write-CMTraceLog {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory, Position = 0, ValueFromPipeline)] [AllowEmptyString()] [string] $Message,
+        [Parameter(Position = 1)] [string] $Level = 'Info',
+        [string] $ApplicationName,
+        [string] $CustomerName,
+        [string] $Component,
+        [string] $LogRoot,
+        [int] $MaxFileBytes,
+        [int] $MaxArchives,
+        [switch] $SkipTrustCheck,
+        [switch] $PassThru
+    )
+    if ($PassThru) {
+        return [IO.Path]::Combine(
+            [IO.Path]::GetTempPath(),
+            'LogCollector-SchemaHarness',
+            'Suppressed.log')
+    }
+}
+
+function Send-LogCollectorOperationalEvent {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string] $PackageName,
+        [Parameter(Mandatory)] [string] $PackageVersion,
+        [Parameter(Mandatory)] [string] $ScriptName,
+        [Parameter(Mandatory)] [string] $EventName,
+        [Parameter(Mandatory)] [string] $Level,
+        [Parameter(Mandatory)] [string] $Message,
+        [guid] $ExecutionId,
+        [Uri] $FrontendUrl,
+        [switch] $QueueOnly,
+        [scriptblock] $DiagnosticSink
+    )
+    [pscustomobject]@{
+        StatusCode = 200; Delivered = $true; Disposition = 'SuppressedForSchema'
+        TableName = 'LogCollectorOperations_CL'; RecordCount = 0
     }
 }
 
@@ -315,7 +520,7 @@ catch {
     }
 
     if (-not (Test-Path -LiteralPath $CapturedOutputPath)) {
-        throw "The collector script did not produce any capturable output. Verify it calls Send-LogCollectorData or Export-LogCollectorSchema with real record objects."
+        throw "The collector script did not produce any capturable output. Verify it calls Send-LogCollectorData, Send-LogAnalyticsData or Export-LogCollectorSchema with real record objects."
     }
     $captured = Get-Content -LiteralPath $CapturedOutputPath -Raw | ConvertFrom-Json
     Remove-Item -LiteralPath $optionsPath -ErrorAction SilentlyContinue
@@ -324,7 +529,7 @@ catch {
         foreach ($message in $captured.Errors) { Write-Warning "Collector script reported: $message" }
     }
     if (-not $captured.Records -or $captured.Records.Count -eq 0) {
-        throw "The collector script ran but never called Send-LogCollectorData or Export-LogCollectorSchema with record objects. Add the '-ExportSchema' branch documented in docs\customer-add-telemetry-collection.md, or use -SchemaSampleJsonPath with a hand-produced sample."
+        throw "The collector script ran but never called Send-LogCollectorData, Send-LogAnalyticsData or Export-LogCollectorSchema with record objects. Add the '-ExportSchema' branch documented in docs\customer-add-telemetry-collection.md, or use -SchemaSampleJsonPath with a hand-produced sample."
     }
     return @($captured.Records)
 }
@@ -527,7 +732,7 @@ function New-LcOnboardingReport {
     $lines.Add('')
     if ($UsedCollectorScript) {
         $lines.Add('> Attenzione: lo script del cliente e stato eseguito in un processo PowerShell separato con solo le')
-        $lines.Add('> chiamate a Send-LogCollectorData/Export-LogCollectorSchema e il modulo LogCollector.Client simulati.')
+        $lines.Add('> chiamate a Send-LogCollectorData/Send-LogAnalyticsData/Export-LogCollectorSchema, logging e modulo LogCollector.Client simulati.')
         $lines.Add('> Non e un sandbox di sicurezza: qualsiasi altra istruzione dello script (accesso a rete, file,')
         $lines.Add('> credenziali, ecc.) viene comunque eseguita con i privilegi di chi ha lanciato lo strumento.')
         $lines.Add('> Eseguire questa modalita solo con script gia rivisti/fidati; in caso contrario usare')
@@ -579,7 +784,7 @@ function New-LcOnboardingReport {
     $lines.Add('')
     $lines.Add('## Nota per il cliente')
     $lines.Add('')
-    $lines.Add("Non e richiesta alcuna azione tecnica aggiuntiva: lo script di raccolta puo restare cosi com'e ed inviare i dati con `Send-LogCollectorData` una volta che il proprietario della piattaforma ha completato i passi sopra.")
+    $lines.Add("Non e richiesta alcuna azione tecnica aggiuntiva: lo script di raccolta puo restare cosi com'e ed inviare i dati con `Send-LogCollectorData` o `Send-LogAnalyticsData` una volta che il proprietario della piattaforma ha completato i passi sopra.")
 
     return ($lines -join [Environment]::NewLine)
 }
