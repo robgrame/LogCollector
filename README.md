@@ -284,6 +284,14 @@ metadata rather than a transcript of payloads or HTTP response bodies.
 
 The current package source is **1.7.0** and includes shared client **1.9.0**, including schema-sample export.
 Existing installed packages remain compatible with their configured inventory endpoints and tables.
+
+**Custom inventory example and schema tool.** `scripts\Examples\RegistryInventory.ps1` sends the
+values of one registry key through the shared client (requires `LogCollector.Client` 1.12.0 or
+later). To onboard a new inventory table, `scripts\New-CustomerInventorySchema.ps1` takes either the
+script (executed, not sandboxed) or a sample JSON produced by `Export-LogCollectorSchema`, and generates
+the sample JSON, the Bicep `additionalTelemetryTables` entry and a report; it also recognises legacy
+inventory senders. Add the entry to the authoritative Bicep configuration and run a targeted deployment
+so the DCR, table and Frontend/Worker mapping stay consistent.
 The folder-only builder creates `out\Inventory\1.9.1`, ready for Intune Win32 packaging with `Install.ps1`
 as setup file. Scripts, task names and install paths are customer-neutral. Endpoint,
 environment and table names are supplied as configuration; `-DeviceTableName` and
