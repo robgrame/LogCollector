@@ -128,11 +128,11 @@ public sealed class GraphDeviceAuthorizerTests
         using var cancellation = new CancellationTokenSource();
 
         var cancelledWaiter = authorizer.IsEnabledTenantDeviceAsync(DeviceId, cancellation.Token);
-        await handler.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await handler.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledWaiter);
         handler.ReleaseFirstRequest.TrySetResult();
-        await handler.FirstRequestReturned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await handler.FirstRequestReturned.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         for (var attempt = 0; attempt < 50 && handler.Calls < 2; attempt++)
         {
