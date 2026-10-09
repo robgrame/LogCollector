@@ -1,0 +1,83 @@
+X-Unsent: 1
+Subject: LogCollector - Richiesta apertura verso la Function di Intake e come individuarne l'indirizzo IP
+To: 
+Cc: 
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: Segoe UI, Calibri, Arial, sans-serif; font-size: 14px; color: #1f1f1f; line-height: 1.5; }
+  h3 { color: #0b5394; margin: 18px 0 6px 0; font-size: 15px; }
+  table { border-collapse: collapse; margin: 8px 0; }
+  th, td { border: 1px solid #c8c8c8; padding: 6px 12px; text-align: left; font-size: 13px; }
+  th { background: #eef3f8; }
+  code { background: #f3f3f3; padding: 1px 5px; font-family: Consolas, monospace; font-size: 13px; }
+  pre { background: #f3f3f3; padding: 10px 12px; font-family: Consolas, monospace; font-size: 13px; }
+  .note { border-left: 4px solid #0b5394; background: #f3f7fb; padding: 8px 12px; margin: 10px 0; }
+</style>
+</head>
+<body>
+
+<p>Buongiorno [Nome],</p>
+
+<p>per completare l'attivazione di <b>LogCollector</b> sui dispositivi gestiti da Intune è necessario che la
+rete aziendale consenta il traffico in uscita verso la <b>Function App di Intake</b> in Azure. In assenza di
+questa apertura i client non riescono a inviare i dati e li conservano localmente in attesa di poterli
+trasmettere.</p>
+
+<h3>1. Cosa vi chiediamo di abilitare</h3>
+<table>
+  <tr><th>Elemento</th><th>Valore</th></tr>
+  <tr><td>Destinazione (FQDN)</td><td><code>[SIGLA]-logcollector-intake.azurewebsites.net</code></td></tr>
+  <tr><td>Indirizzo IP</td><td><code>[IP della Function di Intake]</code> (vedere il punto 2)</td></tr>
+  <tr><td>Protocollo / porta</td><td>HTTPS, TCP <b>443</b>, in uscita</td></tr>
+  <tr><td>Origine</td><td>Tutti i dispositivi gestiti con LogCollector (rete aziendale, VPN, uscita internet)</td></tr>
+</table>
+
+<div class="note">
+<b>Ispezione TLS.</b> I dispositivi si autenticano con il certificato Intune in <i>mutual TLS</i>. Se
+firewall o proxy effettuano l'ispezione TLS, l'indirizzo indicato va <b>escluso dall'ispezione</b>: in
+caso contrario l'autenticazione dei dispositivi fallisce.
+</div>
+
+<h3>2. Come individuare l'indirizzo IP dal portale Azure</h3>
+<ol>
+  <li>Accedere a <a href="https://portal.azure.com">https://portal.azure.com</a> con un account che abbia almeno il ruolo <i>Reader</i> sul resource group di LogCollector.</li>
+  <li>Aprire il resource group e selezionare la <b>Function App</b> il cui nome termina con <code>-logcollector-intake</code>.</li>
+  <li>Nel menu a sinistra aprire <b>Settings &rarr; Properties</b>.</li>
+  <li>Leggere il campo <b>Virtual IP address</b>: è l'indirizzo IP <b>in ingresso</b> della Function, cioè quello verso cui i client aprono la connessione.</li>
+  <li>In alternativa, in <b>Settings &rarr; Networking</b> la sezione <b>Inbound traffic configuration</b> riporta lo stesso valore come <i>Public inbound IP address</i>.</li>
+</ol>
+<p>Il campo <i>Outbound IP addresses</i>, presente nella stessa pagina, riguarda il traffico <b>uscente dalla
+Function</b> e non è quello da autorizzare per i vostri client.</p>
+
+<h3>3. Verifica rapida da un PC della rete</h3>
+<p>Senza accesso al portale, l'indirizzo si ottiene anche con una risoluzione DNS dell'FQDN:</p>
+<pre>nslookup [SIGLA]-logcollector-intake.azurewebsites.net</pre>
+<p>Dopo l'apertura, la raggiungibilità si verifica con:</p>
+<pre>Test-NetConnection [SIGLA]-logcollector-intake.azurewebsites.net -Port 443</pre>
+<p>Il risultato atteso è <code>TcpTestSucceeded : True</code>.</p>
+
+<h3>4. Un'avvertenza sull'indirizzo IP</h3>
+<p>L'indirizzo IP in ingresso di una Function App è gestito da Azure e <b>può cambiare</b> se il servizio viene
+ricreato o spostato. Dove il firewall lo consente, vi consigliamo quindi di autorizzare l'<b>FQDN</b> (regola
+basata su nome) oppure il tag di servizio, anziché il solo indirizzo IP. Ci impegniamo a comunicarvi
+tempestivamente ogni variazione.</p>
+
+<h3>5. Come procedere</h3>
+<p>Una volta applicata la regola, vi chiediamo di confermarcelo rispondendo a questa mail: eseguiremo noi la
+verifica dell'invio dei dati dal primo dispositivo pilota.</p>
+
+<p>Restiamo a disposizione per qualsiasi chiarimento o per un breve confronto con il vostro team di rete.</p>
+
+<p>Cordiali saluti,<br>
+[Nome Cognome]<br>
+[Ruolo] &ndash; [Azienda]<br>
+[Telefono] &ndash; [Email]</p>
+
+</body>
+</html>
