@@ -85,6 +85,23 @@ Describe 'Core package configuration-bound detection' {
         }
     }
 
+    It 'keeps a single main-site access restriction as a collection' {
+        $deploymentPublisherText = [IO.File]::ReadAllText($script:DeploymentPublisherPath)
+        $deploymentPublisherText | Should -Match (
+            '(?s)\$mainSiteRules\s*=\s*@\(\s*' +
+            'if \(\$null -ne \$mainSiteRulesValue\)\s*\{\s*' +
+            '\$mainSiteRulesValue\s*\}\s*\)')
+
+        $singleRule = [pscustomobject]@{ name = 'Allow all' }
+        $mainSiteRules = @(
+            if ($null -ne $singleRule) {
+                $singleRule
+            }
+        )
+        $mainSiteRules.Count | Should -Be 1
+        $mainSiteRules.GetType().FullName | Should -Be 'System.Object[]'
+    }
+
     It 'copies the canonical generator instead of embedding a second implementation' {
         $publisherText = [IO.File]::ReadAllText($script:PublisherPath)
         $publisherText | Should -Match ([regex]::Escape(
