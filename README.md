@@ -1,7 +1,23 @@
-# LogCollector
+# 📡 LogCollector
 
 Purpose-independent, certificate-authenticated device telemetry ingestion into Azure Monitor.
 Inventory, remediation results, health checks and other scripts share the same ingestion platform.
+
+[![CI](https://github.com/robgrame/LogCollector/actions/workflows/ci.yml/badge.svg)](https://github.com/robgrame/LogCollector/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/robgrame/LogCollector?label=release&logo=github)](https://github.com/robgrame/LogCollector/releases/latest)
+![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
+![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE?logo=powershell&logoColor=white)
+![Azure Functions](https://img.shields.io/badge/Azure-Functions-0062AD?logo=azurefunctions&logoColor=white)
+![Azure Monitor](https://img.shields.io/badge/Azure-Monitor%20%7C%20Log%20Analytics-0078D4?logo=microsoftazure&logoColor=white)
+![Service Bus](https://img.shields.io/badge/Azure-Service%20Bus-0078D4?logo=microsoftazure&logoColor=white)
+![Azure SQL](https://img.shields.io/badge/Azure-SQL-CC2927?logo=microsoftsqlserver&logoColor=white)
+![Bicep](https://img.shields.io/badge/IaC-Bicep-0078D4?logo=microsoftazure&logoColor=white)
+![Intune](https://img.shields.io/badge/Microsoft-Intune-0078D4?logo=microsoft&logoColor=white)
+![mTLS](https://img.shields.io/badge/auth-mTLS-2E7D32)
+[![License](https://img.shields.io/badge/license-Apache%202.0-D22128?logo=apache&logoColor=white)](LICENSE)
+
+**Topics:** `azure` · `azure-functions` · `azure-monitor` · `log-analytics` · `intune` · `powershell` ·
+`dotnet` · `bicep` · `mtls` · `telemetry` · `inventory` · `windows` · `service-bus` · `zero-secrets`
 
 Current release versions: **Azure backend 1.15.2**, **LogCollector Core / Client 1.12.0**,
 and **Custom Inventory 1.9.1**.
@@ -32,7 +48,7 @@ retained blobs and spool entries are not renamed or rewritten.
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```text
  Windows device (Scheduled Task, SYSTEM, 2-hour RandomDelay)
@@ -81,7 +97,7 @@ retained blobs and spool entries are not renamed or rewritten.
 
 ---
 
-## Repository layout
+## 📁 Repository layout
 
 ```text
 LogCollector/
@@ -122,7 +138,7 @@ LogCollector/
 
 ---
 
-## Security model
+## 🔐 Security model
 
 Six complementary controls run in a fixed, fail-closed order.
 
@@ -188,7 +204,7 @@ The complete Windows filesystem and Scheduled Task layouts are documented by com
 
 ---
 
-## The wire contract
+## 📜 The wire contract
 
 ### Request
 
@@ -248,7 +264,7 @@ POST
 
 ---
 
-## Client reliability
+## 🔁 Client reliability
 
 ### Shared client for existing scripts
 
@@ -362,7 +378,7 @@ The registration helper transports this as `-CollectCsv "Disk,BitLocker"` becaus
 
 ---
 
-## Worker ingestion
+## ⚙️ Worker ingestion
 
 - **Chunking at 850 KB.** The documented API limit is 1 MB. The margin absorbs request framing and
   server-side normalisation, and stops a batch that sits on the boundary from oscillating between
@@ -402,7 +418,7 @@ dead-lettered payloads before the configured lifecycle expiration.
 
 ---
 
-## Publish a sanitized public mirror
+## 🪞 Publish a sanitized public mirror
 
 Keep the development repository private and treat it as the source of truth. Publish only a
 history-free snapshot to a separate public repository:
@@ -424,7 +440,7 @@ updating the public repository. Do not merge from the private repository into th
 
 ---
 
-## Deploy
+## 🚀 Deploy
 
 ### Prerequisites
 
@@ -537,7 +553,7 @@ Full runbook, verification queries and troubleshooting: **[docs/operations.md](d
 
 ---
 
-## Configuration reference
+## 🧩 Configuration reference
 
 ### Frontend
 
@@ -588,7 +604,7 @@ Restart the affected Frontend or Worker after updating a key.
 
 ---
 
-## Build and test
+## 🧪 Build and test
 
 ```powershell
 dotnet build LogCollector.slnx
@@ -599,7 +615,7 @@ Invoke-Pester -Path tests/Pester
 az bicep build --file infra/main.bicep --stdout
 ```
 
-## GitHub automation
+## 🤖 GitHub automation
 
 The repository includes GitHub Actions for .NET, isolated Pester and Bicep validation,
 CodeQL and NuGet vulnerability checks, customer-package validation, versioned releases,
@@ -651,7 +667,7 @@ Coverage focuses on the security and reliability surface rather than plumbing:
 
 ---
 
-## Operational rules
+## 📋 Operational rules
 
 - Never log raw inventory payloads, certificates, signatures, or tokens.
 - Never commit private keys, PFX files, workspace keys, or `local.settings.json`. Public CA
@@ -661,7 +677,7 @@ Coverage focuses on the security and reliability surface rather than plumbing:
 - The collection script exits non-zero when the submission is not delivered, so the task's Last Run
   Result is meaningful to whatever monitors it.
 
-## Rollout boundary
+## 🚧 Rollout boundary
 
 The environment is deployed in **LOGCOLLECTOR-RG**, **Italy North**, subscription
 `00000000-0000-0000-0000-000000000000`: **LogCollector-intake (B1)**,
@@ -685,3 +701,14 @@ Measure B1 latency and memory under the two-hour upload window before fleet-wide
 Rotate the legacy workspace shared key in a coordinated migration: first remove it from scripts
 and deployment packages, migrate remaining senders, then revoke the old credential. No legacy
 credential is included in this repository.
+
+---
+
+## 📄 License
+
+Copyright 2026 Roberto Gramellini. Licensed under the [Apache License, Version 2.0](LICENSE).
+
+You may use, modify and redistribute this software, including commercially, provided that you keep
+the copyright notice, the [NOTICE](NOTICE) file and the license text, and state significant changes.
+The license grants no rights to the author's name or trademarks, and the software is provided
+**as is**, without warranty. The copyright in the original code remains with the author.
