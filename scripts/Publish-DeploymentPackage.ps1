@@ -790,7 +790,11 @@ if (-not $SkipApps) {
                 -InputObject $accessRestrictionState `
                 -Name 'ipSecurityRestrictions' `
                 -DefaultValue @()
-        $mainSiteRules = if ($null -eq $mainSiteRulesValue) { @() } else { @($mainSiteRulesValue) }
+        $mainSiteRules = @(
+            if ($null -ne $mainSiteRulesValue) {
+                $mainSiteRulesValue
+            }
+        )
         $explicitAllowRules = @($mainSiteRules | Where-Object {
                 $action = [string](Get-DeploymentPropertyValue -InputObject $_ -Name 'action')
                 $priority = Get-DeploymentPropertyValue -InputObject $_ -Name 'priority'
