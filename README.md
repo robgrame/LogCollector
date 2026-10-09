@@ -282,7 +282,8 @@ Package **1.4.5** also writes protected, bounded JSONL lifecycle, inventory and
 spool logs under `C:\ProgramData\<CustomerName>\CustomInventory\Logs`, using selected
 metadata rather than a transcript of payloads or HTTP response bodies.
 
-The current package source is **1.7.0** and includes shared client **1.9.0**, including schema-sample export.
+The current package source is **Custom Inventory 1.9.1**, which requires the Core-installed shared client
+(**LogCollector.Client 1.11.1** or later; the current client is **1.12.0**, including schema-sample export).
 Existing installed packages remain compatible with their configured inventory endpoints and tables.
 
 **Custom inventory example and schema tool.** `scripts\Examples\RegistryInventory.ps1` sends the
