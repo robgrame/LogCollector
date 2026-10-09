@@ -14,6 +14,7 @@ Inventory, remediation results, health checks and other scripts share the same i
 ![Bicep](https://img.shields.io/badge/IaC-Bicep-0078D4?logo=microsoftazure&logoColor=white)
 ![Intune](https://img.shields.io/badge/Microsoft-Intune-0078D4?logo=microsoft&logoColor=white)
 ![mTLS](https://img.shields.io/badge/auth-mTLS-2E7D32)
+[![License](https://img.shields.io/badge/license-Apache%202.0-D22128?logo=apache&logoColor=white)](LICENSE)
 
 **Topics:** `azure` · `azure-functions` · `azure-monitor` · `log-analytics` · `intune` · `powershell` ·
 `dotnet` · `bicep` · `mtls` · `telemetry` · `inventory` · `windows` · `service-bus` · `zero-secrets`
@@ -700,3 +701,14 @@ Measure B1 latency and memory under the two-hour upload window before fleet-wide
 Rotate the legacy workspace shared key in a coordinated migration: first remove it from scripts
 and deployment packages, migrate remaining senders, then revoke the old credential. No legacy
 credential is included in this repository.
+
+---
+
+## 📄 License
+
+Copyright 2026 Roberto Gramellini. Licensed under the [Apache License, Version 2.0](LICENSE).
+
+You may use, modify and redistribute this software, including commercially, provided that you keep
+the copyright notice, the [NOTICE](NOTICE) file and the license text, and state significant changes.
+The license grants no rights to the author's name or trademarks, and the software is provided
+**as is**, without warranty. The copyright in the original code remains with the author.
